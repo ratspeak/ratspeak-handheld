@@ -1,0 +1,45 @@
+[workspace]
+resolver = "2"
+
+[package]
+name = "ratspeak-handheld-protocol"
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.87"
+description = "C ABI for the Ratspeak handheld Reticulum and LXMF protocol core"
+license = "AGPL-3.0-or-later"
+publish = false
+
+[lib]
+# `staticlib` for the firmware link; `rlib` so cargo can run the host tests.
+name = "ratspeak_protocol"
+crate-type = ["staticlib", "rlib"]
+
+[features]
+# Host default: panic isolation via catch_unwind. The firmware staticlib builds
+# --no-default-features --features profile-<x> (no_std + panic=abort + C-malloc global
+# allocator; see ffi_rt).
+# Table profile: exactly one of profile-small / profile-micro selects the single
+# compiled LiteNode instantiation (ActiveNode); two prebuilt .a, one per profile — a
+# runtime-profile artifact would keep both monomorphization chains reachable on every board.
+default = ["std", "profile-small"]
+std = []
+profile-small = []
+profile-micro = []
+
+[dependencies]
+# The embedded Reticulum port (rsReticulumLite) for identity/announce/transport/proof/link/resource,
+# and the split LXMF codec (rsLXMFLite). Cross-repo path deps; both are no_std and stay faithful to
+# the trusted ../rsReticulum / ../rsLXMF.
+rns-lite-core = { path = "../../rsReticulumLite" }
+lxmf-lite-core = { path = "../../rsLXMFLite" }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+
+[profile.xtensa]
+inherits = "release"
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"

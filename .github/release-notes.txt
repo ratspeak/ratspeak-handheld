@@ -1,0 +1,16 @@
+Ratspeak Handheld beta for T-Deck Plus and T-Pager, combining rsDeck and rsPager
+with a Rust Reticulum/LXMF core. Networking and storage run separately from the
+interface. Cardputer Adv remains in testing.
+
+For the launcher and both modes, download `rsdeck-full.zip` or `rspager-full.zip`
+and upload it to the [web flasher](https://ratspeak.org/download.html#dl-custom).
+The `*-standalone.zip` and `*-rnode.zip` packages install one mode only.
+
+These are fresh-install packages, not data-preserving updates. Back up before
+flashing, including when Full Erase is off. There is no automatic migration from
+rsDeck or rsPager. The [installation guide](https://docs.ratspeak.org/docs/hardware/flashing-firmware#before-flashing)
+covers backups, rollback and importing an existing identity key.
+
+The separate application `.bin` files are for launcher or layout-specific use,
+not the normal web-flasher upload. Source, checksums and license notices are
+included with this release.

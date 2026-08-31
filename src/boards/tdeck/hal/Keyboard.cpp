@@ -1,0 +1,132 @@
+#include "Keyboard.h"
+#include <ctype.h>
+
+Keyboard* Keyboard::_instance = nullptr;
+int Keyboard::_debugCount = 0;
+
+bool Keyboard::begin() {
+    _instance = this;
+    _mode = InputMode::Navigation;
+    _hasEvent = false;
+
+    // KB interrupt pin
+    pinMode(KB_INT, INPUT_PULLUP);
+
+    // Verify I2C communication with keyboard controller
+    Wire.beginTransmission(KB_I2C_ADDR);
+    uint8_t err = Wire.endTransmission();
+    if (err != 0) {
+        Serial.printf("[KEYBOARD] ESP32-C3 not found at 0x%02X (err=%d)\n", KB_I2C_ADDR, err);
+        return false;
+    }
+
+    Serial.println("[KEYBOARD] ESP32-C3 keyboard ready");
+    return true;
+}
+
+uint8_t Keyboard::readKey(uint8_t* modOut) {
+    *modOut = 0;
+    // The stock LilyGO keyboard firmware returns one translated key byte.
+    // Requesting extra bytes can read undefined data and create phantom modifiers.
+    Wire.requestFrom((uint8_t)KB_I2C_ADDR, (uint8_t)1);
+    uint8_t key = 0;
+    if (Wire.available()) key = Wire.read();
+    return key;
+}
+
+void Keyboard::update() {
+    _hasEvent = false;
+
+    uint8_t mod = 0;
+    uint8_t key = readKey(&mod);
+    if (key == 0 || key == _lastKey) {
+        if (key == 0) _lastKey = 0;
+        return;
+    }
+    _lastKey = key;
+
+    // Debug logging for first 50 keypresses to help diagnose key mapping
+    if (_debugCount < 50) {
+        _debugCount++;
+        Serial.printf("[KB] raw: key=0x%02X ('%c') mod=0x%02X\n",
+                      key, (key >= 0x20 && key < 0x7F) ? (char)key : '?', mod);
+    }
+
+    _event = {};
+
+    // Check for Alt in modifier byte (try common bit positions)
+    // Optional custom keyboard firmwares may expose modifier bits, but the
+    // default T-Deck path above intentionally reads only the translated key.
+    // BBQ-style keyboards: bit 1=Alt, bit 2=Sym, bit 0=Ctrl
+    // Also try bit 3, bit 4 as some firmwares use those
+    bool ctrlFromMod = (mod & 0x01);
+    bool altFromMod = (mod & 0x02) || (mod & 0x08);
+
+    // Track Alt state: if the keyboard sends Alt as a standalone keypress,
+    // it might come as a specific byte. Common values:
+    // 0x1B = Esc (unlikely to be Alt), but some controllers use high bytes
+    // The T-Deck Alt key might send no byte at all when pressed alone.
+
+    if (ctrlFromMod) {
+        _event.ctrl = true;
+    }
+    if (altFromMod) {
+        _event.alt = true;
+    }
+
+    // Standard key decoding
+    if (key == 0x0D || key == '\n') {
+        _event.enter = true;
+        _event.character = '\n';
+    } else if (key == 0x08 || key == 0x7F) {
+        _event.del = true;
+        _event.character = 0x08;
+    } else if (key == 0x09) {
+        _event.tab = true;
+    } else if (key == 0x1B) {
+        _event.character = 27;  // ESC
+    } else if (key == ' ') {
+        _event.space = true;
+        _event.character = ' ';
+    } else if (key >= 0x20 && key <= 0x7E) {
+        _event.character = ctrlFromMod ? (char)tolower(key) : key;
+    }
+
+    _hasEvent = true;
+}
+
+bool Keyboard::setBacklightBrightness(uint8_t percent) {
+    percent = constrain(percent, 0, 100);
+    if (percent == 0) {
+        _backlightBrightness = 0;
+        return true;
+    }
+    // [1, 100] % -> [31, 255] PWM
+    constexpr uint16_t SCALE = 255 - 31;
+    constexpr uint16_t DIV   = 100 - 1;
+    uint16_t tmp = (uint16_t)(percent - 1) * SCALE;
+    tmp = (tmp + DIV / 2) / DIV; // +DIV/2 for nearest‑integer rounding
+    _backlightBrightness = (uint8_t)(31 + tmp);
+
+    Wire.beginTransmission(KB_I2C_ADDR);
+    Wire.write(0x02); // LILYGO_KB_ALT_B_BRIGHTNESS_CMD
+    Wire.write(_backlightBrightness);
+    return Wire.endTransmission() == 0;
+}
+
+bool Keyboard::backlightOn() {
+    _backlightLit = _backlightBrightness > 0;
+    return setBrightness(_backlightBrightness);
+}
+
+bool Keyboard::backlightOff() {
+    _backlightLit = false;
+    return setBrightness(0);
+}
+
+bool Keyboard::setBrightness(uint8_t pwm) {
+    Wire.beginTransmission(KB_I2C_ADDR);
+    Wire.write(0x01); // LILYGO_KB_BRIGHTNESS_CMD
+    Wire.write(pwm);
+    return Wire.endTransmission() == 0;
+}

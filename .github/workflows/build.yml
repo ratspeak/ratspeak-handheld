@@ -1,0 +1,216 @@
+name: Firmware Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  ARDUINO_CLI_VERSION: 1.4.1
+  RNS_LITE_COMMIT: 25842ef187e2e29819c73121b90e57f5e367b419
+  LXMF_LITE_COMMIT: f4c16b87b595f4f484fa33fe3984cbafbdce714b
+  RNS_FULL_COMMIT: 3b3eb29c16c9dbc114c9b31d9f912a7b1a68652c
+  LXMF_FULL_COMMIT: e210e0c244c76532faae99696f83c94d44c27dc6
+
+jobs:
+  protocol-quality:
+    name: Rust protocol quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out handheld firmware
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          path: source/ratspeak-handheld
+          persist-credentials: false
+      - name: Check out rsReticulumLite
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ratspeak/rsReticulumLite
+          ref: ${{ env.RNS_LITE_COMMIT }}
+          path: source/rsReticulumLite
+          token: ${{ secrets.PRIVATE_LITE_READ_TOKEN || github.token }}
+          persist-credentials: false
+      - name: Check out rsLXMFLite
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ratspeak/rsLXMFLite
+          ref: ${{ env.LXMF_LITE_COMMIT }}
+          path: source/rsLXMFLite
+          token: ${{ secrets.PRIVATE_LITE_READ_TOKEN || github.token }}
+          persist-credentials: false
+      - name: Check out trusted rsReticulum
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ratspeak/rsReticulum
+          ref: ${{ env.RNS_FULL_COMMIT }}
+          path: source/rsReticulum
+          persist-credentials: false
+      - name: Check out trusted rsLXMF
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ratspeak/rsLXMF
+          ref: ${{ env.LXMF_FULL_COMMIT }}
+          path: source/rsLXMF
+          persist-credentials: false
+      - name: Install Rust 1.87
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: 1.87.0
+          components: clippy, rustfmt
+          targets: thumbv7em-none-eabihf, riscv32imc-unknown-none-elf
+      - name: Cache Rust builds
+        uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        with:
+          cache-bin: false
+          workspaces: |
+            source/rsReticulumLite
+            source/rsLXMFLite
+            source/ratspeak-handheld/protocol
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Test rsReticulumLite
+        working-directory: source/rsReticulumLite
+        run: ./scripts/test-matrix.sh
+      - name: Test rsLXMFLite
+        working-directory: source/rsLXMFLite
+        run: ./scripts/test-matrix.sh
+      - name: Test handheld FFI profiles
+        working-directory: source/ratspeak-handheld/protocol
+        run: |
+          cargo fmt --all -- --check
+          cargo test --workspace --locked
+          cargo clippy --workspace --no-default-features --features 'std profile-small' --all-targets --locked -- -D warnings
+          cargo clippy --workspace --no-default-features --features 'std profile-micro' --all-targets --locked -- -D warnings
+          cargo check --workspace --no-default-features --features profile-small --target thumbv7em-none-eabihf --locked
+          cargo check --workspace --no-default-features --features profile-small --target riscv32imc-unknown-none-elf --locked
+          cargo check --workspace --no-default-features --features profile-micro --target thumbv7em-none-eabihf --locked
+          cargo check --workspace --no-default-features --features profile-micro --target riscv32imc-unknown-none-elf --locked
+      - name: Validate public source contract
+        working-directory: source/ratspeak-handheld
+        run: make source-check
+      - name: Verify committed firmware archives
+        working-directory: source/ratspeak-handheld
+        run: python3 tools/check_prebuilt.py
+
+  package:
+    name: Package ${{ matrix.device }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        device: [tdeck, tpager]
+    steps:
+      - name: Check out handheld firmware
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          path: source/ratspeak-handheld
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Install Arduino CLI
+        uses: arduino/setup-arduino-cli@81d310742121c928ea9c8bbd407b4217b432ae02 # v2.0.0
+        with:
+          version: ${{ env.ARDUINO_CLI_VERSION }}
+      - name: Install pinned Python tools
+        run: python -m pip install platformio==6.1.19 esptool==5.2.0
+      - name: Prepare pinned RNode dependencies
+        working-directory: source/ratspeak-handheld
+        run: make setup DEVICE=${{ matrix.device }}
+      - name: Build release package
+        working-directory: source/ratspeak-handheld
+        run: make package DEVICE=${{ matrix.device }}
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ matrix.device }}-dist
+          path: source/ratspeak-handheld/dist/*
+          if-no-files-found: error
+
+  experimental-cardputer:
+    name: Compile experimental Cardputer
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements-build.txt
+      - run: make build-standalone build-launcher DEVICE=cardputer
+
+  prepare-release:
+    name: Verify complete release candidate
+    needs: [protocol-quality, package]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          path: source/ratspeak-handheld
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ratspeak/rsReticulumLite
+          ref: ${{ env.RNS_LITE_COMMIT }}
+          path: source/rsReticulumLite
+          token: ${{ secrets.PRIVATE_LITE_READ_TOKEN || github.token }}
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ratspeak/rsLXMFLite
+          ref: ${{ env.LXMF_LITE_COMMIT }}
+          path: source/rsLXMFLite
+          token: ${{ secrets.PRIVATE_LITE_READ_TOKEN || github.token }}
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ratspeak/rsReticulum
+          ref: ${{ env.RNS_FULL_COMMIT }}
+          path: source/rsReticulum
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ratspeak/rsLXMF
+          ref: ${{ env.LXMF_FULL_COMMIT }}
+          path: source/rsLXMF
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Download validated T-Deck artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: tdeck-dist
+          path: source/ratspeak-handheld/dist
+      - name: Download validated T-Pager artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: tpager-dist
+          path: source/ratspeak-handheld/dist
+      - name: Check image correspondence, notices and source provenance
+        working-directory: source/ratspeak-handheld
+        run: |
+          python3 -m pip install esptool==5.2.0
+          python3 tools/prepare_release.py
+          (cd dist && sha256sum -c SHA256SUMS)
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            python3 tools/prepare_release.py --dist dist --check-tag "$GITHUB_REF_NAME" --source-revision "$GITHUB_SHA"
+          fi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-candidate
+          path: source/ratspeak-handheld/dist/*
+          if-no-files-found: error

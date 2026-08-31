@@ -1,0 +1,11 @@
+* text=auto eol=lf
+*.bin binary
+*.a binary
+*.png binary
+*.jpg binary
+*.zip binary
+licenses/THIRD-PARTY.txt -text
+merge_firmware.py linguist-vendored
+vendor/** linguist-vendored
+src/ui/lvgl/fonts/*.c linguist-generated
+protocol/prebuilt/** linguist-generated

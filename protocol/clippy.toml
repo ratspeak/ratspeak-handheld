@@ -1,0 +1,2 @@
+# Keep Clippy suggestions aligned with the backend crate MSRV.
+msrv = "1.87"
