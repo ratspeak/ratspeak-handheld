@@ -2,7 +2,6 @@
 #include "Theme.h"
 #include "LvTheme.h"
 #include "LvInput.h"
-#include "PageNavigation.h"
 #include <cstring>
 #include "UIManager.h"
 #include "config/UserConfig.h"
@@ -13,8 +12,6 @@
 
 namespace {
 
-constexpr int kPeerRowH = 36;
-constexpr int kNavigationH = 30;
 void setText(lv_obj_t* label, const char* text) {
     if (strcmp(lv_label_get_text(label), text)) lv_label_set_text(label, text);
 }
@@ -110,10 +107,27 @@ void LvNodesScreen::createUI(lv_obj_t* parent) {
 
     _list = lv_obj_create(parent);
     lv_obj_set_pos(_list, 0, 19);
-    lv_obj_set_size(_list, Theme::CONTENT_W, Theme::CONTENT_H - 55);
+    lv_obj_set_size(_list, Theme::CONTENT_W, ViewportHeight);
     lv_obj_add_style(_list, LvTheme::styleList(), 0);
-    lv_obj_set_layout(_list, LV_LAYOUT_FLEX);
-    lv_obj_set_flex_flow(_list, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_scroll_dir(_list, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(_list, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_add_event_cb(_list, [](lv_event_t* e) {
+        auto* self = static_cast<LvNodesScreen*>(lv_event_get_user_data(e));
+        if (self->_bindingRows) return;
+        const auto code = lv_event_get_code(e);
+        if (code == LV_EVENT_SCROLL || code == LV_EVENT_SCROLL_END) {
+            const auto oldBegin = self->_peers.visibleBegin();
+            const auto oldEnd = self->_peers.visibleEnd();
+            self->_peers.setScrollY(lv_obj_get_scroll_y(self->_list));
+            if (code == LV_EVENT_SCROLL_END || oldBegin != self->_peers.visibleBegin() || oldEnd != self->_peers.visibleEnd())
+                self->bindRows();
+        }
+    }, LV_EVENT_ALL, this);
+    // A single inert end marker gives LVGL the complete logical extent.
+    _extent = lv_obj_create(_list);
+    lv_obj_remove_style_all(_extent);
+    lv_obj_set_size(_extent, 1, 1);
+    lv_obj_clear_flag(_extent, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(_list, LV_OBJ_FLAG_HIDDEN);
 
     _caption = lv_label_create(parent);
@@ -123,24 +137,35 @@ void LvNodesScreen::createUI(lv_obj_t* parent) {
     for (size_t i = 0; i < _rows.size(); ++i) {
         auto& row = _rows[i];
         row.box = lv_obj_create(_list);
-        lv_obj_set_size(row.box, Theme::CONTENT_W, kPeerRowH);
+        lv_obj_set_size(row.box, Theme::CONTENT_W, RowHeight);
         lv_obj_add_style(row.box, LvTheme::styleListBtn(), 0);
         lv_obj_add_style(row.box, LvTheme::styleListBtnFocused(), LV_STATE_FOCUSED);
         lv_obj_set_style_border_side(row.box, LV_BORDER_SIDE_BOTTOM, 0);
         lv_obj_set_style_border_width(row.box, 1, 0);
         lv_obj_set_style_border_color(row.box, lv_color_hex(Theme::BORDER), 0);
         lv_obj_set_style_pad_all(row.box, 0, 0);
-        lv_obj_clear_flag(row.box, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_clear_flag(row.box, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_SCROLL_ON_FOCUS | LV_OBJ_FLAG_CLICK_FOCUSABLE);
         lv_obj_add_flag(row.box, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_user_data(row.box, reinterpret_cast<void*>(i));
         lv_obj_add_event_cb(row.box, [](lv_event_t* e) {
             auto* self = static_cast<LvNodesScreen*>(lv_event_get_user_data(e));
-            const size_t row = reinterpret_cast<uintptr_t>(lv_obj_get_user_data(lv_event_get_target(e)));
-            if (row < self->_rowHexes.size()) self->showActionMenu(self->_rowHexes[row]);
-        }, LV_EVENT_CLICKED, this);
-        lv_obj_add_event_cb(row.box, [](lv_event_t* e) {
-            lv_obj_scroll_to_view(lv_event_get_target(e), LV_ANIM_OFF);
-        }, LV_EVENT_FOCUSED, nullptr);
+            auto* box = lv_event_get_target(e);
+            const size_t slot = reinterpret_cast<uintptr_t>(lv_obj_get_user_data(box));
+            auto& row = self->_rows[slot];
+            if (lv_event_get_code(e) == LV_EVENT_PRESSED) {
+                self->_pressedRow = box;
+                self->_pressedHex = row.hex;
+            } else if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
+                const auto hex = self->_pressedRow == box ? self->_pressedHex : row.hex;
+                if (hex.empty()) return;
+                for (size_t i = 0; i < self->_peers.total(); ++i)
+                    if (self->_peers.hash(i) == hex) { self->_peers.select(i); break; }
+                self->focusSelection();
+                self->showActionMenu(hex);
+            }
+            // RELEASED precedes CLICKED. The pinned slot is retired only by a
+            // subsequent refresh, after LVGL finishes delivering this input.
+        }, LV_EVENT_ALL, this);
         row.name = lv_label_create(row.box);
         lv_obj_set_style_text_font(row.name, &lv_font_rsdeck_12, 0);
         lv_obj_set_pos(row.name, 8, 3);
@@ -160,23 +185,6 @@ void LvNodesScreen::createUI(lv_obj_t* parent) {
         lv_obj_set_size(row.id, Theme::CONTENT_W - 16, lv_font_rsdeck_10.line_height);
         lv_label_set_long_mode(row.id, LV_LABEL_LONG_CLIP);
     }
-    for (size_t i = 0; i < 4; ++i) {
-        auto* button = lv_btn_create(parent); _navigation[i] = button;
-        lv_group_remove_obj(button);
-        lv_obj_set_pos(button, 4 + i * (Theme::CONTENT_W - 8) / 4, Theme::CONTENT_H - kNavigationH - 3);
-        lv_obj_set_size(button, (Theme::CONTENT_W - 8) / 4 - 3, kNavigationH);
-        lv_obj_add_style(button, LvTheme::styleListBtn(), 0);
-        lv_obj_add_style(button, LvTheme::styleListBtnFocused(), LV_STATE_FOCUSED);
-        lv_obj_set_style_pad_all(button, 0, 0);
-        lv_obj_set_user_data(button, reinterpret_cast<void*>(i));
-        lv_obj_add_state(button, LV_STATE_DISABLED);
-        lv_obj_add_event_cb(button, handheld::drawPageNavigation, LV_EVENT_DRAW_MAIN, nullptr);
-        lv_obj_add_event_cb(button, [](lv_event_t* e) {
-            auto* self = static_cast<LvNodesScreen*>(lv_event_get_user_data(e));
-            self->navigate(reinterpret_cast<uintptr_t>(lv_obj_get_user_data(lv_event_get_target(e))));
-        }, LV_EVENT_CLICKED, this);
-    }
-
     // --- Action modal overlay (on top layer, centered) ---
     _overlay = lv_obj_create(lv_layer_top());
     lv_obj_set_size(_overlay, 260, 158);
@@ -298,13 +306,15 @@ void LvNodesScreen::destroyUI() {
     _overlayTitle = nullptr; _overlayMeta = nullptr; _overlayReach = nullptr;
     _nicknameBox = nullptr; _nicknameLbl = nullptr; _nicknameHint = nullptr;
     _list = nullptr; _emptyState = nullptr; _caption = nullptr;
-    _rows = {}; for (auto& button : _navigation) button = nullptr;
-    _rowHexes.clear();
+    _extent = nullptr; _pressedRow = nullptr; _pressedHex.clear();
+    _rows = {}; _peers.reset();
     LvScreen::destroyUI();
 }
 
 void LvNodesScreen::onEnter() {
-    _pages.reset();
+    _peers.reset();
+    _peers.configure(RowHeight, ViewportHeight);
+    _pressedRow = nullptr; _pressedHex.clear();
 #if HAS_TOUCH
     _focusActive = false;
 #endif
@@ -313,90 +323,117 @@ void LvNodesScreen::onEnter() {
     rebuildList();
 }
 
-void LvNodesScreen::refreshUI() {
-    if (!_am || !_list || _actionState != NodeAction::BROWSE || _confirmDelete) return;
-    if (millis() - _lastRebuild < 1000) return;
-    // A pressed row must keep its ID through release/click delivery.
-    for (const auto& row : _rows) if (lv_obj_has_state(row.box, LV_STATE_PRESSED)) return;
-    rebuildList();
+bool LvNodesScreen::interactionBusy() const {
+    // Read LVGL's current ownership instead of latching BEGIN/END: input reset
+    // (sleep or a keyboard takeover) can retire a drag without SCROLL_END.
+    if (_list) {
+        if (lv_obj_is_scrolling(_list)) return true; // Drag and momentum owner.
+        lv_point_t end;
+        lv_obj_get_scroll_end(_list, &end);
+        // Elastic return can outlive the pointer's scroll owner.
+        if (end.x != lv_obj_get_scroll_x(_list) || end.y != lv_obj_get_scroll_y(_list)) return true;
+    }
+    for (const auto& row : _rows) if (lv_obj_has_state(row.box, LV_STATE_PRESSED)) return true;
+    // The pointer can remain held after leaving its originally pressed row.
+    for (auto* input = lv_indev_get_next(nullptr); input; input = lv_indev_get_next(input))
+        if (lv_indev_get_type(input) == LV_INDEV_TYPE_POINTER && input->proc.state == LV_INDEV_STATE_PRESSED)
+            return true;
+    return false;
 }
 
-void LvNodesScreen::navigate(unsigned action) {
-    if (_actionState != NodeAction::BROWSE || _confirmDelete || !_pages.navigate(action)) return;
-    _rowHexes.clear(); // Explicit navigation does not anchor to the previous page.
-    rebuildList();
-    lv_obj_scroll_to_y(_list, 0, LV_ANIM_OFF);
+void LvNodesScreen::refreshUI() {
+    if (!_am || !_list || _actionState != NodeAction::BROWSE || _confirmDelete || interactionBusy()) return;
+    // Clearing the pinned slot happens outside the press/release callback stack.
+    _pressedRow = nullptr; _pressedHex.clear();
+    if (millis() - _lastRebuild >= 1000) rebuildList();
 }
 
 void LvNodesScreen::rebuildList() {
-    if (!_am || !_list) return;
+    if (!_am || !_list || interactionBusy()) return;
     _lastRebuild = millis();
-    const auto scrollY = lv_obj_get_scroll_y(_list);
-    auto* oldFocus = lv_group_get_focused(LvInput::group());
-    const std::string focusedHex = getFocusedNodeHex();
-    const auto& nodes = _am->nodes();
-    _pages.sync(nodes, focusedHex);
-    std::vector<std::string> hashes;
-    for (size_t i = 0; i < _pages.count(); ++i) hashes.push_back(_pages.hash(i));
-    bool bindingsChanged = hashes != _rowHexes;
-    for (unsigned i = 0; i < 4; ++i)
-        bindingsChanged |= _pages.enabled(i) == bool(lv_obj_has_state(_navigation[i], LV_STATE_DISABLED));
-    _rowHexes = std::move(hashes);
-    lv_obj_t* restored = nullptr;
-    if (bindingsChanged) {
-        for (auto& row : _rows) lv_group_remove_obj(row.box);
-        for (auto* button : _navigation) lv_group_remove_obj(button);
-    }
-    for (size_t i = 0; i < _rows.size(); ++i) {
-        auto& row = _rows[i];
-        if (i >= _pages.count()) { lv_obj_add_flag(row.box, LV_OBJ_FLAG_HIDDEN); continue; }
-        const auto& node = nodes[_pages.sourceIndex(i)];
-        lv_obj_clear_flag(row.box, LV_OBJ_FLAG_HIDDEN);
-        if (bindingsChanged) lv_group_add_obj(LvInput::group(), row.box);
-        if (_rowHexes[i] == focusedHex) restored = row.box;
-        const auto name = displayNameFor(node);
-        // LVGL's DOT mode temporarily edits the label buffer to draw ellipsis.
-        // Compare against our ten-row text cache, not that shortened buffer.
-        if (row.nameText != name) { row.nameText = name; lv_label_set_text(row.name, name.c_str()); }
-        lv_obj_set_style_text_color(row.name, lv_color_hex(node.saved ? Theme::ACCENT : Theme::PRIMARY), 0);
-        setText(row.meta, peerMetaFor(node, nodeAgeMs(node, millis()), _cfg && _cfg->settings().devMode).c_str());
-        setText(row.id, identityLineFor(node).c_str());
-    }
-    for (unsigned i = 0; i < 4; ++i) {
-        if (_pages.enabled(i)) {
-            lv_obj_clear_state(_navigation[i], LV_STATE_DISABLED);
-            if (bindingsChanged) lv_group_add_obj(LvInput::group(), _navigation[i]);
-            if (oldFocus == _navigation[i]) restored = oldFocus;
-        } else lv_obj_add_state(_navigation[i], LV_STATE_DISABLED);
-    }
-    char caption[48];
-    snprintf(caption, sizeof(caption), "Page %u/%u  /  %u peers", unsigned(_pages.page() + 1), unsigned(_pages.pages()), unsigned(_pages.total()));
+    _peers.sync(_am->nodes());
+    _bindingRows = true;
+    // Hide old positions before reducing the extent, or old pooled rows can
+    // temporarily keep LVGL's scroll range larger than the directory.
+    for (auto& row : _rows) lv_obj_add_flag(row.box, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_pos(_extent, 0, std::max(0, int(_peers.total()) * RowHeight - 1));
+    lv_obj_update_layout(_list);
+    lv_obj_scroll_to_y(_list, _peers.scrollY(), LV_ANIM_OFF);
+    _bindingRows = false;
+    char caption[32];
+    snprintf(caption, sizeof(caption), "%u peers", unsigned(_peers.total()));
     setText(_caption, caption);
-    if (_pages.total()) {
+    if (_peers.total()) {
         lv_obj_add_flag(_emptyState, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(_list, LV_OBJ_FLAG_HIDDEN);
-        if (bindingsChanged) {
-            LvInput::focusObj(restored ? restored : _rows[0].box);
-            if (restored) { lv_obj_update_layout(_list); lv_obj_scroll_to_y(_list, scrollY, LV_ANIM_OFF); }
-        }
     } else {
         lv_obj_clear_flag(_emptyState, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(_list, LV_OBJ_FLAG_HIDDEN);
     }
-#if HAS_TOUCH
-    if (!_focusActive) {
-        auto* focused = lv_group_get_focused(LvInput::group());
-        if (focused) lv_obj_clear_state(focused, LV_STATE_FOCUSED | LV_STATE_FOCUS_KEY);
+    bindRows();
+}
+
+void LvNodesScreen::bindRows() {
+    if (_bindingRows || !_list || !_am) return;
+    _bindingRows = true;
+    const size_t begin = _peers.visibleBegin(1), end = _peers.visibleEnd(1);
+    // Keep matching slots in place, including the one whose press is pending.
+    for (auto& row : _rows) {
+        const bool keep = row.index >= begin && row.index < end && row.hex == _peers.hash(row.index);
+        if (!keep && row.box != _pressedRow) {
+            lv_group_remove_obj(row.box);
+            lv_obj_add_flag(row.box, LV_OBJ_FLAG_HIDDEN);
+            row.hex.clear();
+        }
     }
+    for (size_t index = begin; index < end; ++index) {
+        Row* bound = nullptr;
+        for (auto& row : _rows) if (row.index == index && row.hex == _peers.hash(index)) { bound = &row; break; }
+        if (!bound) for (auto& row : _rows) if (row.hex.empty() && row.box != _pressedRow) { bound = &row; break; }
+        if (!bound) continue; // Pool includes a spare for a pinned pointer row.
+        auto& row = *bound;
+        row.index = index; row.hex = _peers.hash(index);
+        lv_obj_set_pos(row.box, 0, int(index) * RowHeight);
+        lv_obj_clear_flag(row.box, LV_OBJ_FLAG_HIDDEN);
+        const auto* node = _am->findNodeByHex(row.hex);
+        // NodeView can publish between sync and a scroll event. Never use an
+        // earlier vector index here, even while membership is deferred.
+        const auto name = node ? displayNameFor(*node) : row.hex.substr(0, 12);
+        if (row.nameText != name) { row.nameText = name; lv_label_set_text(row.name, name.c_str()); }
+        lv_obj_set_style_text_color(row.name, lv_color_hex(node && node->saved ? Theme::ACCENT : Theme::PRIMARY), 0);
+        setText(row.meta, node ? peerMetaFor(*node, nodeAgeMs(*node, millis()), _cfg && _cfg->settings().devMode).c_str() : "unavailable");
+        setText(row.id, ("ID: " + row.hex).c_str());
+    }
+    focusSelection();
+    _bindingRows = false;
+}
+
+void LvNodesScreen::focusSelection() {
+    lv_obj_t* selected = nullptr;
+    for (auto& row : _rows) {
+        if (!row.hex.empty() && row.hex == _peers.selectedHash() &&
+            row.index >= _peers.visibleBegin() && row.index < _peers.visibleEnd()) selected = row.box;
+        else { lv_group_remove_obj(row.box); lv_obj_clear_state(row.box, LV_STATE_FOCUSED | LV_STATE_FOCUS_KEY); }
+    }
+    if (selected) {
+        lv_group_add_obj(LvInput::group(), selected);
+        LvInput::focusObj(selected);
+#if HAS_TOUCH
+        if (!_focusActive) lv_obj_clear_state(selected, LV_STATE_FOCUSED | LV_STATE_FOCUS_KEY);
 #endif
+    }
+}
+
+void LvNodesScreen::scrollToSelection() {
+    _peers.ensureSelectedVisible();
+    _bindingRows = true;
+    lv_obj_scroll_to_y(_list, _peers.scrollY(), LV_ANIM_OFF);
+    _bindingRows = false;
+    bindRows();
 }
 
 std::string LvNodesScreen::getFocusedNodeHex() const {
-    lv_obj_t* focused = lv_group_get_focused(LvInput::group());
-    if (!focused || lv_obj_get_parent(focused) != _list) return "";
-    int idx = (int)(intptr_t)lv_obj_get_user_data(focused);
-    if (idx < 0 || idx >= (int)_rowHexes.size()) return "";
-    return _rowHexes[idx];
+    return _peers.selectedHash();
 }
 
 // --- Action modal helpers ---
@@ -519,8 +556,7 @@ bool LvNodesScreen::handleKey(const KeyEvent& event) {
     if (_actionState == NodeAction::BROWSE && !_confirmDelete &&
         !_focusActive && (event.up || event.down || event.enter)) {
         _focusActive = true;
-        lv_obj_t* focused = lv_group_get_focused(LvInput::group());
-        if (focused) lv_obj_add_state(focused, LV_STATE_FOCUSED | LV_STATE_FOCUS_KEY);
+        scrollToSelection();
         return true;
     }
 #endif
@@ -631,6 +667,16 @@ bool LvNodesScreen::handleKey(const KeyEvent& event) {
         return true;
     }
 
-    // Let LVGL focus group handle up/down/enter navigation
+    // Logical navigation cannot wrap around the reusable row pool. Left/right
+    // remains available to the existing board-level tab dispatcher.
+    if (event.up || event.down || event.tab) {
+        _peers.move(event.up ? -1 : 1);
+        scrollToSelection();
+        return true;
+    }
+    if (event.enter) {
+        if (!_peers.selectedHash().empty()) showActionMenu(_peers.selectedHash());
+        return true;
+    }
     return false;
 }

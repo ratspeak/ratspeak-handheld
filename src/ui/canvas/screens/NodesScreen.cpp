@@ -1,10 +1,12 @@
 #include "NodesScreen.h"
 #include "Theme.h"
-#include "PageNavigation.h"
 #include <algorithm>
 
 void NodesScreen::onEnter() {
-    _pages.reset(); _pageFocus = -1; _nodeHashes.clear(); _list.clear();
+    _showingActions = false;
+    _peers.reset();
+    const int bodyHeight = Theme::CONTENT_H - Theme::SECTION_HEADER_H - 2;
+    _peers.configure(Theme::LIST_ROW_H, (bodyHeight / Theme::LIST_ROW_H) * Theme::LIST_ROW_H);
     refreshList();
 }
 
@@ -63,44 +65,14 @@ static uint16_t stalenessColor(const DiscoveredNode& node) {
 void NodesScreen::refreshList() {
     if (!_announces) return;
 
-    std::string prevSelected;
-    int oldIdx = _list.getSelectedIndex();
-    if (oldIdx >= 0 && oldIdx < (int)_nodeHashes.size()) {
-        prevSelected = _nodeHashes[oldIdx];
-    }
-
-    _pages.sync(_announces->nodes(), prevSelected);
-    std::vector<std::string> hashes;
-    for (size_t i = 0; i < _pages.count(); ++i) hashes.push_back(_pages.hash(i));
-    const bool changed = hashes != _nodeHashes;
-    if (changed) _list.clear();
-    _nodeHashes = std::move(hashes);
-    int selected = 0;
-    for (size_t i = 0; i < _pages.count(); ++i) {
-        const auto& node = _announces->nodes()[_pages.sourceIndex(i)];
-        char line[128]; formatNodeLine(line, sizeof(line), node);
-        const auto color = node.saved ? Theme::ACCENT : stalenessColor(node);
-        if (changed) _list.addItem(line, color);
-        else _list.updateItem(i, line, color);
-        if (_nodeHashes[i] == prevSelected) selected = i;
-    }
-    if (changed) _list.setSelected(selected);
-    if (_pageFocus >= 0 && !_pages.enabled(_pageFocus))
-        _pageFocus = _pages.enabled(2) ? 2 : _pages.enabled(1) ? 1 : -1;
+    _peers.sync(_announces->nodes());
     _lastRefresh = millis();
 }
 
-void NodesScreen::activatePage(unsigned action) {
-    if (!_pages.navigate(action)) return;
-    _nodeHashes.clear(); _list.clear();
-    refreshList();
-}
-
 void NodesScreen::showActionMenu(int nodeIdx) {
-    if (!_announces || nodeIdx < 0 || nodeIdx >= (int)_nodeHashes.size()) return;
+    if (!_announces || nodeIdx < 0 || nodeIdx >= (int)_peers.total()) return;
 
-    _selectedNodeIdx = nodeIdx;
-    _selectedNodeHash = _nodeHashes[nodeIdx];
+    _selectedNodeHash = _peers.hash(nodeIdx);
 
     // Try to find live node — may have been evicted since list was built
     rs::Bytes hash;
@@ -157,7 +129,6 @@ void NodesScreen::executeAction(int actionIdx) {
 
 void NodesScreen::exitActionMenu() {
     _showingActions = false;
-    _selectedNodeIdx = -1;
 }
 
 void NodesScreen::render(M5Canvas& canvas) {
@@ -202,12 +173,12 @@ void NodesScreen::render(M5Canvas& canvas) {
         Theme::useUiFont(canvas);
         canvas.setTextColor(Theme::ACCENT);
         canvas.setCursor(8, y + 2);
-        canvas.printf("Page %u/%u  /  %u peers", unsigned(_pages.page() + 1), unsigned(_pages.pages()), unsigned(_pages.total()));
+        canvas.printf("%u peers", unsigned(_peers.total()));
 
         canvas.drawFastHLine(0, y + headerH, Theme::SCREEN_W, Theme::DIVIDER);
         y += headerH + 2;
 
-        if (_list.itemCount() == 0) {
+        if (_peers.total() == 0) {
             Theme::useSmallFont(canvas);
             canvas.setTextColor(Theme::MUTED);
             canvas.setCursor(4, y + 10);
@@ -215,13 +186,28 @@ void NodesScreen::render(M5Canvas& canvas) {
             canvas.setCursor(4, y + 22);
             canvas.print("Waiting for announces...");
         } else {
-            _list.render(canvas, 0, y, Theme::SCREEN_W,
-                         Theme::CONTENT_H - (y - Theme::CONTENT_Y) - handheld::canvas::NavigationHeight - 4,
-                         _pageFocus < 0);
+            // Only the viewport is formatted; the shared order stores IDs,
+            // never a second 50-row cache of display text.
+            const size_t begin = _peers.visibleBegin(), end = _peers.visibleEnd();
+            const int bodyHeight = Theme::CONTENT_H - (y - Theme::CONTENT_Y);
+            for (size_t i = begin; i < end; ++i) {
+                const auto* node = _announces->findNodeByHex(_peers.hash(i));
+                char line[128];
+                if (node) formatNodeLine(line, sizeof(line), *node);
+                else snprintf(line, sizeof(line), "%.12s unavailable", _peers.hash(i).c_str());
+                const auto color = node ? (node->saved ? Theme::ACCENT : stalenessColor(*node)) : Theme::MUTED;
+                const int rowY = y + int(i - begin) * Theme::LIST_ROW_H;
+                if (i + 1 < end && i != _peers.selected())
+                    canvas.drawFastHLine(8, rowY + Theme::LIST_ROW_H - 1, Theme::CONTENT_W - 12, Theme::DIVIDER);
+                ScrollList::renderRow(canvas, line, 0, rowY, Theme::CONTENT_W, i == _peers.selected(), color);
+            }
+            if (_peers.maxScroll() > 0) {
+                const int barH = std::max(6, bodyHeight * int(end - begin) / int(_peers.total()));
+                const int barY = y + _peers.scrollY() * (bodyHeight - barH) / _peers.maxScroll();
+                canvas.fillRoundRect(Theme::CONTENT_W - 3, y, 2, bodyHeight, 1, Theme::DIVIDER);
+                canvas.fillRoundRect(Theme::CONTENT_W - 4, barY, 3, barH, 1, Theme::PRIMARY_MUTED);
+            }
         }
-        handheld::canvas::drawPageNavigation(canvas,
-            Theme::CONTENT_Y + Theme::CONTENT_H - handheld::canvas::NavigationHeight, _pageFocus,
-            [this](int action) { return _pages.enabled(action); });
     }
     Theme::useSmallFont(canvas);
 }
@@ -249,31 +235,13 @@ bool NodesScreen::handleKey(const KeyEvent& event) {
         return true;
     }
 
-    if (_pageFocus >= 0) {
-        if (event.escape || event.backspace || event.navUp()) { _pageFocus = -1; return true; }
-        if (event.navLeft() || event.navRight()) {
-            const int direction = event.navLeft() ? -1 : 1;
-            for (int i = _pageFocus + direction; i >= 0 && i < 4; i += direction)
-                if (_pages.enabled(i)) { _pageFocus = i; break; }
-            return true;
-        }
-        if (event.enter) { if (!event.repeat) activatePage(_pageFocus); return true; }
-        if (event.navDown()) return true;
-    }
-    if (event.navUp()) {
-        if (_list.getSelectedIndex() > 0) _list.scrollUp();
-        return true;
-    }
-    if (event.navDown()) {
-        if (_list.getSelectedIndex() + 1 < _list.itemCount()) _list.scrollDown();
-        else if (!event.repeat) _pageFocus = _pages.enabled(2) ? 2 : _pages.enabled(1) ? 1 : -1;
+    if (event.navUp() || event.navDown()) {
+        _peers.move(event.navUp() ? -1 : 1);
+        _peers.ensureSelectedVisible();
         return true;
     }
     if (event.enter) {
-        int idx = _list.getSelectedIndex();
-        if (idx >= 0 && idx < (int)_nodeHashes.size() && !_nodeHashes[idx].empty()) {
-            showActionMenu(idx);
-        }
+        if (_peers.total()) showActionMenu(int(_peers.selected()));
         return true;
     }
     return false;

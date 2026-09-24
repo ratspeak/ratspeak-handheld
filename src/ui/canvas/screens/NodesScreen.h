@@ -4,7 +4,7 @@
 #include <string>
 #include <functional>
 #include "Screen.h"
-#include "ui/PeerPager.h"
+#include "ui/PeerList.h"
 #include "widgets/ScrollList.h"
 #include "reticulum/AnnounceManager.h"
 
@@ -33,8 +33,7 @@ private:
     void exitActionMenu();
 
     AnnounceManager* _announces = nullptr;
-    ScrollList _list;
-    std::vector<std::string> _nodeHashes;
+    handheld::PeerList _peers;
     unsigned long _lastRefresh = 0;
     NodeSelectedCb _selectCb;
     NodeSaveCb _saveCb;
@@ -42,12 +41,8 @@ private:
     // Action menu state
     bool _showingActions = false;
     ScrollList _actionList;
-    int _selectedNodeIdx = -1;
     std::string _selectedNodeName;
     std::string _selectedNodeHash;
     bool _selectedNodeSaved = false;
 
-    handheld::PeerPager _pages;
-    int _pageFocus = -1;
-    void activatePage(unsigned action);
 };
