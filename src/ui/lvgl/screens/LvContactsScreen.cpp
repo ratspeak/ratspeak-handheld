@@ -55,7 +55,7 @@ std::string contactMetaFor(unsigned long ageMs) {
 
 lv_obj_t* createEmptyState(lv_obj_t* parent) {
     lv_obj_t* box = lv_obj_create(parent);
-    lv_obj_set_size(box, 252, 94);
+    lv_obj_set_size(box, 252, 72);
     lv_obj_set_style_bg_opa(box, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(box, 0, 0);
     lv_obj_set_style_pad_all(box, 0, 0);
@@ -85,14 +85,8 @@ lv_obj_t* createEmptyState(lv_obj_t* parent) {
     lv_obj_t* title = lv_label_create(box);
     lv_obj_set_style_text_font(title, &lv_font_rsdeck_14, 0);
     lv_obj_set_style_text_color(title, lv_color_hex(Theme::TEXT_SECONDARY), 0);
-    lv_label_set_text(title, "No trusted contacts");
+    lv_label_set_text(title, "No contacts");
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 49);
-
-    lv_obj_t* hint = lv_label_create(box);
-    lv_obj_set_style_text_font(hint, &lv_font_rsdeck_10, 0);
-    lv_obj_set_style_text_color(hint, lv_color_hex(Theme::TEXT_MUTED), 0);
-    lv_label_set_text(hint, "Saved peers appear here");
-    lv_obj_align(hint, LV_ALIGN_TOP_MID, 0, 70);
 
     return box;
 }

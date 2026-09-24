@@ -1235,7 +1235,7 @@ void LvSettingsScreen::rebuildCategoryList() {
     lv_obj_t* titleLbl = lv_label_create(titleRow);
     lv_obj_set_style_text_font(titleLbl, font, 0);
     lv_obj_set_style_text_color(titleLbl, lv_color_hex(Theme::ACCENT), 0);
-    lv_label_set_text(titleLbl, "SETTINGS DECK");
+    lv_label_set_text(titleLbl, "SETTINGS");
     lv_obj_align(titleLbl, LV_ALIGN_LEFT_MID, 8, 0);
 
     if (_rebootNeeded) {
