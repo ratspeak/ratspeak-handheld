@@ -30,10 +30,10 @@ rsLXMFLite, with device support built around the same messaging services.
 | LilyGO T-Deck Plus | Standalone and RNode |
 | LilyGO T-Pager (SX1262) | Standalone and RNode |
 | M5Stack Cardputer Adv | Standalone and RNode; Cap LoRa-1262 required for LoRa |
-| Elecrow ThinkNode M9 | Standalone development beta; RNode coming soon |
+| Elecrow ThinkNode M9 | Standalone; RNode coming soon |
 
-An SD card is optional for normal messaging. M9 support is currently available
-from source; published downloads cover T-Deck, T-Pager and Cardputer.
+An SD card is optional for normal messaging. Downloads are available for all
+four devices.
 
 This is beta firmware. If something isn't working, open an issue with your
 device, firmware version, and the steps to reproduce it.
@@ -48,9 +48,13 @@ Download the ZIP for your device from [Releases](https://github.com/ratspeak/rat
   Reticulum client over USB or BLE.
 
 Files are named by device: `tdeck-full.zip`, `pager-standalone.zip`,
-`cardputer-rnode.zip`, and so on. Open the
+`cardputer-rnode.zip`, and `m9-standalone.zip`. For T-Deck, T-Pager and Cardputer, open the
 [Ratspeak web flasher](https://ratspeak.org/download.html#dl-custom), choose
 **Flash** under **Build your own**, and upload the ZIP.
+
+For M9, extract `m9-standalone.zip` and flash its enclosed factory image with
+esptool: `python3 -m esptool --chip esp32s3 --port PORT --baud 115200 write-flash 0x0 m9-standalone.bin`.
+Replace `PORT` with your device's serial port. M9 web flashing is coming later.
 
 ZIPs install a complete firmware layout. Back up your identity and messages
 before flashing. The matching `.bin` files contain only the application and
@@ -74,12 +78,11 @@ make doctor DEVICE=tdeck
 make package DEVICE=tdeck
 ```
 
-Use `DEVICE=tpager` or `DEVICE=cardputer` for the other release targets. Packages
+Use `DEVICE=tpager`, `DEVICE=cardputer` or `DEVICE=m9` for the other devices. Packages
 are written to `dist/`. Normal builds use the included Rust libraries; a Rust
 toolchain is not required.
 
-For M9 Standalone, run `python3 -m platformio run -e m9` after installing the
-Python requirements. M9 Full and RNode packages are not available yet.
+M9 builds Standalone only and does not require Arduino CLI.
 
 ## License
 
