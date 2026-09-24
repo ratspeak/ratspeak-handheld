@@ -1356,6 +1356,15 @@ static void serviceNetworkPoll() {
         if (!saved) Serial.println("[BOOT] Boot success counter save failed");
     }
 #if HAS_GPS
+#if defined(RSM9)
+    // A keyboard-controller startup timeout must not permanently disable GNSS.
+    // Revision becomes available atomically after UI-side discovery recovers;
+    // only the device owner initializes the receiver and starts its UART.
+    if (!gps.isRunning() && keyboard.revision() &&
+        (userConfig.settings().gpsTimeEnabled || userConfig.settings().gpsLocationEnabled)) {
+        gps.begin();
+    }
+#endif
     if (gps.isRunning()) gps.loop();
 #endif
     if (backend->pollRadioBeforeBlockingWork()) deviceDiagnostics.poll();
