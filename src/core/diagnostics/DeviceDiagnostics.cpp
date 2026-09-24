@@ -40,6 +40,7 @@ void DeviceDiagnostics::printDiagnostics() {
                       radio.getAirtime(MAX_PACKET_SIZE));
         LoRaInterface* loraIf = &rustLoraIface;
         if (loraIf) {
+            Serial.printf("LoRaIF runtime: %s\n", loraIf->isOnline() ? "ONLINE" : "OFFLINE");
             Serial.printf("LoRaIF: bitrate=%lu bps split_timeout=%lu ms frame=%.0f ms airtime=%.2f%%\n",
                           (unsigned long)loraIf->bitrate(),
                           loraIf->splitRxTimeoutMs(),

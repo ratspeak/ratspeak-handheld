@@ -66,6 +66,8 @@ bool LR1110Radio::isTxBusy() {
     if (!done && !timeout) return true;
     _tx = false; packetAvailable = false;
     _txFailed = !done;
+    if (_txFailed) Serial.printf("[LR1110] TX timeout: irq=0x%08lx elapsed=%lums budget=%lums\n",
+        (unsigned long)irq, (unsigned long)(millis() - _txStarted), (unsigned long)_txBudget);
     if (!checked(_chip.finishTransmit(), "TX finish")) _txFailed = true;
     return false;
 }

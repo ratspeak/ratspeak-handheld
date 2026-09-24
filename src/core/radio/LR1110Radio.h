@@ -29,8 +29,20 @@ public:
     // DIO5/6: standby 00, receive 10, low-power TX 11, high-power TX 01.
     // RadioLib numbers these DIOs as bit 0/1 in the LR1110 command payload.
     int16_t configureM9Switch() { return setDioAsRfSwitch(0x03, 0x00, 0x01, 0x03, 0x02, 0, 0, 0); }
-    int16_t readIrq(uint32_t* irq) { uint8_t first, second; return getStatus(&first, &second, irq); }
-    int16_t readStatus(uint8_t* status) { uint8_t other; uint32_t irq; return getStatus(status, &other, &irq); }
+    int16_t readIrq(uint32_t* irq) { return readStatusFrame(nullptr, nullptr, irq); }
+    int16_t readStatus(uint8_t* status) { return readStatusFrame(status, nullptr, nullptr); }
+    int16_t readStatusFrame(uint8_t* first, uint8_t* second, uint32_t* irq) {
+        // This six-byte response includes both status bytes. Ordinary reads
+        // discard one status byte; doing that here shifts TX_DONE into TIMEOUT
+        // and loses RX_DONE. Match RadioLib's getIrqStatus framing while keeping
+        // its transport error result, and restore normal framing on every exit.
+        auto& width = mod->spiConfig.widths[RADIOLIB_MODULE_SPI_WIDTH_STATUS];
+        const auto saved = width;
+        width = Module::BITS_0;
+        const int16_t result = getStatus(first, second, irq);
+        width = saved;
+        return result;
+    }
 };
 
 // Raw physical frames only. LoRaInterface remains the sole RNode-framing,
