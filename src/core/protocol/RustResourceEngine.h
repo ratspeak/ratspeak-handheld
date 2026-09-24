@@ -92,6 +92,8 @@ private:
         uint8_t reqRetriesLeft = 0;     // bounded part re-requests (Resource.py:613-628 MAX_RETRIES)
         bool requestPending = false;
         bool cancelPending = false;
+        bool awaitingSource = false;
+        unsigned long sourcePollMs = 0;
         handheld::TxReceipt receipt;
     };
 
@@ -105,6 +107,7 @@ private:
                        uint8_t raw[128], size_t& rawLen);
     void sendRequest();
     void servePendingParts();
+    void acceptAssembled();
     void cancelOutbound();
     void closeInbound(bool cancel, bool keepReceipt = false);
     uint32_t waitMs(uint8_t iface, uint32_t packets, uint32_t minimum) const;

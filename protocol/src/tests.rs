@@ -2266,6 +2266,22 @@ fn resource_full_transfer_through_ffi() {
         RsHandheldStatus::Ok
     );
     assert_eq!(&data[..data_len], &payload[..]);
+    // Identity lookup may defer application admission. The authenticated Rust
+    // assembly remains readable without decrypting the in-place plaintext twice.
+    data.fill(0);
+    assert_eq!(
+        unsafe {
+            rs_handheld_rns_resource_assemble(
+                rx,
+                &key,
+                data.as_mut_ptr(),
+                data.len(),
+                &mut data_len,
+            )
+        },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!(&data[..data_len], &payload[..]);
     let mut proof = [0u8; RS_HANDHELD_RESOURCE_PROOF_LEN];
     let mut proof_len = 0usize;
     assert_eq!(

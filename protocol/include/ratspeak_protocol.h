@@ -941,7 +941,9 @@ rs_handheld_status_t rs_handheld_rns_resource_window_shrink(rs_handheld_rns_t *c
 
 /* RECEIVER: reassemble the completed transfer — Token-decrypt the parts with the link session
  * key[64], verify the resource hash over the plaintext, copy the payload into out[out_cap] and
- * its length to *out_len. Then emit the delivery proof via rs_handheld_rns_resource_proof_build.
+ * its length to *out_len. Repeated calls copy the authenticated assembly without decrypting
+ * again, until close. Emit a delivery proof only after LXMF verification and storage admission
+ * via rs_handheld_rns_resource_proof_build.
  * RS_HANDHELD_ERR_NOT_READY if no inbound transfer is open or parts are missing;
  * RS_HANDHELD_ERR_CAPACITY if out_cap is below this transfer's WORST-CASE plaintext — the
  * advertised data_size rounded up to the AES block (up to data_size + 15): the check runs

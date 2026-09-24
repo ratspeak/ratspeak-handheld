@@ -522,7 +522,9 @@ pub unsafe extern "C" fn rs_handheld_rns_resource_window_shrink(
 
 /// RECEIVER: reassemble the completed transfer — Token-decrypt the concatenated parts with the
 /// 64-byte link session `key`, verify the resource hash over the plaintext, and copy the payload
-/// into `out`/`*out_len`. Then emit the delivery proof via `rs_handheld_rns_resource_proof_build`.
+/// into `out`/`*out_len`. Repeated calls copy the already authenticated assembly,
+/// allowing bounded identity discovery before application validation/storage.
+/// Then emit the delivery proof via `rs_handheld_rns_resource_proof_build`.
 /// `ErrNotReady` if no inbound transfer is open or parts are missing; `ErrCapacity` if `out_cap`
 /// is below this transfer's WORST-CASE plaintext — the advertised `data_size` rounded up to the
 /// AES block (up to `data_size + 15`): the check runs before the one-shot decrypt, so it must
@@ -559,10 +561,15 @@ pub unsafe extern "C" fn rs_handheld_rns_resource_assemble(
         if out_cap < max_data {
             return RsHandheldStatus::ErrCapacity;
         }
-        let keys = LinkKeys::from_combined(unsafe { &*key });
-        let n = match res.assemble(&keys) {
-            Ok(n) => n,
-            Err(e) => return resource_status(e),
+        let n = match res.data() {
+            Some(data) => data.len(),
+            None => {
+                let keys = LinkKeys::from_combined(unsafe { &*key });
+                match res.assemble(&keys) {
+                    Ok(n) => n,
+                    Err(e) => return resource_status(e),
+                }
+            }
         };
         let data = res.data().expect("assembled resource has data");
         // SAFETY: non-null + capacity checked above (n <= max_data <= out_cap).

@@ -199,7 +199,7 @@ void RustResourceEngine::onLinkFrame(const uint8_t peerDest[16], const uint8_t l
             if (_in.iface == ifaceId && memcmp(_in.linkId, linkId, 16) == 0 &&
                 memcmp(_in.resourceHash, resHash, 32) == 0) {
                 // A lost request caused re-advertisement: preserve received parts and deadlines.
-                if (!_in.cancelPending) sendRequest();
+                if (!_in.cancelPending && !_in.awaitingSource) sendRequest();
             } else {
                 if (!frameLinkEncrypted(ifaceId, linkId, key, RustWire::PT_DATA,
                                    RustWire::CTX_RESOURCE_RCL, resHash, 32, true))
@@ -303,24 +303,7 @@ void RustResourceEngine::onLinkFrame(const uint8_t peerDest[16], const uint8_t l
             return;
         }
         if (complete) {
-            bool admitted = false;
-            auto& out = _codec;
-            size_t outLen = 0;
-            if (_d.lxmf && rs_handheld_rns_resource_assemble(_d.ctx, _in.key, out, sizeof(out), &outLen) == RS_HANDHELD_OK) {
-                uint8_t proof[RS_HANDHELD_RESOURCE_PROOF_LEN], raw[128];
-                size_t proofLen = 0, rawLen = 0;
-                RustIncomingDelivery::ReceiptSeed seed;
-                if (rs_handheld_rns_resource_proof_build(_d.ctx, proof, sizeof(proof), &proofLen) == RS_HANDHELD_OK &&
-                    buildRawProof(_in.linkId, proof, proofLen, raw, rawLen) &&
-                    _d.lxmf->incoming().resourceSeed(_in.receipt, seed, raw, rawLen)) {
-                    const auto received = _d.lxmf->onDirectPayload(out, outLen, seed);
-                    admitted = received.code == RustIncomingDelivery::ReceiveCode::Pending ||
-                        received.code == RustIncomingDelivery::ReceiveCode::HandledNonpersistent;
-                }
-            }
-            // Storage already owns the admitted bytes. Assembly state and keys
-            // can close while the exact central context waits for durability.
-            closeInbound(!admitted, admitted);
+            if (!_in.awaitingSource) acceptAssembled();
         } else if (isNew) {
             _in.lastPartMs = millis();
             _in.reqRetriesLeft = MAX_PART_RETRIES;
@@ -331,6 +314,37 @@ void RustResourceEngine::onLinkFrame(const uint8_t peerDest[16], const uint8_t l
             }
         }
     }
+}
+
+void RustResourceEngine::acceptAssembled() {
+    bool admitted = false;
+    size_t outLen = 0;
+    // The Rust receiver retains the authenticated assembled bytes. Re-copy into
+    // shared scratch only for this synchronous validation attempt; no extra body
+    // buffer or borrowed scratch survives a service poll.
+    if (_d.lxmf && rs_handheld_rns_resource_assemble(_d.ctx, _in.key, _codec,
+            sizeof(_codec), &outLen) == RS_HANDHELD_OK) {
+        uint8_t proof[RS_HANDHELD_RESOURCE_PROOF_LEN], raw[128];
+        size_t proofLen = 0, rawLen = 0;
+        RustIncomingDelivery::ReceiptSeed seed;
+        if (rs_handheld_rns_resource_proof_build(_d.ctx, proof, sizeof(proof), &proofLen) == RS_HANDHELD_OK &&
+            buildRawProof(_in.linkId, proof, proofLen, raw, rawLen) &&
+            _d.lxmf->incoming().resourceSeed(_in.receipt, seed, raw, rawLen)) {
+            const auto received = _d.lxmf->onDirectPayload(_codec, outLen, seed);
+            if (received.error == RustIncomingDelivery::ReceiveError::SourceUnknown) {
+                // Discovery is transient. Keep the original Resource reservation
+                // and deadline; duplicate traffic cannot renew either. LXMF owns
+                // the bounded/throttled identity request. No proof is sent yet.
+                _in.awaitingSource = true;
+                _in.sourcePollMs = millis();
+                return;
+            }
+            admitted = received.code == RustIncomingDelivery::ReceiveCode::Pending ||
+                received.code == RustIncomingDelivery::ReceiveCode::HandledNonpersistent;
+        }
+    }
+    // Only validated bytes reach storage; its existing commit gate owns proof.
+    closeInbound(!admitted, admitted);
 }
 
 void RustResourceEngine::loop() {
@@ -368,6 +382,8 @@ void RustResourceEngine::loop() {
                    RECEIVER_BASE_TIMEOUT_MS + RECEIVER_PER_PART_TIMEOUT_MS * _in.numParts)) {
             Serial.println("[RUST-RES] receiver transfer timed out");
             closeInbound(true);
+        } else if (_in.awaitingSource) {
+            if (now - _in.sourcePollMs >= 250) acceptAssembled();
         } else if (!_in.requestPending &&
                    now - _in.lastPartMs > waitMs(_in.iface, 6, RECEIVER_NO_PROGRESS_MS) &&
                    now - _in.lastReqMs > waitMs(_in.iface, 6, RECEIVER_NO_PROGRESS_MS)) {
