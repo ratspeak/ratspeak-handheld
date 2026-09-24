@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "product": "ratspeak-handheld",
-  "version": "2.2.1",
+  "version": "2.2.2",
   "archive_toolchain": "rustc 1.95.0-nightly (95e5bda86 2026-04-15) (1.95.0.0)",
   "sources": {
     "rsReticulumLite": {

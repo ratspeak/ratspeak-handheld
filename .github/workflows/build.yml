@@ -140,7 +140,15 @@ jobs:
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.12'
+      - name: Resolve device toolchain
+        id: board
+        working-directory: source/ratspeak-handheld
+        env:
+          DEVICE: ${{ matrix.device }}
+        run: |
+          python3 -c 'import os, sys; sys.path.insert(0, "tools"); from release_catalog import BOARDS; print("rnode=" + str("rnode" in BOARDS[os.environ["DEVICE"]].modes).lower())' >> "$GITHUB_OUTPUT"
       - name: Install Arduino CLI
+        if: steps.board.outputs.rnode == 'true'
         uses: arduino/setup-arduino-cli@81d310742121c928ea9c8bbd407b4217b432ae02 # v2.0.0
         with:
           version: ${{ env.ARDUINO_CLI_VERSION }}

@@ -1,13 +1,9 @@
-Fixes and improvements for T-Deck, T-Pager and Cardputer:
+- Add ThinkNode M9 Standalone support, with keyboard navigation, LoRa, WiFi, GNSS and sound. RNode support is coming soon.
+- Show two chats per page on every handheld, with simpler page controls and message previews.
+- Load chats faster and update recent activity automatically.
+- Fix the Ratspeak Hub preset so WiFi connections can discover peers correctly.
+- Simplify Settings and the empty Contacts screen.
 
-- Fix valid saved messages sometimes showing “Message could not be read”.
-- Keep conversation loading responsive and chat previews up to date.
-- Remove the permanent conversation toolbar and restore the centered empty state.
-- Improve route discovery and retries when a direct LoRa path stops working.
-- Reject overheard packets addressed to another relay without blocking later delivery.
-- Keep TCP and chat history moving during LoRa transmission, while protecting reception from slow storage work.
-- Improve GPS and network clock synchronization handling.
-
-Cardputer support remains beta and requires a Cap LoRa-1262 with an antenna.
+All handheld firmware is beta. Cardputer requires a Cap LoRa-1262 with an antenna for LoRa.
 
 Factory ZIP installs erase settings, identity and internal message history. Back up anything you want to keep before installing.

@@ -6,7 +6,6 @@
 #define BOARD_DEFAULT_BRIGHTNESS 80
 #define BOARD_COMPONENT_ID "m9"
 #define BOARD_BOOT_NAMESPACE "m9"
-#define BOARD_BETA_LABEL "M9 beta 1"
 #include "config/FirmwareVersion.h"
 #define BOARD_RELEASE_REPO "ratspeak/ratspeak-handheld"
 #define HAS_CONTACT_RENAME true

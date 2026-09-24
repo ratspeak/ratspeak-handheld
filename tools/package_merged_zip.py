@@ -30,7 +30,7 @@ def make_manifest(
     image: bytes, name: str, board: str, package: str, flash_size: str,
     version: str, revision: str, dirty: bool,
 ) -> dict:
-    if board not in BOARDS or package not in PACKAGES:
+    if board not in BOARDS or package not in BOARDS[board].modes:
         raise ValueError("unsupported board or package")
     capability = BOARDS[board]
     brand, expected_flash = capability.artifact_prefix, capability.flash_size

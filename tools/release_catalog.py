@@ -43,11 +43,8 @@ class Board:
     rnode_partition_scheme: str | None
     rnode_partition_csv: str | None
 
-    development: bool = False
-
-    @property
-    def modes(self) -> tuple[str, ...]:
-        return ("standalone",) if self.development else PACKAGES
+    modes: tuple[str, ...]
+    web_flasher: bool
 
     @property
     def capacity(self) -> int:
@@ -143,22 +140,28 @@ def load_boards(path: Path = ROOT / "tools/release_boards.json") -> dict[str, Bo
                     raise ValueError(f"{name}: alias shadows a canonical board: {value}")
                 used.add(value)
             fields[key] = tuple(values)
+        modes = fields.get("modes")
+        if modes not in (["standalone"], list(PACKAGES)):
+            raise ValueError(f"{name}: unsupported package capabilities")
+        fields["modes"] = tuple(modes)
         board = Board(**fields)
         if name not in board.app_environments:
             raise ValueError(f"{name}: normal application environment is missing")
         for key, value in fields.items():
-            if key in ("app_environments", "device_aliases", "standalone_flash_freq", "development"):
+            if key in ("app_environments", "device_aliases", "standalone_flash_freq", "modes", "web_flasher"):
                 continue
-            if board.development and value is None and key in ("partition_csv", "rnode_target", "rnode_prep_target", "rnode_partition_scheme", "rnode_partition_csv"):
+            if board.modes == ("standalone",) and value is None and key in ("partition_csv", "rnode_target", "rnode_prep_target", "rnode_partition_scheme", "rnode_partition_csv"):
                 continue
             if not isinstance(value, str) or not re.fullmatch(r"[a-zA-Z0-9_./-]+", value):
                 raise ValueError(f"{name}: invalid catalog value")
-        if not isinstance(board.development, bool):
-            raise ValueError(f"{name}: development must be boolean")
-        if board.development and any(getattr(board, key) is not None for key in ("partition_csv", "rnode_target", "rnode_prep_target", "rnode_partition_scheme", "rnode_partition_csv")):
-            raise ValueError(f"{name}: development board must be standalone only")
+        if not isinstance(board.web_flasher, bool):
+            raise ValueError(f"{name}: web_flasher must be boolean")
+        if board.web_flasher and board.modes != PACKAGES:
+            raise ValueError(f"{name}: web flasher currently requires all three packages")
+        if board.modes == ("standalone",) and any(getattr(board, key) is not None for key in ("partition_csv", "rnode_target", "rnode_prep_target", "rnode_partition_scheme", "rnode_partition_csv")):
+            raise ValueError(f"{name}: standalone-only board must omit RNode/dual layout fields")
         for value in (board.artifact_prefix, board.rnode_target, board.rnode_prep_target):
-            if value is None and board.development:
+            if value is None and board.modes == ("standalone",):
                 continue
             if not re.fullmatch(r"[a-z][a-z0-9_-]*", value):
                 raise ValueError(f"{name}: invalid artifact name or build target")
@@ -166,7 +169,7 @@ def load_boards(path: Path = ROOT / "tools/release_boards.json") -> dict[str, Bo
             raise ValueError(f"{name}: invalid post-build image name")
         if board.standalone_flash_freq not in (None, "80m", "40m"):
             raise ValueError(f"{name}: unsupported standalone merge flash frequency")
-        if not board.development and board.rnode_partition_scheme not in ("no_ota", "default_8MB"):
+        if board.modes != ("standalone",) and board.rnode_partition_scheme not in ("no_ota", "default_8MB"):
             raise ValueError(f"{name}: unsupported RNode partition scheme")
         if board.flash_size not in ("8MB", "16MB"):
             raise ValueError(f"{name}: unsupported flash capacity")
@@ -175,7 +178,7 @@ def load_boards(path: Path = ROOT / "tools/release_boards.json") -> dict[str, Bo
         ):
             raise ValueError(f"{name}: unsupported renderer/protocol/runtime combination")
         for relative in (board.partition_csv, board.standalone_partition_csv, board.rnode_partition_csv):
-            if relative is None and board.development:
+            if relative is None and board.modes == ("standalone",):
                 continue
             if Path(relative).is_absolute() or ".." in Path(relative).parts:
                 raise ValueError(f"{name}: partition path must be source-relative")
@@ -193,9 +196,9 @@ def board_assets(board: Board) -> set[str]:
     }
 
 
-# Unreleased development targets participate in local builds, not public assets.
-ALL_BOARDS = load_boards()
-BOARDS = {name: board for name, board in ALL_BOARDS.items() if not board.development}
+# Every board is published; package and web-flasher capabilities are independent.
+BOARDS = load_boards()
+ALL_BOARDS = BOARDS
 
 
 def board_for_environment(environment: str) -> tuple[str, Board]:
@@ -211,7 +214,7 @@ def site_contract() -> dict:
     return {"schemaVersion": 1, "packages": list(PACKAGES), "boards": {
         name: {"artifactPrefix": board.artifact_prefix, "flashSize": board.flash_size,
                "capacity": board.capacity, "aliases": list(board.device_aliases)}
-        for name, board in BOARDS.items()
+        for name, board in BOARDS.items() if board.web_flasher
     }}
 
 
@@ -219,6 +222,8 @@ def check_rnode_partition_producers(root: Path = ROOT) -> None:
     """Check the source producer; binary partition correspondence is a later gate."""
     makefile = (root / "vendor/rnode_firmware/Makefile").read_text()
     for name, board in BOARDS.items():
+        if "rnode" not in board.modes:
+            continue
         variable = board.rnode_target.upper() + "_FQBN"
         match = re.search(rf"^{variable}\s*:=\s*(\S+)\s*$", makefile, re.MULTILINE)
         if not match:
@@ -238,25 +243,29 @@ def firmware_assets() -> set[str]:
 
 def make_settings(device: str) -> dict[str, str]:
     board = BOARDS[device]
-    partitions = board.partitions()
     settings = {
         "BRAND": board.artifact_prefix,
-        "PARTITION_CSV": board.partition_csv,
-        "PARTITIONS_BASENAME": f"partitions-{board.flash_size.lower()}.bin",
         "FLASH_SIZE": board.flash_size,
-        "RNODE_TARGET": board.rnode_target,
-        "RNODE_PREP_TARGET": board.rnode_prep_target,
+        "HAS_RNODE": "1" if "rnode" in board.modes else "0",
         "APP_STANDALONE_NAME": board.app_name("standalone").removesuffix(".bin"),
-        "APP_RNODE_NAME": board.app_name("rnode").removesuffix(".bin"),
         "POST_BUILD_IMAGE": board.post_build_image,
         "STANDALONE_FLASH_FREQ": board.standalone_flash_freq or "",
         "STANDALONE_FACTORY_OFFSET": hex(board.factory_app_offset("standalone")),
         "STANDALONE_FACTORY_SLOT_SIZE": hex(board.partitions(standalone=True)["app0"].size),
-        "RNODE_FACTORY_OFFSET": hex(board.factory_app_offset("rnode")),
     }
-    for name in ("launcher", *APPLICATIONS):
-        settings[f"{name.upper()}_SLOT_SIZE"] = hex(partitions[name].size)
-        settings[f"{name.upper()}_OFFSET"] = hex(partitions[name].offset)
+    if "full" in board.modes:
+        partitions = board.partitions()
+        settings.update({
+            "PARTITION_CSV": board.partition_csv,
+            "PARTITIONS_BASENAME": f"partitions-{board.flash_size.lower()}.bin",
+            "RNODE_TARGET": board.rnode_target,
+            "RNODE_PREP_TARGET": board.rnode_prep_target,
+            "APP_RNODE_NAME": board.app_name("rnode").removesuffix(".bin"),
+            "RNODE_FACTORY_OFFSET": hex(board.factory_app_offset("rnode")),
+        })
+        for name in ("launcher", *APPLICATIONS):
+            settings[f"{name.upper()}_SLOT_SIZE"] = hex(partitions[name].size)
+            settings[f"{name.upper()}_OFFSET"] = hex(partitions[name].offset)
     return settings
 
 
@@ -277,7 +286,8 @@ def main() -> int:
         print(" ".join(f"{name}={value}" for name, value in make_settings(args.device).items()))
     else:
         for board in BOARDS.values():
-            board.partitions()
+            if "full" in board.modes:
+                board.partitions()
             board.partitions(standalone=True)
         check_rnode_partition_producers()
         print(f"release catalog: PASS ({len(BOARDS)} boards, {len(firmware_assets())} firmware assets)")

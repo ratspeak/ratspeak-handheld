@@ -76,13 +76,15 @@ def verify_firmware(dist: Path, revision: str, root: Path) -> list[dict]:
     for board in RELEASE_BOARDS:
         capability = BOARDS[board]
         brand = capability.artifact_prefix
-        partitions = capability.partitions(root)
+        partitions = capability.partitions(root) if "full" in capability.modes else None
         images = {}
-        for mode in PACKAGES:
+        for mode in capability.modes:
             manifest, images[mode] = verify_package(dist / f"{brand}-{mode}.zip", board, mode, revision, root)
             manifests.append(manifest)
         for mode in APPLICATIONS:
-            slot, offset = partitions[mode].size, partitions[mode].offset
+            if mode not in capability.modes:
+                continue
+            slot = (partitions[mode] if partitions else capability.partitions(root, standalone=True)["app0"]).size
             app = (dist / capability.app_name(mode)).read_bytes()
             if not 24 <= len(app) <= slot or app[0] != 0xE9:
                 raise ValueError(f"{board} {mode}: invalid application image or slot overflow")
@@ -92,7 +94,7 @@ def verify_firmware(dist: Path, revision: str, root: Path) -> list[dict]:
             factory_offset = capability.factory_app_offset(mode, root)
             if images[mode][factory_offset:factory_offset + len(app)] != app:
                 raise ValueError(f"{board} {mode}: application differs from factory package")
-            if images["full"][offset:offset + len(app)] != app:
+            if partitions and images["full"][partitions[mode].offset:partitions[mode].offset + len(app)] != app:
                 raise ValueError(f"{board} {mode}: application differs from dual-boot package")
     if len({manifest["version"] for manifest in manifests}) != 1:
         raise ValueError("release boards/packages disagree on firmware version")
@@ -175,8 +177,8 @@ def prepare(dist: Path, root: Path) -> None:
         checksums.append(f"{hashlib.sha256((dist / name).read_bytes()).hexdigest()}  {name}\n")
     (dist / CHECKSUM_NAME).write_text("".join(checksums))
     print(f"release assets verified: {len(BOARDS)} boards, "
-          f"{len(BOARDS) * len(PACKAGES)} factory ZIPs, "
-          f"{len(BOARDS) * len(APPLICATIONS)} app images; source {revision}")
+          f"{sum(len(board.modes) for board in BOARDS.values())} factory ZIPs, "
+          f"{sum(len(set(board.modes) & set(APPLICATIONS)) for board in BOARDS.values())} app images; source {revision}")
 
 
 def main() -> int:

@@ -34,7 +34,8 @@ def main() -> int:
             failures.append(f"missing {label}: {path}")
 
     require_command("python3")
-    require_command("arduino-cli")
+    if "rnode" in BOARDS[args.device].modes:
+        require_command("arduino-cli")
     for module in ("platformio", "esptool"):
         result = subprocess.run(
             [sys.executable, "-c", f"import {module}"],
@@ -54,7 +55,8 @@ def main() -> int:
         ROOT / "protocol/include/ratspeak_protocol.h",
         "Rust C ABI header",
     )
-    require_file(ROOT / "vendor/rnode_firmware/Makefile", "vendored RNode build")
+    if "rnode" in BOARDS[args.device].modes:
+        require_file(ROOT / "vendor/rnode_firmware/Makefile", "vendored RNode build")
 
     if args.source:
         require_command("cargo")

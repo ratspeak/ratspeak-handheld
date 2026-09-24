@@ -67,7 +67,7 @@ def flash_settings(data: bytes, board: str) -> dict[str, str]:
 
 
 def factory_partitions(board: str, mode: str, root: Path = ROOT):
-    if mode not in PACKAGES:
+    if mode not in BOARDS[board].modes:
         raise ValueError(f"unsupported factory mode: {mode}")
     capability = BOARDS[board]
     if mode == "rnode":

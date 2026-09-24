@@ -121,7 +121,8 @@ def main() -> int:
     config = configparser.ConfigParser(interpolation=None)
     config.read(ROOT / "platformio.ini")
     for name, board in BOARDS.items():
-        board.partitions(ROOT)
+        if "full" in board.modes:
+            board.partitions(ROOT)
         board.partitions(ROOT, standalone=True)
         flags = config[f"env:{name}"]["build_flags"]
         service = re.findall(r"-DDEVICE_SERVICE_TASK=([01])", flags)
@@ -147,7 +148,7 @@ def main() -> int:
         config = (ROOT / f"src/boards/{board}/config/BoardConfig.h").read_text(
             encoding="utf-8"
         )
-        if '#define BOARD_RELEASE_REPO    "ratspeak/ratspeak-handheld"' not in config:
+        if not re.search(r'^#define\s+BOARD_RELEASE_REPO\s+"ratspeak/ratspeak-handheld"$', config, re.M):
             fail(f"{board} does not use the unified release repository")
 
     if "TODO(reveal)" in "\n".join(

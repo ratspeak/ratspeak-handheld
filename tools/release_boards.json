@@ -20,7 +20,13 @@
     "post_build_image": "tdeck-standalone-factory.bin",
     "standalone_flash_freq": null,
     "rnode_partition_scheme": "no_ota",
-    "rnode_partition_csv": "partitions/rnode-no_ota.csv"
+    "rnode_partition_csv": "partitions/rnode-no_ota.csv",
+    "modes": [
+      "full",
+      "standalone",
+      "rnode"
+    ],
+    "web_flasher": true
   },
   "tpager": {
     "artifact_prefix": "pager",
@@ -43,7 +49,13 @@
     "post_build_image": "pager-standalone-factory.bin",
     "standalone_flash_freq": "80m",
     "rnode_partition_scheme": "no_ota",
-    "rnode_partition_csv": "partitions/rnode-no_ota.csv"
+    "rnode_partition_csv": "partitions/rnode-no_ota.csv",
+    "modes": [
+      "full",
+      "standalone",
+      "rnode"
+    ],
+    "web_flasher": true
   },
   "cardputer": {
     "artifact_prefix": "cardputer",
@@ -65,7 +77,13 @@
     "post_build_image": "cardputer-standalone-factory.bin",
     "standalone_flash_freq": null,
     "rnode_partition_scheme": "default_8MB",
-    "rnode_partition_csv": "partitions/rnode-default_8MB.csv"
+    "rnode_partition_csv": "partitions/rnode-default_8MB.csv",
+    "modes": [
+      "full",
+      "standalone",
+      "rnode"
+    ],
+    "web_flasher": true
   },
   "m9": {
     "artifact_prefix": "m9",
@@ -87,6 +105,9 @@
     "standalone_flash_freq": "80m",
     "rnode_partition_scheme": null,
     "rnode_partition_csv": null,
-    "development": true
+    "modes": [
+      "standalone"
+    ],
+    "web_flasher": false
   }
 }
