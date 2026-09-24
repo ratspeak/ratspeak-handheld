@@ -304,9 +304,15 @@ bool UserConfig::parseJson(const char* json, size_t length, bool persisted, bool
             for (JsonObject obj : tcpArr) {
                 if (parsed.tcpConnections.size() >= MAX_TCP_CONNECTIONS) break;
                 TCPEndpoint ep;
-                if (!assignConfigString(ep.host, obj["host"] | "")) return memoryFailure();
                 const int port = obj["port"] | TCP_DEFAULT_PORT;
                 if (port < 1 || port > 65535) continue;
+                const char* host = obj["host"] | "";
+                // Older LVGL presets copied 15 of the hub's 16 characters.
+                // Repair only that exact persisted preset; retain enable state,
+                // other ports and custom endpoints. Normal saving persists it.
+                if (persisted && port == TCP_DEFAULT_PORT && std::strcmp(host, "rns.ratspeak.or") == 0)
+                    host = RATSPEAK_HUB_HOST;
+                if (!assignConfigString(ep.host, host)) return memoryFailure();
                 ep.port = port;
                 ep.autoConnect = obj["auto"] | true;
                 if (!ep.host.isEmpty()) parsed.tcpConnections.push_back(std::move(ep));

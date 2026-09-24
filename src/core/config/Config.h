@@ -24,6 +24,7 @@
 #define PATH_MESSAGES       "/messages"
 
 // --- TCP Client ---
+inline constexpr char RATSPEAK_HUB_HOST[] = "rns.ratspeak.org";
 #define MAX_TCP_CONNECTIONS         4
 #define TCP_DEFAULT_PORT            4242
 #define TCP_CONNECT_TIMEOUT_MS      10000

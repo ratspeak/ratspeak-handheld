@@ -701,8 +701,8 @@ void setup() {
     // Seed default TCP hubs if no connections configured (off by default)
     if (userConfig.settings().tcpConnections.empty()) {
         TCPEndpoint ep1;
-        ep1.host = "rns.ratspeak.org";
-        ep1.port = 4242;
+        ep1.host = RATSPEAK_HUB_HOST;
+        ep1.port = TCP_DEFAULT_PORT;
         ep1.autoConnect = false;
         userConfig.settings().tcpConnections.push_back(ep1);
 

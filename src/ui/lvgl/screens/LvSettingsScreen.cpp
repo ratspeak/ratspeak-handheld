@@ -781,7 +781,7 @@ void LvSettingsScreen::buildItems() {
         tcpPreset.getter = [&s]() {
             for (auto& ep : s.tcpConnections) {
                 if (!ep.autoConnect || ep.host.isEmpty()) continue;
-                if (ep.host == "rns.ratspeak.org") return 1;
+                if (ep.host == RATSPEAK_HUB_HOST) return 1;
                 return 2;
             }
             return 0;
@@ -792,7 +792,7 @@ void LvSettingsScreen::buildItems() {
             }
             else if (v == 1) {
                 TCPEndpoint ep;
-                if (!UserConfig::trySetString(ep.host, "rns.ratspeak.org", 15)) throw std::bad_alloc();
+                if (!UserConfig::trySetString(ep.host, RATSPEAK_HUB_HOST, sizeof(RATSPEAK_HUB_HOST) - 1)) throw std::bad_alloc();
                 ep.port = TCP_DEFAULT_PORT; ep.autoConnect = true;
                 std::vector<TCPEndpoint> prepared;
                 prepared.push_back(std::move(ep));

@@ -955,7 +955,7 @@ void setup() {
         } else {
             try {
                 TCPEndpoint ep;
-                if (!UserConfig::trySetString(ep.host, "rns.ratspeak.org", 15)) throw std::bad_alloc();
+                if (!UserConfig::trySetString(ep.host, RATSPEAK_HUB_HOST, sizeof(RATSPEAK_HUB_HOST) - 1)) throw std::bad_alloc();
                 ep.port = TCP_DEFAULT_PORT; ep.autoConnect = true;
                 std::vector<TCPEndpoint> prepared;
                 prepared.push_back(std::move(ep));
