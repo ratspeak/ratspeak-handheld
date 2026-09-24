@@ -105,11 +105,12 @@ void GPSManager::loop() {
 
 void GPSManager::printDiagnostics() const {
     handheld::assertDeviceOwner();
-    Serial.printf("GPS: %s baud=%lu %s bytes=%lu sentences=%lu sats=%d quality=%u time-fix=%s syncs=%lu\n",
+    Serial.printf("GPS: %s baud=%lu %s bytes=%lu sentences=%lu sats-used=%d quality=%u time-enabled=%s utc-valid=%s time-fix=%s syncs=%lu\n",
                   _running ? "RUNNING" : "STOPPED", (unsigned long)baudRate(),
                   _baudDetected ? "detected" : "searching",
                   (unsigned long)charsProcessed(), (unsigned long)sentencesParsed(),
-                  satellites(), unsigned(fixQuality()), hasTimeFix() ? "YES" : "no",
+                  satellites(), unsigned(fixQuality()), _timeEnabled ? "YES" : "no",
+                  _parser.data().timeValid ? "YES" : "no", hasTimeFix() ? "YES" : "no",
                   (unsigned long)timeSyncCount());
 }
 

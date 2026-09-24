@@ -25,5 +25,5 @@ private:
     uint32_t _started = 0;
     uint16_t _frequency = 0;
     uint8_t _duty = 0;
-    void tone(uint16_t frequency);
+    void tone(uint16_t frequency, uint8_t level = 100);
 };

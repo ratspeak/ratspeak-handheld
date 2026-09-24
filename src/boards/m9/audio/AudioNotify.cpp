@@ -4,14 +4,21 @@
 namespace {
 // Channel 4 has its own timer, separate from LCD 0 and keyboard backlight 2.
 constexpr uint8_t buzzerChannel = 4;
-struct Note { uint16_t from, to, duration; };
-// The existing handheld startup motif, rendered by a passive PWM buzzer.
+struct Note { uint16_t frequency, duration; };
+// Keep the ascending E-major motif, without speaker-style sweeps. Steady
+// pitches avoid audible timer steps when UI polling is uneven.
 constexpr Note bootNotes[] = {
-    {300, 1200, 160}, {0, 0, 25},
-    {659, 659, 45}, {0, 0, 12}, {831, 831, 45}, {0, 0, 12},
-    {988, 988, 45}, {0, 0, 25}, {2400, 1600, 60}, {0, 0, 20},
-    {1319, 1319, 100},
+    {659, 90}, {0, 25}, {831, 90}, {0, 25}, {988, 120},
 };
+
+uint8_t noteLevel(uint32_t elapsed, uint32_t duration) {
+    constexpr uint32_t fadeMs = 15;
+    if (elapsed >= duration) return 0;
+    const uint32_t remaining = duration - elapsed;
+    if (elapsed < fadeMs) return elapsed * 100 / fadeMs;
+    if (remaining < fadeMs) return remaining * 100 / fadeMs;
+    return 100;
+}
 }
 
 void AudioNotify::begin() {
@@ -22,10 +29,12 @@ void AudioNotify::begin() {
     end();
 }
 
-void AudioNotify::tone(uint16_t frequency) {
+void AudioNotify::tone(uint16_t frequency, uint8_t level) {
     if (!_ready) return;
-    const uint8_t duty = frequency ? uint32_t(_volume) * 127 / 100 : 0;
+    const uint8_t duty = frequency ? uint32_t(_volume) * level * 127 / 10000 : 0;
     if (frequency && frequency != _frequency) {
+        // A late UI poll can skip a gap; never retune a sounding timer.
+        if (_duty) ledcWrite(buzzerChannel, 0);
         ledcSetup(buzzerChannel, frequency, 8);
         // A timer reconfiguration may change duty; always write it below.
         ledcWrite(buzzerChannel, duty);
@@ -60,8 +69,7 @@ void AudioNotify::loop() {
         uint32_t elapsed = now - _started;
         for (const auto& note : bootNotes) {
             if (elapsed < note.duration) {
-                const int32_t delta = int32_t(note.to) - note.from;
-                tone(note.from + delta * int32_t(elapsed) / note.duration);
+                tone(note.frequency, noteLevel(elapsed, note.duration));
                 return;
             }
             elapsed -= note.duration;
@@ -77,5 +85,5 @@ void AudioNotify::loop() {
         _started = now;
         _sound = Sound::Message;
     }
-    if (_sound == Sound::Message) tone(2200);
+    if (_sound == Sound::Message) tone(2200, noteLevel(now - _started, 80));
 }
