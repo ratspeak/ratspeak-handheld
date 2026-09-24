@@ -6,7 +6,8 @@
 
 using namespace handheld::storage;
 
-static_assert(sizeof(MessageTransactions) <= 64 && alignof(MessageTransactions) <= alignof(std::max_align_t),
+static_assert(sizeof(MessageTransactions) <= 64 + Budget::conversationSummaryBytes(WriteQueue::CompactProfile) &&
+              alignof(MessageTransactions) <= alignof(std::max_align_t),
               "Review the inline semantic executor representation");
 
 MessageStore::MessageStore() { new (_transactionState) MessageTransactions(); }

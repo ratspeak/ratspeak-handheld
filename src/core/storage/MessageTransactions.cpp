@@ -11,6 +11,47 @@ static bool historyLess(HistoryEntry a, HistoryEntry b) {
     return a.counter < b.counter || (a.counter == b.counter && a.incoming < b.incoming);
 }
 
+void MessageTransactions::clearSummaries() {
+    for (auto& summary : _summaries) summary.counter = 0;
+    _summaryClock = 0;
+}
+
+void MessageTransactions::checkSummaryMedia() {
+    const uint8_t available = (medium(0).isReady() ? 1 : 0) | (medium(1).isReady() ? 2 : 0);
+    if (_summaryMedia != available) { clearSummaries(); _summaryMedia = available; }
+}
+
+void MessageTransactions::invalidateSummary(const uint8_t peer[16]) {
+    for (auto& summary : _summaries)
+        if (summary.counter && !memcmp(summary.row.peer, peer, 16)) summary.counter = 0;
+}
+
+MessageTransactions::Summary* MessageTransactions::findSummary(const uint8_t peer[16]) {
+    checkSummaryMedia();
+    if (_summaryClock == UINT32_MAX) clearSummaries();
+    for (auto& summary : _summaries) {
+        if (summary.counter && !memcmp(summary.row.peer, peer, 16)) {
+            summary.used = ++_summaryClock; return &summary;
+        }
+    }
+    return nullptr;
+}
+
+void MessageTransactions::rememberSummary(const ConversationView& row, const ConversationSelector& selector,
+                                         uint32_t revision) {
+    if (!selector.counter) return;
+    checkSummaryMedia();
+    if (_summaryClock == UINT32_MAX) clearSummaries();
+    auto* selected = &_summaries[0];
+    for (auto& summary : _summaries) {
+        // A forced reduction (startup hints) can refresh an existing entry.
+        // Prefer that entry even if an earlier slot was invalidated.
+        if (summary.counter && !memcmp(summary.row.peer, row.peer, 16)) { selected = &summary; break; }
+        if (!summary.counter || (selected->counter && summary.used < selected->used)) selected = &summary;
+    }
+    *selected = {row, selector.counter, revision, ++_summaryClock, bool(selector.incoming)};
+}
+
 void MessageTransactions::directory(const uint8_t peer[16], unsigned which, char output[96]) const {
     char hex[33]; encodeHex(peer, 16, hex);
     snprintf(output, 96, "%s/%s", which == 0 ? PATH_MESSAGES : SD_PATH_MESSAGES, hex);
@@ -242,6 +283,7 @@ Error MessageTransactions::load(const RecordKey& key, MessageDocument& document,
 bool MessageTransactions::begin(FlashStore* flash, SDStore* sd, bool external, bool deferred) {
     handheld::assertDeviceOwner();
     _flash = flash; _sd = sd; _external = external; _deferred = deferred;
+    clearSummaries(); checkSummaryMedia();
     if (!StorageLease::initialize()) return false;
     StorageLease lease;
     if (!lease.held() || !_flash || !_flash->isReady() || !_flash->ensureDir(PATH_MESSAGES)) return false;
@@ -517,9 +559,20 @@ Error MessageTransactions::summarize(const uint8_t peer[16], ConversationView& r
     RecentIds* recent, size_t recentCapacity, uint32_t* latestRevision) {
     row = {}; selector = {};
     if (latestRevision) *latestRevision = 0;
+    // Boot still reads all records to collect recent-ID hints, then retains
+    // this same reducer's bounded result for the first list read. Runtime
+    // queries reuse it only until a write, media change or eviction.
+    if (!recent) if (const auto* summary = findSummary(peer)) {
+        row = summary->row;
+        selector.cursor.timestamp = row.timestamp; memcpy(selector.cursor.peer, peer, 16);
+        selector.counter = summary->counter; selector.incoming = summary->incoming;
+        if (latestRevision) *latestRevision = summary->revision;
+        return Error::None;
+    }
     memcpy(row.peer, peer, 16); memcpy(selector.cursor.peer, peer, 16);
     Cursor cursor; beginRecords(cursor, peer);
     MessageDocument document; StoredRecordHeader header; RecordKey key;
+    uint32_t newestRevision = 0;
     while (nextRecord(cursor, key)) {
         const auto error = load(key, document, header);
         if (error != Error::None) return error;
@@ -527,6 +580,7 @@ Error MessageTransactions::summarize(const uint8_t peer[16], ConversationView& r
         if (!selector.counter || historyLess({selector.counter, bool(selector.incoming)}, {key.counter, key.incoming})) {
             selector.counter = key.counter; selector.incoming = key.incoming;
             if (latestRevision) *latestRevision = header.revision;
+            newestRevision = header.revision;
             selector.cursor.timestamp = row.timestamp = header.timestamp;
             row.flags = (row.flags & ~ConversationView::LastIncoming) | (header.incoming ? ConversationView::LastIncoming : 0);
             const auto content = document.document()["content"].as<JsonString>();
@@ -553,6 +607,7 @@ Error MessageTransactions::summarize(const uint8_t peer[16], ConversationView& r
             }
         }
     }
+    if (cursor.error == Error::None) rememberSummary(row, selector, newestRevision);
     return cursor.error;
 }
 
@@ -575,25 +630,38 @@ void MessageTransactions::conversationPage(const Request& request, uint8_t* byte
         uint8_t peer[16]; decodeHex(peerHex, 32, peer, 16);
         // Ordering needs only the latest record, not every message body and
         // unread/status aggregate in every off-screen conversation. Enumerate
-        // keys once, then validate the newest record through the same revision/
-        // mirror-aware loader used by details. Visible details retain full
-        // aggregate validation, including corruption in earlier messages.
+        // keys on a cache miss, then validate the newest record through the
+        // same revision/mirror-aware loader used by details. Cold summaries
+        // still validate all records, including earlier corrupt bodies.
         ConversationSelector selector;
         memcpy(selector.cursor.peer, peer, 16);
-        Cursor records; beginRecords(records, peer);
-        RecordKey key, latest;
-        while (nextRecord(records, key)) {
-            if (!latest.counter || historyLess({latest.counter, latest.incoming}, {key.counter, key.incoming})) latest = key;
+        RecordKey latest;
+        Error error = Error::None;
+        // A cached summary supplies the newest key without opening every
+        // directory entry. Still validate that record against all copies and
+        // tombstones, so a failed read is never certified as a current page.
+        if (const auto* summary = findSummary(peer)) {
+            memcpy(latest.peer, peer, 16); latest.counter = summary->counter; latest.incoming = summary->incoming;
+        } else {
+            Cursor records; beginRecords(records, peer);
+            RecordKey key;
+            while (nextRecord(records, key)) {
+                if (!latest.counter || historyLess({latest.counter, latest.incoming}, {key.counter, key.incoming})) latest = key;
+            }
+            error = records.error;
         }
-        Error error = records.error;
         if (error == Error::None && latest.counter) {
             MessageDocument document; StoredRecordHeader header;
             error = load(latest, document, header);
             if (error == Error::None) {
+                if (const auto* summary = findSummary(peer))
+                    if (summary->revision != header.revision || summary->row.timestamp != header.timestamp)
+                        invalidateSummary(peer);
                 selector.counter = latest.counter; selector.incoming = latest.incoming;
                 selector.cursor.timestamp = header.timestamp;
             }
         }
+        if (error != Error::None) invalidateSummary(peer);
         if (error == Error::InvalidRecord) {
             // A permanent corrupt peer remains navigable beside healthy peers.
             // Its unknown visibility cannot be certified as an empty directory.
@@ -846,11 +914,15 @@ void MessageTransactions::execute(const Request& request, uint8_t* bytes, size_t
     StorageLease lease;
     result.key = request.key;
     if (!lease.held()) { result.error = Error::Unavailable; return; }
+    checkSummaryMedia();
     if (request.operation != Operation::ReadRecord && request.operation != Operation::ReadPending &&
         request.operation != Operation::ReadHistoryPage && request.operation != Operation::ReadConversationPage &&
         request.operation != Operation::ReadConversation) {
         if (_mutationEpoch == UINT64_MAX) { result.error = Error::RevisionExhausted; return; }
         ++_mutationEpoch;
+        // Invalidate before attempting a write: partial mirrors, failed cleanup
+        // and exceptions can all change persistent state even on failure.
+        invalidateSummary(request.key.peer);
     }
     switch (request.operation) {
     case Operation::CreateIncoming: case Operation::CreateOutgoing:

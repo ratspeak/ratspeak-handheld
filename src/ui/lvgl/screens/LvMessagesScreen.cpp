@@ -5,6 +5,7 @@
 #include "LxmFaceAvatar.h"
 #include "fonts/fonts.h"
 #include "reticulum/MessageStatusDetail.h"
+#include "util/PerfTrace.h"
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -154,6 +155,7 @@ void LvMessagesScreen::createUI(lv_obj_t* parent) {
 }
 void LvMessagesScreen::onEnter() {
     _active=true;
+    _loadStarted=millis();_loadPending=true;
 #if HAS_TOUCH
     _focusActive=false;
 #endif
@@ -195,6 +197,12 @@ void LvMessagesScreen::refreshUI() {
     if (bound() && _nodeRevision!=(_am?_am->revision():0)) updateNames();
     if (bound() && !window.loading() && _lpState==LP_NONE) pollName();
     updateCaptions();
+    if (_loadPending && bound() && !window.loading()) {
+        _loadPending=false;
+        const auto elapsed=PerfTrace::elapsedMs(_loadStarted);
+        if (PerfTrace::shouldLog(elapsed,RSDECK_PERF_UI_TRACE_MS))
+            Serial.printf("[PERF] Chats page=%u rows=%u ready in %lums\n",unsigned(_boundPage),unsigned(_rowCount),elapsed);
+    }
 }
 void LvMessagesScreen::bindRows() {
     auto& window=_service->conversationWindow();
@@ -296,7 +304,7 @@ void LvMessagesScreen::updateStatuses() {
         const char* state=(value->flags&Row::HasOutgoing)?statusText(value->status):"";
         if (detail) snprintf(text,sizeof(text),"%s%s%s",state,*state?" · ":"",detail);
         else if (value->unreadCount) snprintf(text,sizeof(text),"%u new%s%s",unsigned(value->unreadCount),*state?" · ":"",state);
-        else snprintf(text,sizeof(text),"%s%s",state,(value->flags&Row::PreviewTruncated)?(*state?" · Read full in chat":"Read full in chat"):"");
+        else snprintf(text,sizeof(text),"%s",state);
         lv_label_set_text(_rows[i].status,text);
         const auto color=(value->flags&(Row::Unavailable|Row::StatusUnavailable))?Theme::WARNING_CLR:
             value->status==static_cast<uint8_t>(LXMFStatus::FAILED)?Theme::ERROR_CLR:
@@ -371,6 +379,7 @@ void LvMessagesScreen::navigate(Navigation navigation) {
     if (!_active || !_service || _lpState!=LP_NONE) return;
     auto& window=_service->conversationWindow();
     if (bound()) reportViewport();
+    _loadStarted=millis();_loadPending=true;
     switch (navigation) {
         case Navigation::Previous:window.previous();break;
         case Navigation::Next:window.nextPage();break;
@@ -383,6 +392,7 @@ void LvMessagesScreen::applyUpdate() {
     if (!_active || !_service || _lpState!=LP_NONE || lv_obj_has_flag(_update,LV_OBJ_FLAG_HIDDEN)) return;
     auto& window=_service->conversationWindow();
     if (bound()) reportViewport();
+    _loadStarted=millis();_loadPending=true;
     window.refresh();
     _namesResolved=0;_nameFailed=false;
     refreshUI();

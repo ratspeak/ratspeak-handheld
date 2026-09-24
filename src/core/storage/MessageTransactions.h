@@ -18,7 +18,7 @@ class MessageTransactions final : public WriteQueue::Executor {
 public:
     bool begin(FlashStore* flash, SDStore* sd, bool external, bool deferred);
     void execute(const Request&, uint8_t*, size_t length, size_t capacity, Result&) override;
-    void setExternal(bool enabled) { _external = enabled; } // owner, quiescent only
+    void setExternal(bool enabled) { _external = enabled; clearSummaries(); } // owner, quiescent only
     bool external() const { return _external; }
 
     struct Cursor {
@@ -45,6 +45,18 @@ public:
         RecentIds* recent = nullptr, size_t recentCapacity = 0, uint32_t* latestRevision = nullptr);
 
 private:
+    struct Summary {
+        ConversationView row;
+        uint32_t counter = 0, revision = 0, used = 0;
+        bool incoming = false;
+    };
+    static_assert(sizeof(Summary) == Budget::ConversationSummaryBytes, "Review summary retention budget");
+    static constexpr size_t SummaryCapacity = Budget::conversationSummaryCapacity(WriteQueue::CompactProfile);
+    void clearSummaries();
+    void invalidateSummary(const uint8_t peer[16]);
+    Summary* findSummary(const uint8_t peer[16]);
+    void rememberSummary(const ConversationView&, const ConversationSelector&, uint32_t revision);
+    void checkSummaryMedia();
     struct Medium {
         FlashStore* flash = nullptr;
         SDStore* sd = nullptr;
@@ -85,6 +97,9 @@ private:
     uint8_t _blockedMedia = 0, _preferBackup = 0;
     uint32_t _nextCounter = 1, _reservedThrough = 0;
     uint64_t _mutationEpoch = 1;
+    uint32_t _summaryClock = 0;
+    uint8_t _summaryMedia = 0;
+    Summary _summaries[SummaryCapacity];
 };
 
 } // namespace handheld::storage

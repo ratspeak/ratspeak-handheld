@@ -99,7 +99,8 @@ private:
     static constexpr size_t STARTUP_RECENT_CAP = 128;
     WriteQueue _writeQueue;
     handheld::storage::MessageTransactions& transactions() const;
-    alignas(std::max_align_t) mutable uint8_t _transactionState[64];
+    alignas(std::max_align_t) mutable uint8_t _transactionState[64 +
+        handheld::storage::Budget::conversationSummaryBytes(WriteQueue::CompactProfile)];
     Ticket _deleteFence;
     uint8_t _fencedPeer[16] = {};
     uint64_t _settledThrough = 0;
@@ -109,7 +110,8 @@ private:
     uint32_t _historyRevision = 0;
 };
 
-static_assert(sizeof(MessageStore) - sizeof(WriteQueue) <= 320,
+static_assert(sizeof(MessageStore) - sizeof(WriteQueue) <= 320 +
+              handheld::storage::Budget::conversationSummaryBytes(WriteQueue::CompactProfile),
               "MessageStore fixed state exceeds its descriptor allowance");
 static_assert(handheld::storage::Budget::StoreBookkeeping >= 320 + 56 + 84,
               "Store state, queue metadata and filesystem mutex need explicit accounting");
