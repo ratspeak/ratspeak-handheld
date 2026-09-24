@@ -200,6 +200,7 @@ void LvMessagesScreen::bindRows() {
     auto& window=_service->conversationWindow();
     detachRows();_binding=true;
     _boundRevision=window.revision();_boundIdentity=window.identityGeneration();
+    _boundPage=window.pageNumber();
     _nodeRevision=_am?_am->revision():0;
     _rowCount=static_cast<uint8_t>(window.count());
     for (size_t i=0;i<_rowCount;++i) {
@@ -316,7 +317,7 @@ void LvMessagesScreen::updateCaptions() {
     const auto* window=_service?&_service->conversationWindow():nullptr;
     char text[100];
     if (!window || !_active) snprintf(text,sizeof(text),"Conversations closed");
-    else snprintf(text,sizeof(text),"Page %u",unsigned(window->pageNumber()));
+    else snprintf(text,sizeof(text),"Page %u",unsigned(_rowCount?_boundPage:window->pageNumber()));
     lv_label_set_text(_caption,text);
     const bool emptyReady=window && _active && !_rowCount && window->state()==Window::State::Ready &&
         !window->loading() && window->statusReady();

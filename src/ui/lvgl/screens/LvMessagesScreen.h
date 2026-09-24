@@ -60,6 +60,7 @@ private:
     lv_obj_t* _actionRows[3] = {};
     uint64_t _namesResolved = 0;
     uint32_t _boundRevision = 0, _boundIdentity = 0, _statusRevision = 0;
+    uint32_t _boundPage = 1;
     uint32_t _nodeRevision = 0;
     uint32_t _nameRequest = 0, _actionRequest = 0, _actionIdentity = 0;
     uint8_t _actionPeer[16] = {};
