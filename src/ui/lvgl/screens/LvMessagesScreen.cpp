@@ -253,6 +253,8 @@ void LvMessagesScreen::bindRows() {
             LxmFaceAvatar::render(avatar.canvas,String(peer));
         }
         widgets.name=label(row,&lv_font_rsdeck_14,Theme::TEXT_PRIMARY,TextX,4,Theme::CONTENT_W-TextX-58);
+        // DOT only truncates after exhausting the label's height; keep the preview's line clear.
+        lv_obj_set_height(widgets.name,lv_font_get_line_height(&lv_font_rsdeck_14));
         lv_label_set_long_mode(widgets.name,LV_LABEL_LONG_DOT);
         const auto* node=_am?_am->findNodeByHex(peer):nullptr;
         if (node && !node->name.empty()) {
