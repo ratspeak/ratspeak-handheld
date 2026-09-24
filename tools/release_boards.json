@@ -108,6 +108,6 @@
     "modes": [
       "standalone"
     ],
-    "web_flasher": false
+    "web_flasher": true
   }
 }

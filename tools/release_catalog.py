@@ -156,8 +156,6 @@ def load_boards(path: Path = ROOT / "tools/release_boards.json") -> dict[str, Bo
                 raise ValueError(f"{name}: invalid catalog value")
         if not isinstance(board.web_flasher, bool):
             raise ValueError(f"{name}: web_flasher must be boolean")
-        if board.web_flasher and board.modes != PACKAGES:
-            raise ValueError(f"{name}: web flasher currently requires all three packages")
         if board.modes == ("standalone",) and any(getattr(board, key) is not None for key in ("partition_csv", "rnode_target", "rnode_prep_target", "rnode_partition_scheme", "rnode_partition_csv")):
             raise ValueError(f"{name}: standalone-only board must omit RNode/dual layout fields")
         for value in (board.artifact_prefix, board.rnode_target, board.rnode_prep_target):
@@ -213,7 +211,8 @@ def site_contract() -> dict:
     """Capabilities and aliases only; deployment activation/tag is a site policy."""
     return {"schemaVersion": 1, "packages": list(PACKAGES), "boards": {
         name: {"artifactPrefix": board.artifact_prefix, "flashSize": board.flash_size,
-               "capacity": board.capacity, "aliases": list(board.device_aliases)}
+               "capacity": board.capacity, "aliases": list(board.device_aliases),
+               "packages": list(board.modes)}
         for name, board in BOARDS.items() if board.web_flasher
     }}
 
