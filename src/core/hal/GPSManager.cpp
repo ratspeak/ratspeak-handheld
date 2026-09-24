@@ -20,13 +20,24 @@ void GPSManager::begin() {
     // Restore last-known time from NVS on boot
     if (_timeEnabled) restoreTimeFromNVS();
 
-    // Start baud rate auto-detection: try first rate
+    // Previous-session sentences must not lock a newly powered receiver to
+    // the first candidate rate. Preserve the user's location opt-in only.
+    const bool parseLocation = _parser.parseLocation();
+    _parser = NMEAParser{};
+    _parser.setParseLocation(parseLocation);
+    _locationValid = false;
+    _hadLocationFix = false;
+
+    // Prefer the board's factory rate, then keep cycling until valid NMEA.
     _baudDetected = false;
     _baudAttemptIdx = 0;
+    for (int i = 0; i < BAUD_RATE_COUNT; ++i) {
+        if (BAUD_RATES[i] == GPS_BAUD) { _baudAttemptIdx = i; break; }
+    }
     _baudAttemptStart = millis();
-    _serial.begin(BAUD_RATES[0], SERIAL_8N1, GPS_RX, GPS_TX);
+    _serial.begin(BAUD_RATES[_baudAttemptIdx], SERIAL_8N1, GPS_RX, GPS_TX);
     Serial.printf("[GPS] UART started, trying %lu baud (GPIO RX=%d TX=%d)\n",
-                  (unsigned long)BAUD_RATES[0], GPS_RX, GPS_TX);
+                  (unsigned long)BAUD_RATES[_baudAttemptIdx], GPS_RX, GPS_TX);
     _running = true;
 }
 
@@ -46,24 +57,15 @@ void GPSManager::loop() {
     if (!_baudDetected) {
         if (_parser.sentencesParsed() > 0) {
             _baudDetected = true;
-            _detectedBaud = BAUD_RATES[_baudAttemptIdx];
             Serial.printf("[GPS] Baud detected: %lu (%lu sentences parsed)\n",
-                          (unsigned long)_detectedBaud, (unsigned long)_parser.sentencesParsed());
-        } else if (millis() - _baudAttemptStart >= BAUD_DETECT_TIMEOUT_MS) {
-            _baudAttemptIdx++;
-            if (_baudAttemptIdx >= BAUD_RATE_COUNT) {
-                // Exhausted all baud rates — keep last one active, will retry on next begin()
-                Serial.println("[GPS] No valid NMEA data at any baud rate");
-                _baudDetected = true;  // Stop retrying
-                _detectedBaud = BAUD_RATES[BAUD_RATE_COUNT - 1];
-            } else {
-                _serial.end();
-                delay(10);
-                _serial.begin(BAUD_RATES[_baudAttemptIdx], SERIAL_8N1, GPS_RX, GPS_TX);
-                _baudAttemptStart = millis();
-                Serial.printf("[GPS] Trying %lu baud...\n",
-                              (unsigned long)BAUD_RATES[_baudAttemptIdx]);
-            }
+                          (unsigned long)baudRate(), (unsigned long)_parser.sentencesParsed());
+        } else if (uint32_t(millis() - _baudAttemptStart) >= BAUD_DETECT_TIMEOUT_MS) {
+            // A quiet receiver may still be powering up. Exhausting one pass
+            // is not evidence of its baud rate and must not disable discovery.
+            _baudAttemptIdx = (_baudAttemptIdx + 1) % BAUD_RATE_COUNT;
+            _serial.end();
+            _serial.begin(BAUD_RATES[_baudAttemptIdx], SERIAL_8N1, GPS_RX, GPS_TX);
+            _baudAttemptStart = millis();
         }
     }
 
@@ -99,6 +101,16 @@ void GPSManager::loop() {
         // Only clear location validity since position may have changed.
         _locationValid = false;
     }
+}
+
+void GPSManager::printDiagnostics() const {
+    handheld::assertDeviceOwner();
+    Serial.printf("GPS: %s baud=%lu %s bytes=%lu sentences=%lu sats=%d quality=%u time-fix=%s syncs=%lu\n",
+                  _running ? "RUNNING" : "STOPPED", (unsigned long)baudRate(),
+                  _baudDetected ? "detected" : "searching",
+                  (unsigned long)charsProcessed(), (unsigned long)sentencesParsed(),
+                  satellites(), unsigned(fixQuality()), hasTimeFix() ? "YES" : "no",
+                  (unsigned long)timeSyncCount());
 }
 
 void GPSManager::stop() {

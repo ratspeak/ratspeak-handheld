@@ -30,6 +30,9 @@
 #endif
 #include "hal/Keyboard.h"
 #include "hal/Power.h"
+#if defined(RSM9)
+#include "hal/GnssPower.h"
+#endif
 #if HAS_GPS
 #include "hal/GPSManager.h"
 #endif
@@ -829,12 +832,10 @@ void handheld::lvgl_application::setup() {
 
     // Step 24.5: GPS init
 #if HAS_GPS
+    deviceDiagnostics.extraDump = []() { gps.printDiagnostics(); };
 #if defined(RSM9)
     gps.setPowerControl([](bool enabled) {
-        const uint8_t revision = keyboard.revision();
-        if (!revision) return false;
-        digitalWrite(GPS_ENABLE_PIN, enabled == (revision == 2) ? HIGH : LOW);
-        return true;
+        return m9::setGnssPower(keyboard.revision(), enabled);
     });
 #endif
     gps.setTimeEnabled(userConfig.settings().gpsTimeEnabled);

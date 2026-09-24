@@ -78,6 +78,7 @@
 #define GPS_RX 2
 #define GPS_BAUD 115200
 #define GPS_RESET_PIN 5
+#define GPS_RTC_INT_PIN 10
 #define GPS_ENABLE_PIN 11
 #define BAT_ADC_PIN 13
 #define EXT_POWER_PIN 1

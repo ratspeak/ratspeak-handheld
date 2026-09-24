@@ -1,5 +1,6 @@
 #include "hal/Power.h"
 #include "hal/Keyboard.h"
+#include "hal/GnssPower.h"
 #include <Wire.h>
 extern Keyboard keyboard;
 
@@ -19,12 +20,7 @@ void Power::begin() {
     analogSetPinAttenuation(BAT_ADC_PIN, ADC_11db);
     Wire1.begin(PERIPHERAL_I2C_SDA, PERIPHERAL_I2C_SCL);
     Wire1.setTimeOut(20);
-    if (keyboard.revision()) {
-        // Both known board revisions retain the GNSS reset pin; power differs.
-        digitalWrite(GPS_RESET_PIN, HIGH); pinMode(GPS_RESET_PIN, OUTPUT);
-        digitalWrite(GPS_ENABLE_PIN, keyboard.revision() == 1 ? HIGH : LOW);
-        pinMode(GPS_ENABLE_PIN, OUTPUT);
-    }
+    m9::initGnssPower(keyboard.revision());
 }
 float Power::batteryVoltage() const { return analogReadMilliVolts(BAT_ADC_PIN) * 0.002f; }
 int Power::batteryPercent() const {

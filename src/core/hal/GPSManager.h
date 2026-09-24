@@ -35,6 +35,9 @@ public:
     uint32_t fixAgeMs() const;
     uint32_t timeSyncCount() const { return _timeSyncCount; }
     bool isRunning() const { return _running; }
+    uint32_t baudRate() const { return _running ? BAUD_RATES[_baudAttemptIdx] : 0; }
+    bool baudDetected() const { return _baudDetected; }
+    void printDiagnostics() const;
 
     // Configuration (set from outside before or after begin())
     void setPosixTZ(const char* tz);
@@ -52,7 +55,6 @@ private:
     bool syncSystemTime();
     void restoreTimeFromNVS();
     void persistToNVS();
-    bool tryBaudRate(uint32_t baud);
 
     bool (*_powerControl)(bool) = nullptr;
     NMEAParser _parser;
@@ -66,7 +68,6 @@ private:
     unsigned long _lastPersistMs = 0;
     uint32_t _timeSyncCount = 0;
     char _posixTZ[48] = "EST5EDT,M3.2.0,M11.1.0";  // POSIX TZ string
-    uint32_t _detectedBaud = 0;
 
     // Baud auto-detect state
     bool _baudDetected = false;
