@@ -34,7 +34,7 @@ public:
     bool pollDeletion();
 
 private:
-    using Conversations = handheld::history::ConversationWindow<16>;
+    using Conversations = handheld::history::ConversationList;
     std::string peerHex(size_t index) const;
     std::string peerLabel(const std::string& peer) const;
     void renderList(M5Canvas&, int y, int height);

@@ -573,14 +573,33 @@ void MessageTransactions::conversationPage(const Request& request, uint8_t* byte
     size_t count = 0; char peerHex[33]; Cursor peers;
     while (nextPeer(peers, peerHex)) {
         uint8_t peer[16]; decodeHex(peerHex, 32, peer, 16);
-        ConversationView row; ConversationSelector selector;
-        const auto error = summarize(peer, row, selector);
+        // Ordering needs only the latest record, not every message body and
+        // unread/status aggregate in every off-screen conversation. Enumerate
+        // keys once, then validate the newest record through the same revision/
+        // mirror-aware loader used by details. Visible details retain full
+        // aggregate validation, including corruption in earlier messages.
+        ConversationSelector selector;
+        memcpy(selector.cursor.peer, peer, 16);
+        Cursor records; beginRecords(records, peer);
+        RecordKey key, latest;
+        while (nextRecord(records, key)) {
+            if (!latest.counter || historyLess({latest.counter, latest.incoming}, {key.counter, key.incoming})) latest = key;
+        }
+        Error error = records.error;
+        if (error == Error::None && latest.counter) {
+            MessageDocument document; StoredRecordHeader header;
+            error = load(latest, document, header);
+            if (error == Error::None) {
+                selector.counter = latest.counter; selector.incoming = latest.incoming;
+                selector.cursor.timestamp = header.timestamp;
+            }
+        }
         if (error == Error::InvalidRecord) {
             // A permanent corrupt peer remains navigable beside healthy peers.
             // Its unknown visibility cannot be certified as an empty directory.
             selector = {}; memcpy(selector.cursor.peer, peer, 16); selector.error = error;
         } else if (error != Error::None) { result.error = error; result.total = 0; return; }
-        else if (!row.totalCount) continue;
+        else if (!selector.counter) continue;
         if (result.total < UINT32_MAX) ++result.total;
         if (request.hasConversationCursor && !(before ?
             conversationLess(selector.cursor, boundary, request.conversationOrder) :

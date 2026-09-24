@@ -28,7 +28,14 @@ template<size_t N> void ConversationWindow<N>::resume(uint32_t identity, Order o
     }
     if (!changeView()) return;
     auto& c = _control.value;
-    c.identity = identity; c.order = order; c.open = true; c.state = State::Loading; c.intent = Intent::Refresh;
+    c.identity = identity; c.order = order; c.open = true;
+    // The live bank already belongs to this identity/order. Re-entering an
+    // unchanged list needs no filesystem read; hidden mutations are revisioned.
+    bool stale = info.sourceRevision != c.observedRevision || c.updated || !freshnessAvailable();
+    for (size_t i = 0; i < count(); ++i) stale |= bool(row(i)->flags & Row::Unavailable);
+    c.state = stale ? State::Loading : State::Ready;
+    c.intent = stale ? Intent::Refresh : Intent::None;
+    if (!c.statusReady) c.statusDirty = true;
     if (!c.awaiting) c.phase = Phase::Idle;
 }
 template<size_t N> void ConversationWindow<N>::close() {
@@ -91,39 +98,26 @@ template<size_t N> void ConversationWindow<N>::refresh() {
     auto& c = _control.value;
     if (!c.open || c.state == State::Exhausted) return;
     // A stream of unrelated mutations must not restart a partially read page.
+    if (c.intent != Intent::None) return;
     if (!loading() && !changeView()) return;
-    if (c.intent == Intent::None) c.intent = Intent::Refresh;
+    c.intent = Intent::Refresh;
     if (c.state != State::Retrying) c.state = State::Loading;
 }
 template<size_t N> void ConversationWindow<N>::observeRevision(uint32_t revision) {
     auto& c = _control.value;
     if (c.observedRevision == revision) return;
     c.observedRevision = revision;
-    if (c.open && !c.followFirst) { c.updated = true; return; }
-    if (revision != UINT32_MAX) refresh();
+    if (revision == UINT32_MAX) return;
+    // A queued page samples this revision when it starts. Only a scan already
+    // underway needs a follow-up; never restart its accepted storage credit.
+    if ((c.phase == Phase::Page || c.phase == Phase::Detail) &&
+        candidate().info.value.sourceRevision == revision) return;
+    refresh();
 }
 template<size_t N> void ConversationWindow<N>::observeStatusRevision(uint32_t revision) {
     auto& c = _control.value;
     if (c.observedStatusRevision == revision) return;
     c.observedStatusRevision = revision; c.statusDirty = true;
-}
-template<size_t N> void ConversationWindow<N>::setViewportAtFirst(bool atTop) {
-    auto& c = _control.value;
-    if (!visible()) return;
-    const bool follow = atTop && !canPrevious();
-    if (follow == c.followFirst) return;
-    c.followFirst = follow;
-    if (((c.phase == Phase::Page || c.phase == Phase::Detail) && c.buildingIntent == Intent::Refresh) ||
-        c.intent == Intent::Refresh) {
-        if (!changeView()) return;
-        c.intent = follow ? Intent::Refresh : Intent::None;
-        c.state = follow ? State::Loading : State::Ready; c.updated = true;
-        if (!c.awaiting) c.phase = Phase::Idle;
-    }
-    // Returning to the top resumes updates missed while browsing. Clearing the
-    // indicator alone would leave the old preview until another store mutation.
-    if (follow && freshnessAvailable() &&
-        (c.updated || live().info.value.sourceRevision != c.observedRevision)) refresh();
 }
 template<size_t N> void ConversationWindow<N>::acknowledgePublication(uint32_t revision) {
     if (revision == _control.value.publication) _control.value.held = false;
@@ -136,7 +130,6 @@ template<size_t N> typename ConversationWindow<N>::Kind ConversationWindow<N>::p
 template<size_t N> void ConversationWindow<N>::beginIntent() {
     auto& c = _control.value;
     const auto intent = c.intent; c.intent = Intent::None;
-    c.buildingIntent = intent;
     auto& info = candidate().info.value;
     info = live().info.value;
     if (intent == Intent::First || !visible() || (intent == Intent::Refresh && c.followFirst)) {
@@ -148,6 +141,7 @@ template<size_t N> void ConversationWindow<N>::beginIntent() {
         info.bound.timestamp = boundary->timestamp; std::memcpy(info.bound.peer, boundary->peer, 16);
         info.direction = intent == Intent::Previous ? Direction::Before : Direction::After;
         info.hasCursor = true;
+        info.page = intent == Intent::Previous ? (info.page > 1 ? info.page - 1 : 1) : info.page + 1;
     }
     info.count = 0; info.sourceRevision = c.observedRevision;
     c.index = 0; c.publish = false; c.phase = Phase::Page;
@@ -258,7 +252,7 @@ template<size_t N> bool ConversationWindow<N>::pageResult(const storage::Result&
     if (length % sizeof(Selector) || entries > N || result.total < entries || (!entries && result.more)) return false;
     if (!entries && result.total) {
         if (!info.hasCursor) return false;
-        info.bound = {}; info.hasCursor = false; info.direction = Direction::After;
+        info.bound = {}; info.hasCursor = false; info.direction = Direction::After; info.page = 1;
         return true;
     }
     Selector previous;
@@ -287,7 +281,9 @@ template<size_t N> bool ConversationWindow<N>::pageResult(const storage::Result&
         for (size_t i = 0; tail < entries && i < tail; ++i)
             std::memcpy(candidate().rows[i].bytes, candidate().rows[entries - tail + i].bytes, sizeof(Selector));
         info.count = tail; info.moreBefore = result.total > tail;
+        info.page = (result.total - 1) / N + 1;
     }
+    if (!info.moreBefore) info.page = 1;
     c.index = 0; c.phase = Phase::Detail;
     if (!entries) c.publish = true;
     return true;
@@ -322,7 +318,7 @@ template<size_t N> void ConversationWindow<N>::publish() {
     if (c.publication == UINT32_MAX) { c.state = State::Exhausted; c.error = storage::Error::RevisionExhausted; return; }
     c.active ^= 1; ++c.publication; c.held = true; c.phase = Phase::Idle; c.publish = false;
     c.state = State::Ready; c.statusDirty = true; c.statusReady = false; c.retryAt = 0;
-    c.followFirst = c.followFirst && !live().info.value.moreBefore;
+    c.followFirst = !live().info.value.moreBefore;
     c.updated = live().info.value.sourceRevision != c.observedRevision;
     if (!c.selectedValid && count()) select(0);
 }
@@ -381,6 +377,7 @@ template<size_t N> void ConversationWindow<N>::finishStatuses(uint32_t now) {
     else ++c.statusPublication;
 }
 
+template class ConversationWindow<2>;
 template class ConversationWindow<16>;
 template class ConversationWindow<64>;
 

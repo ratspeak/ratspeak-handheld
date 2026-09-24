@@ -23,7 +23,7 @@ public:
     const char* title() const override { return "Messages"; }
 
 private:
-    using Window = handheld::history::ConversationWindow<64>;
+    using Window = handheld::history::ConversationList;
     using Row = Window::Row;
     struct RowWidgets { lv_obj_t *row = nullptr, *name = nullptr, *preview = nullptr, *status = nullptr; };
     static constexpr size_t RowCount = Window::PageSize;

@@ -12,11 +12,11 @@
 #include <limits>
 
 namespace {
-constexpr int RowHeight = 70;
 constexpr int AvatarSize = 32;
 constexpr int TextX = 54;
 constexpr int NavigationHeight = 30;
 constexpr int NavigationSpace = NavigationHeight + 6;
+constexpr int RowHeight = (Theme::CONTENT_H - 19 - NavigationSpace) / 2;
 void drawNavigation(lv_event_t* event) {
     auto* button=lv_event_get_target(event);
     const auto index=reinterpret_cast<uintptr_t>(lv_obj_get_user_data(button));
@@ -126,11 +126,11 @@ void LvMessagesScreen::createUI(lv_obj_t* parent) {
     lv_obj_set_style_text_align(_empty,LV_TEXT_ALIGN_CENTER,0);
     _emptyState=createEmptyState(parent);
     _update=lv_btn_create(parent);
-    lv_obj_set_pos(_update,4,19);lv_obj_set_size(_update,Theme::CONTENT_W-8,26);
+    lv_obj_set_pos(_update,Theme::CONTENT_W-116,0);lv_obj_set_size(_update,112,18);
     lv_obj_add_style(_update,LvTheme::styleListBtn(),0);
     lv_obj_add_style(_update,LvTheme::styleListBtnFocused(),LV_STATE_FOCUSED);
     lv_obj_set_style_pad_all(_update,0,0);
-    auto* updateText=label(_update,&lv_font_rsdeck_12,Theme::TEXT_PRIMARY,0,0,Theme::CONTENT_W-8);
+    auto* updateText=label(_update,&lv_font_rsdeck_10,Theme::TEXT_PRIMARY,0,0,112);
     lv_obj_set_style_text_align(updateText,LV_TEXT_ALIGN_CENTER,0);lv_obj_center(updateText);
     lv_obj_add_event_cb(_update,[](lv_event_t* event) {
         static_cast<LvMessagesScreen*>(lv_event_get_user_data(event))->applyUpdate();
@@ -316,9 +316,7 @@ void LvMessagesScreen::updateCaptions() {
     const auto* window=_service?&_service->conversationWindow():nullptr;
     char text[100];
     if (!window || !_active) snprintf(text,sizeof(text),"Conversations closed");
-    else snprintf(text,sizeof(text),"%u of %u chats%s",unsigned(window->count()),unsigned(window->total()),
-        window->state()==Window::State::Retrying?" · Read failed; retrying":
-            window->state()==Window::State::Exhausted?" · Reads unavailable":window->loading()?" · Loading":"");
+    else snprintf(text,sizeof(text),"Page %u",unsigned(window->pageNumber()));
     lv_label_set_text(_caption,text);
     const bool emptyReady=window && _active && !_rowCount && window->state()==Window::State::Ready &&
         !window->loading() && window->statusReady();
@@ -334,19 +332,18 @@ void LvMessagesScreen::updateCaptions() {
     if (window && bound()) for (size_t i=0;i<window->count();++i)
         retry|=bool(window->row(i)->flags&(Row::Unavailable|Row::StatusUnavailable));
     const bool update=window && _active && window->state()!=Window::State::Exhausted &&
-        (window->updated() || retry || !window->freshnessAvailable());
-    lv_label_set_text_static(lv_obj_get_child(_update,0),window && window->updated()?"New activity":
-        retry?"Retry":"Check for updates");
+        (retry || !window->freshnessAvailable());
+    lv_label_set_text_static(lv_obj_get_child(_update,0),retry?"Retry":"Check updates");
     if (update) lv_obj_clear_flag(_update,LV_OBJ_FLAG_HIDDEN);
     else lv_obj_add_flag(_update,LV_OBJ_FLAG_HIDDEN);
     for (size_t i=0;i<4;++i) {
-        const bool enabled=window && _active && (i<2?window->canPrevious():window->canNext());
+        const bool enabled=window && _active && !window->loading() && (i<2?window->canPrevious():window->canNext());
         if (enabled) lv_obj_clear_state(_navigation[i],LV_STATE_DISABLED);
         else lv_obj_add_state(_navigation[i],LV_STATE_DISABLED);
     }
     // Keep paging controls visible at a stable position, including empty lists.
-    // Contextual actions reserve a row only while there is something to do.
-    const int top=update?48:19;
+    // Recovery stays in the header; both previews always fit above the arrows.
+    const int top=19;
     _binding=true;
     const int height=Theme::CONTENT_H-top-NavigationSpace;
     if (lv_obj_get_y(_list)!=top || lv_obj_get_height(_list)!=height) {
@@ -367,7 +364,7 @@ void LvMessagesScreen::reportViewport() {
     if (_binding || !bound()) return;
     auto& window=_service->conversationWindow();
     const auto offset=std::max<int>(0,lv_obj_get_scroll_y(_list));
-    window.setScrollOffset(offset);window.setViewportAtFirst(offset==0);
+    window.setScrollOffset(offset);
 }
 void LvMessagesScreen::navigate(Navigation navigation) {
     if (!_active || !_service || _lpState!=LP_NONE) return;
@@ -385,8 +382,7 @@ void LvMessagesScreen::applyUpdate() {
     if (!_active || !_service || _lpState!=LP_NONE || lv_obj_has_flag(_update,LV_OBJ_FLAG_HIDDEN)) return;
     auto& window=_service->conversationWindow();
     if (bound()) reportViewport();
-    if (window.updated()) window.first();
-    else window.refresh();
+    window.refresh();
     _namesResolved=0;_nameFailed=false;
     refreshUI();
 }

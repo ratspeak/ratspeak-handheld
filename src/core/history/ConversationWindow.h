@@ -13,7 +13,7 @@ namespace handheld::history {
 template<size_t Capacity>
 class ConversationWindow {
 public:
-    static_assert(Capacity == 16 || Capacity == 64, "Use an adopted board row budget");
+    static_assert(Capacity == 2 || Capacity == 16 || Capacity == 64, "Use a bounded row budget");
     static constexpr size_t PageSize = Capacity;
     using Row = storage::ConversationView;
     using Selector = storage::ConversationSelector;
@@ -43,9 +43,6 @@ public:
     void refresh();
     void observeRevision(uint32_t revision);
     void observeStatusRevision(uint32_t revision);
-    // Staying above the first row or paging away keeps the published list on
-    // automatic mutations. Updated invites an explicit refresh/first-page action.
-    void setViewportAtFirst(bool atTop);
     bool followsFirst() const { return _control.value.followFirst; }
     bool updated() const { return _control.value.updated; }
     bool freshnessAvailable() const { return _control.value.observedRevision != UINT32_MAX; }
@@ -78,6 +75,7 @@ public:
     bool canNext() const;
     size_t count() const;
     uint32_t total() const;
+    uint32_t pageNumber() const { return visible() ? live().info.value.page : 1; }
     const Row* row(size_t index) const;
     bool select(size_t index);
     const uint8_t* selectedPeer() const { return _control.value.selected; }
@@ -98,7 +96,6 @@ private:
         storage::Error error = storage::Error::None;
         Order order = Order::Recent;
         Intent intent = Intent::None;
-        Intent buildingIntent = Intent::None;
         Phase phase = Phase::Idle;
         uint8_t active = 0, index = 0;
         bool awaiting = false, copied = false, publish = false, held = false;
@@ -113,7 +110,7 @@ private:
     };
     struct PageInfo {
         Cursor bound;
-        uint32_t identity = 0, total = 0, sourceRevision = 0;
+        uint32_t identity = 0, total = 0, sourceRevision = 0, page = 1;
         uint8_t count = 0;
         Order order = Order::Recent;
         Direction direction = Direction::After;
@@ -151,8 +148,12 @@ private:
     Bank _banks[2];
 };
 
-static_assert(sizeof(ConversationWindow<16>) == 2560, "Cardputer summary owner budget changed");
-static_assert(sizeof(ConversationWindow<64>) == 9472, "Large-board summary owner budget changed");
+static_assert(sizeof(ConversationWindow<16>) == 2560, "16-row window budget changed");
+static_assert(sizeof(ConversationWindow<64>) == 9472, "64-row window budget changed");
+static_assert(sizeof(ConversationWindow<2>) == 544, "Two-chat viewport budget changed");
+// All handheld frontends share the same visible page size and refresh policy.
+using ConversationList = ConversationWindow<2>;
+extern template class ConversationWindow<2>;
 extern template class ConversationWindow<16>;
 extern template class ConversationWindow<64>;
 

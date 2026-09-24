@@ -223,8 +223,8 @@ void MessagesScreen::render(M5Canvas& canvas) {
                                                           handheld::storage::ConversationView::StatusUnavailable));
     const char* notice = _deleteNotice ? _deleteNotice : !_conversations.freshnessAvailable() ? "Refresh needed (R)" :
         unavailable || _conversations.state() == Conversations::State::Retrying ? "Read failed; R to retry" :
-        _conversations.updated() ? "List updated; R to refresh" : nullptr;
-    const auto heading = notice ? std::string(notice) : "Messages (" + std::to_string(_conversations.total()) + ")";
+        nullptr;
+    const auto heading = notice ? std::string(notice) : "Page " + std::to_string(_conversations.pageNumber());
     canvas.drawString(heading.c_str(), 8, y + 2);
     canvas.drawFastHLine(0, y + headerH, Theme::CONTENT_W, Theme::DIVIDER);
     y += headerH + 2;
@@ -322,7 +322,6 @@ bool MessagesScreen::handleKey(const KeyEvent& event) {
                 else _conversations.select(0);
             } else if (selected + 1 < count) _conversations.select(selected + 1);
             else if (!event.repeat) _pageFocus = pageEnabled(2) ? 2 : pageEnabled(1) ? 1 : -1;
-            _conversations.setViewportAtFirst(_conversations.selectedIndex() == 0 && !_conversations.canPrevious());
         }
         return true;
     }

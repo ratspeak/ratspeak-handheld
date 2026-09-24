@@ -80,8 +80,8 @@ public:
     void closeHistory();
     void watchConversations();
     void closeConversations();
-    history::ConversationWindow<64>& conversationWindow() { return _conversationWindow; }
-    const history::ConversationWindow<64>& conversationWindow() const { return _conversationWindow; }
+    history::ConversationList& conversationWindow() { return _conversationWindow; }
+    const history::ConversationList& conversationWindow() const { return _conversationWindow; }
     history::HistoryWindow& historyWindow() { return _history; }
     const history::HistoryWindow& historyWindow() const { return _history; }
     bool historyStatusReady() const { return _history.statusReady(); }
@@ -134,7 +134,7 @@ private:
     bool _identitiesPending = false;
     std::vector<IdentitySlot> _identities;
     history::HistoryWindow _history;
-    history::ConversationWindow<64> _conversationWindow;
+    history::ConversationList _conversationWindow;
     String _scanJson;
 };
 

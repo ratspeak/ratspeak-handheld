@@ -3,6 +3,7 @@
 #include "config/SettingsTransaction.h"
 #include "util/AnnounceData.h"
 #include "history/HistoryWindow.h"
+#include "history/ConversationWindow.h"
 #include "TaskOwner.h"
 #if !defined(RSCARDPUTER)
 #include "util/Bytes.h"
@@ -21,7 +22,7 @@ bool summaryQuery(Operation operation) {
 }
 size_t queryCapacity(Operation operation) {
     switch (operation) {
-        case Operation::ConversationPage: return 64 * sizeof(storage::ConversationSelector);
+        case Operation::ConversationPage: return history::ConversationList::PageSize * sizeof(storage::ConversationSelector);
         case Operation::ConversationDetail: return sizeof(storage::ConversationView);
         case Operation::HistoryPage: return 48 * sizeof(storage::HistoryEntry);
         case Operation::ReadRecord: return 512;
@@ -698,7 +699,7 @@ void DeviceService::pollHistory() {
         memcpy(key.peer, query.selector.cursor.peer, 16); key.counter = query.selector.counter;
         key.incoming = query.selector.incoming;
         submitted = request.operation == Operation::ConversationPage ?
-            _messages.requestConversationPage(query.selector.cursor, query.hasCursor, query.order, query.direction, 64) :
+            _messages.requestConversationPage(query.selector.cursor, query.hasCursor, query.order, query.direction, history::ConversationList::PageSize) :
             _messages.requestConversation(query.selector);
     } else submitted = request.operation == Operation::HistoryPage ?
         _messages.requestHistoryPage(request.peer, {request.argument, request.incoming}, 48, request.historyDirection) :
