@@ -45,6 +45,12 @@ void ScrollList::addItem(const std::string& item, uint16_t color) {
     _itemColors.push_back(color);
 }
 
+void ScrollList::updateItem(size_t index, const std::string& item, uint16_t color) {
+    if (index >= _items.size()) return;
+    if (_items[index] != item) _items[index] = item;
+    _itemColors[index] = color;
+}
+
 void ScrollList::clear() {
     _items.clear();
     _itemColors.clear();
@@ -109,7 +115,7 @@ void ScrollList::renderRow(M5Canvas& canvas, const std::string& label, int x, in
     drawFitted(canvas, label, x + (selected ? 16 : 9), y + 1, width - (selected ? 23 : 16));
 }
 
-void ScrollList::render(M5Canvas& canvas, int x, int y, int w, int h) {
+void ScrollList::render(M5Canvas& canvas, int x, int y, int w, int h, bool showSelection) {
     int rowH = Theme::LIST_ROW_H;
     _visibleRows = h / rowH;
     if (_visibleRows < 1) _visibleRows = 1;
@@ -119,7 +125,7 @@ void ScrollList::render(M5Canvas& canvas, int x, int y, int w, int h) {
     for (int i = 0; i < _visibleRows && (i + _scrollOffset) < (int)_items.size(); i++) {
         int idx = i + _scrollOffset;
         int ry = y + i * rowH;
-        bool selected = (idx == _selected);
+        bool selected = showSelection && (idx == _selected);
 
         if (!selected && (i + 1 < _visibleRows) && (idx + 1 < (int)_items.size())) {
             canvas.drawFastHLine(x + 8, ry + rowH - 1, w - 12, Theme::DIVIDER);

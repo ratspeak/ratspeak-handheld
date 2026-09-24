@@ -79,6 +79,11 @@ private:
     uint32_t _lastStatus = 0, _lastStorageStatus = 0;
     uint32_t _lastIdentityRetry = 0;
     uint32_t _nodeFingerprint = 0;
+    // Freeze membership, not string-heavy node records, for one bounded copy.
+    // Live announces may update metadata without restarting the UI's transfer.
+    uint8_t _nodeCopyKeys[ANNOUNCE_MAX_NODES][16] = {};
+    size_t _nodeCopyCount = 0;
+    uint32_t _nodeCopyRevision = 0, _nodeCopyGeneration = 0;
     // One retained storage query; normal mailbox work owns its terminal until
     // consumed, including peer/mode changes and lifecycle settlement.
     storage::Ticket _queryTicket;

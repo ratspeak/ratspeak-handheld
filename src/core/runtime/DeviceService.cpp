@@ -304,10 +304,19 @@ void DeviceService::refreshStatus() {
     strlcpy(_status.destination, _backend.destinationHashHex().c_str(), sizeof(_status.destination));
     strlcpy(_status.publicKey, _backend.publicKeyHex().c_str(), sizeof(_status.publicKey));
     uint32_t fingerprint = 2166136261u;
+    auto fingerprintBytes = [&](const void* data, size_t length) {
+        const auto* bytes = static_cast<const uint8_t*>(data);
+        for (size_t i = 0; i < length; ++i) fingerprint = (fingerprint ^ bytes[i]) * 16777619u;
+    };
     if (_nodes) for (const auto& node : _nodes->nodes()) {
-        for (size_t i = 0; i < node.hash.size(); ++i) fingerprint = (fingerprint ^ node.hash.data()[i]) * 16777619u;
-        for (auto ch : node.name) fingerprint = (fingerprint ^ uint8_t(ch)) * 16777619u;
-        fingerprint = (fingerprint ^ node.lastSeen ^ uint32_t(node.rssi) ^ node.saved) * 16777619u;
+        fingerprintBytes(node.hash.data(), node.hash.size());
+        fingerprintBytes(node.name.c_str(), node.name.size() + 1);
+        fingerprintBytes(node.identityHex.c_str(), node.identityHex.size() + 1);
+        fingerprintBytes(&node.lastSeen, sizeof(node.lastSeen));
+        fingerprintBytes(&node.rssi, sizeof(node.rssi));
+        fingerprintBytes(&node.snr, sizeof(node.snr));
+        fingerprintBytes(&node.hops, sizeof(node.hops));
+        fingerprintBytes(&node.saved, sizeof(node.saved));
     }
     if (fingerprint != _nodeFingerprint) { _nodeFingerprint = fingerprint; ++_status.nodeRevision; }
     if (networkStatus) networkStatus(_status);
@@ -543,17 +552,37 @@ void DeviceService::execute(uint8_t slot) {
     }
     case Operation::Nodes: {
         refreshStatus();
-        if (request.offset && request.revision != _status.nodeRevision) { complete(slot, Outcome::Stale); break; }
+        if (!request.offset) {
+            _nodeCopyCount = 0;
+            if (_nodes) for (const auto& node : _nodes->nodes()) {
+                if (_nodeCopyCount == ANNOUNCE_MAX_NODES) break;
+                if (node.hash.size() == 16) memcpy(_nodeCopyKeys[_nodeCopyCount++], node.hash.data(), 16);
+            }
+            _nodeCopyRevision = _status.nodeRevision;
+            _nodeCopyGeneration = _status.generation;
+        } else if (request.revision != _nodeCopyRevision || _nodeCopyGeneration != _status.generation ||
+                   request.offset >= _nodeCopyCount) {
+            complete(slot, Outcome::Stale); break;
+        }
         JsonDocument doc; auto rows = doc.to<JsonArray>();
-        const size_t count = _nodes ? _nodes->nodes().size() : 0;
-        const size_t end = std::min(count, size_t(request.offset) + 8);
-        for (size_t i = request.offset; i < end; ++i) {
-            const auto& node = _nodes->nodes()[i]; auto row = rows.add<JsonObject>();
+        const size_t end = std::min(_nodeCopyCount, size_t(request.offset) + 8);
+        for (size_t i = request.offset; _nodes && i < end; ++i) {
+            // A compacted/evicted entry must never resolve to another peer.
+            // Missing keys are omitted; new keys arrive on the next transfer.
+            const auto& nodes = _nodes->nodes();
+            auto found = std::find_if(nodes.begin(), nodes.end(), [&](const DiscoveredNode& node) {
+                return node.hash.size() == 16 && !memcmp(node.hash.data(), _nodeCopyKeys[i], 16);
+            });
+            if (found == nodes.end()) continue;
+            const auto& node = *found; auto row = rows.add<JsonObject>();
             row["hash"] = node.hash.toHex(); row["name"] = node.name; row["identity"] = node.identityHex;
             row["rssi"] = node.rssi; row["snr"] = node.snr; row["hops"] = node.hops;
             row["seen"] = node.lastSeen; row["saved"] = node.saved;
         }
-        Result result; result.revision = _status.nodeRevision; result.next = end; result.total = count; result.more = end < count;
+        // Publish every completed pass even under continuous traffic. If the
+        // live revision advanced, ServiceClient immediately schedules another.
+        Result result; result.revision = _nodeCopyRevision; result.next = end;
+        result.total = _nodeCopyCount; result.more = end < _nodeCopyCount;
         jsonResult(slot, doc, result); break;
     }
     case Operation::ConversationPage: case Operation::ConversationDetail:

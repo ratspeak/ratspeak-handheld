@@ -2,6 +2,8 @@
 #include "Theme.h"
 #include "LvTheme.h"
 #include "LvInput.h"
+#include "PageNavigation.h"
+#include <cstring>
 #include "UIManager.h"
 #include "config/UserConfig.h"
 #include <Arduino.h>
@@ -12,7 +14,10 @@
 namespace {
 
 constexpr int kPeerRowH = 36;
-constexpr int kPeerHeaderH = 20;
+constexpr int kNavigationH = 30;
+void setText(lv_obj_t* label, const char* text) {
+    if (strcmp(lv_label_get_text(label), text)) lv_label_set_text(label, text);
+}
 unsigned long nodeAgeMs(const DiscoveredNode& node, unsigned long now) {
     if (node.lastSeen == 0 || now < node.lastSeen) return ULONG_MAX;
     return now - node.lastSeen;
@@ -99,17 +104,78 @@ void LvNodesScreen::createUI(lv_obj_t* parent) {
     _screen = parent;
     lv_obj_set_style_bg_color(parent, lv_color_hex(Theme::BG), 0);
     lv_obj_set_style_pad_all(parent, 0, 0);
+    lv_obj_clear_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
 
     _emptyState = createEmptyState(parent);
 
     _list = lv_obj_create(parent);
-    lv_obj_set_size(_list, lv_pct(100), lv_pct(100));
+    lv_obj_set_pos(_list, 0, 19);
+    lv_obj_set_size(_list, Theme::CONTENT_W, Theme::CONTENT_H - 55);
     lv_obj_add_style(_list, LvTheme::styleList(), 0);
     lv_obj_set_layout(_list, LV_LAYOUT_FLEX);
     lv_obj_set_flex_flow(_list, LV_FLEX_FLOW_COLUMN);
     lv_obj_add_flag(_list, LV_OBJ_FLAG_HIDDEN);
 
-    rebuildList();
+    _caption = lv_label_create(parent);
+    lv_obj_set_pos(_caption, 8, 2);
+    lv_obj_set_style_text_font(_caption, &lv_font_rsdeck_10, 0);
+    lv_obj_set_style_text_color(_caption, lv_color_hex(Theme::TEXT_SECONDARY), 0);
+    for (size_t i = 0; i < _rows.size(); ++i) {
+        auto& row = _rows[i];
+        row.box = lv_obj_create(_list);
+        lv_obj_set_size(row.box, Theme::CONTENT_W, kPeerRowH);
+        lv_obj_add_style(row.box, LvTheme::styleListBtn(), 0);
+        lv_obj_add_style(row.box, LvTheme::styleListBtnFocused(), LV_STATE_FOCUSED);
+        lv_obj_set_style_border_side(row.box, LV_BORDER_SIDE_BOTTOM, 0);
+        lv_obj_set_style_border_width(row.box, 1, 0);
+        lv_obj_set_style_border_color(row.box, lv_color_hex(Theme::BORDER), 0);
+        lv_obj_set_style_pad_all(row.box, 0, 0);
+        lv_obj_clear_flag(row.box, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(row.box, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_user_data(row.box, reinterpret_cast<void*>(i));
+        lv_obj_add_event_cb(row.box, [](lv_event_t* e) {
+            auto* self = static_cast<LvNodesScreen*>(lv_event_get_user_data(e));
+            const size_t row = reinterpret_cast<uintptr_t>(lv_obj_get_user_data(lv_event_get_target(e)));
+            if (row < self->_rowHexes.size()) self->showActionMenu(self->_rowHexes[row]);
+        }, LV_EVENT_CLICKED, this);
+        lv_obj_add_event_cb(row.box, [](lv_event_t* e) {
+            lv_obj_scroll_to_view(lv_event_get_target(e), LV_ANIM_OFF);
+        }, LV_EVENT_FOCUSED, nullptr);
+        row.name = lv_label_create(row.box);
+        lv_obj_set_style_text_font(row.name, &lv_font_rsdeck_12, 0);
+        lv_obj_set_pos(row.name, 8, 3);
+        lv_obj_set_size(row.name, Theme::CONTENT_W - 132, lv_font_rsdeck_12.line_height);
+        lv_label_set_long_mode(row.name, LV_LABEL_LONG_DOT);
+        row.meta = lv_label_create(row.box);
+        lv_obj_set_style_text_font(row.meta, &lv_font_rsdeck_10, 0);
+        lv_obj_set_style_text_color(row.meta, lv_color_hex(Theme::TEXT_SECONDARY), 0);
+        lv_obj_set_style_text_align(row.meta, LV_TEXT_ALIGN_RIGHT, 0);
+        lv_obj_set_pos(row.meta, Theme::CONTENT_W - 124, 5);
+        lv_obj_set_size(row.meta, 116, lv_font_rsdeck_10.line_height);
+        lv_label_set_long_mode(row.meta, LV_LABEL_LONG_CLIP);
+        row.id = lv_label_create(row.box);
+        lv_obj_set_style_text_font(row.id, &lv_font_rsdeck_10, 0);
+        lv_obj_set_style_text_color(row.id, lv_color_hex(Theme::TEXT_MUTED), 0);
+        lv_obj_set_pos(row.id, 8, 20);
+        lv_obj_set_size(row.id, Theme::CONTENT_W - 16, lv_font_rsdeck_10.line_height);
+        lv_label_set_long_mode(row.id, LV_LABEL_LONG_CLIP);
+    }
+    for (size_t i = 0; i < 4; ++i) {
+        auto* button = lv_btn_create(parent); _navigation[i] = button;
+        lv_group_remove_obj(button);
+        lv_obj_set_pos(button, 4 + i * (Theme::CONTENT_W - 8) / 4, Theme::CONTENT_H - kNavigationH - 3);
+        lv_obj_set_size(button, (Theme::CONTENT_W - 8) / 4 - 3, kNavigationH);
+        lv_obj_add_style(button, LvTheme::styleListBtn(), 0);
+        lv_obj_add_style(button, LvTheme::styleListBtnFocused(), LV_STATE_FOCUSED);
+        lv_obj_set_style_pad_all(button, 0, 0);
+        lv_obj_set_user_data(button, reinterpret_cast<void*>(i));
+        lv_obj_add_state(button, LV_STATE_DISABLED);
+        lv_obj_add_event_cb(button, handheld::drawPageNavigation, LV_EVENT_DRAW_MAIN, nullptr);
+        lv_obj_add_event_cb(button, [](lv_event_t* e) {
+            auto* self = static_cast<LvNodesScreen*>(lv_event_get_user_data(e));
+            self->navigate(reinterpret_cast<uintptr_t>(lv_obj_get_user_data(lv_event_get_target(e))));
+        }, LV_EVENT_CLICKED, this);
+    }
 
     // --- Action modal overlay (on top layer, centered) ---
     _overlay = lv_obj_create(lv_layer_top());
@@ -231,13 +297,14 @@ void LvNodesScreen::destroyUI() {
     for (int i = 0; i < 3; i++) { _menuBtns[i] = nullptr; _menuLabels[i] = nullptr; }
     _overlayTitle = nullptr; _overlayMeta = nullptr; _overlayReach = nullptr;
     _nicknameBox = nullptr; _nicknameLbl = nullptr; _nicknameHint = nullptr;
-    _list = nullptr; _emptyState = nullptr;
+    _list = nullptr; _emptyState = nullptr; _caption = nullptr;
+    _rows = {}; for (auto& button : _navigation) button = nullptr;
+    _rowHexes.clear();
     LvScreen::destroyUI();
 }
 
 void LvNodesScreen::onEnter() {
-    _lastNodeCount = -1;
-    _lastContactCount = -1;
+    _pages.reset();
 #if HAS_TOUCH
     _focusActive = false;
 #endif
@@ -247,170 +314,78 @@ void LvNodesScreen::onEnter() {
 }
 
 void LvNodesScreen::refreshUI() {
-    if (!_am) return;
-    unsigned long now = millis();
-    if (now - _lastRebuild < REBUILD_INTERVAL_MS) return;
-    int contacts = 0;
-    for (const auto& n : _am->nodes()) { if (n.saved) contacts++; }
-    int countDelta = abs(_am->nodeCount() - _lastNodeCount);
-    int contactDelta = abs(contacts - _lastContactCount);
-    bool ageRefresh = now - _lastRebuild >= AGE_REBUILD_INTERVAL_MS;
-    if (countDelta > 0 || contactDelta > 0 || ageRefresh) {
-        _lastRebuild = now;
-        rebuildList();
-    }
+    if (!_am || !_list || _actionState != NodeAction::BROWSE || _confirmDelete) return;
+    if (millis() - _lastRebuild < 1000) return;
+    // A pressed row must keep its ID through release/click delivery.
+    for (const auto& row : _rows) if (lv_obj_has_state(row.box, LV_STATE_PRESSED)) return;
+    rebuildList();
+}
+
+void LvNodesScreen::navigate(unsigned action) {
+    if (_actionState != NodeAction::BROWSE || _confirmDelete || !_pages.navigate(action)) return;
+    _rowHexes.clear(); // Explicit navigation does not anchor to the previous page.
+    rebuildList();
+    lv_obj_scroll_to_y(_list, 0, LV_ANIM_OFF);
 }
 
 void LvNodesScreen::rebuildList() {
     if (!_am || !_list) return;
     _lastRebuild = millis();
-    // Preserve scroll position across rebuilds
-    lv_coord_t scrollY = lv_obj_get_scroll_y(_list);
+    const auto scrollY = lv_obj_get_scroll_y(_list);
+    auto* oldFocus = lv_group_get_focused(LvInput::group());
     const std::string focusedHex = getFocusedNodeHex();
-    lv_obj_t* restoredFocus = nullptr;
-    lv_obj_clean(_list);
-    _sortedContactIndices.clear();
-    _sortedOnlineIndices.clear();
-    _rowHexes.clear();
-
     const auto& nodes = _am->nodes();
-    int count = (int)nodes.size();
-    _lastNodeCount = count;
-    unsigned long now = millis();
-
-    for (int i = 0; i < count; i++) {
-        if (nodes[i].saved) _sortedContactIndices.push_back(i);
-        else _sortedOnlineIndices.push_back(i);
+    _pages.sync(nodes, focusedHex);
+    std::vector<std::string> hashes;
+    for (size_t i = 0; i < _pages.count(); ++i) hashes.push_back(_pages.hash(i));
+    bool bindingsChanged = hashes != _rowHexes;
+    for (unsigned i = 0; i < 4; ++i)
+        bindingsChanged |= _pages.enabled(i) == bool(lv_obj_has_state(_navigation[i], LV_STATE_DISABLED));
+    _rowHexes = std::move(hashes);
+    lv_obj_t* restored = nullptr;
+    if (bindingsChanged) {
+        for (auto& row : _rows) lv_group_remove_obj(row.box);
+        for (auto* button : _navigation) lv_group_remove_obj(button);
     }
-    _lastContactCount = (int)_sortedContactIndices.size();
-
-    std::sort(_sortedContactIndices.begin(), _sortedContactIndices.end(), [&nodes, now](int a, int b) {
-        unsigned long ageA = nodeAgeMs(nodes[a], now);
-        unsigned long ageB = nodeAgeMs(nodes[b], now);
-        if (ageA != ageB) return ageA < ageB;
-        std::string nameA = displayNameFor(nodes[a]);
-        std::string nameB = displayNameFor(nodes[b]);
-        if (nameA == nameB) return nodes[a].hash.toHex() < nodes[b].hash.toHex();
-        return nameA < nameB;
-    });
-
-    std::sort(_sortedOnlineIndices.begin(), _sortedOnlineIndices.end(), [&nodes](int a, int b) {
-        return nodes[a].lastSeen > nodes[b].lastSeen;
-    });
-
-    if (_sortedContactIndices.empty() && _sortedOnlineIndices.empty()) {
-        if (_emptyState) lv_obj_clear_flag(_emptyState, LV_OBJ_FLAG_HIDDEN);
+    for (size_t i = 0; i < _rows.size(); ++i) {
+        auto& row = _rows[i];
+        if (i >= _pages.count()) { lv_obj_add_flag(row.box, LV_OBJ_FLAG_HIDDEN); continue; }
+        const auto& node = nodes[_pages.sourceIndex(i)];
+        lv_obj_clear_flag(row.box, LV_OBJ_FLAG_HIDDEN);
+        if (bindingsChanged) lv_group_add_obj(LvInput::group(), row.box);
+        if (_rowHexes[i] == focusedHex) restored = row.box;
+        const auto name = displayNameFor(node);
+        // LVGL's DOT mode temporarily edits the label buffer to draw ellipsis.
+        // Compare against our ten-row text cache, not that shortened buffer.
+        if (row.nameText != name) { row.nameText = name; lv_label_set_text(row.name, name.c_str()); }
+        lv_obj_set_style_text_color(row.name, lv_color_hex(node.saved ? Theme::ACCENT : Theme::PRIMARY), 0);
+        setText(row.meta, peerMetaFor(node, nodeAgeMs(node, millis()), _cfg && _cfg->settings().devMode).c_str());
+        setText(row.id, identityLineFor(node).c_str());
+    }
+    for (unsigned i = 0; i < 4; ++i) {
+        if (_pages.enabled(i)) {
+            lv_obj_clear_state(_navigation[i], LV_STATE_DISABLED);
+            if (bindingsChanged) lv_group_add_obj(LvInput::group(), _navigation[i]);
+            if (oldFocus == _navigation[i]) restored = oldFocus;
+        } else lv_obj_add_state(_navigation[i], LV_STATE_DISABLED);
+    }
+    char caption[48];
+    snprintf(caption, sizeof(caption), "Page %u/%u  /  %u peers", unsigned(_pages.page() + 1), unsigned(_pages.pages()), unsigned(_pages.total()));
+    setText(_caption, caption);
+    if (_pages.total()) {
+        lv_obj_add_flag(_emptyState, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(_list, LV_OBJ_FLAG_HIDDEN);
+        if (bindingsChanged) {
+            LvInput::focusObj(restored ? restored : _rows[0].box);
+            if (restored) { lv_obj_update_layout(_list); lv_obj_scroll_to_y(_list, scrollY, LV_ANIM_OFF); }
+        }
+    } else {
+        lv_obj_clear_flag(_emptyState, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(_list, LV_OBJ_FLAG_HIDDEN);
-        return;
     }
-
-    if (_emptyState) lv_obj_add_flag(_emptyState, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(_list, LV_OBJ_FLAG_HIDDEN);
-
-    bool devMode = _cfg && _cfg->settings().devMode;
-
-    auto addHeader = [&](const char* text) {
-        lv_obj_t* hdr = lv_obj_create(_list);
-        lv_obj_set_size(hdr, Theme::CONTENT_W, kPeerHeaderH);
-        lv_obj_add_style(hdr, LvTheme::styleSectionHeader(), 0);
-        lv_obj_set_style_radius(hdr, 0, 0);
-        lv_obj_set_style_pad_all(hdr, 0, 0);
-        lv_obj_clear_flag(hdr, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_t* lbl = lv_label_create(hdr);
-        lv_obj_set_style_text_font(lbl, &lv_font_rsdeck_10, 0);
-        lv_obj_set_style_text_color(lbl, lv_color_hex(Theme::ACCENT), 0);
-        lv_label_set_text(lbl, text);
-        lv_obj_set_pos(lbl, 8, 5);
-    };
-
-    auto addNodeRow = [&](int nodeIdx) {
-        const auto& node = nodes[nodeIdx];
-        unsigned long age = nodeAgeMs(node, now);
-
-        lv_obj_t* row = lv_obj_create(_list);
-        lv_obj_set_size(row, Theme::CONTENT_W, kPeerRowH);
-        lv_obj_add_style(row, LvTheme::styleListBtn(), 0);
-        lv_obj_add_style(row, LvTheme::styleListBtnFocused(), LV_STATE_FOCUSED);
-        lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
-        lv_obj_set_style_border_width(row, 1, 0);
-        lv_obj_set_style_border_color(row, lv_color_hex(Theme::BORDER), 0);
-        lv_obj_set_style_pad_all(row, 0, 0);
-        lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_set_user_data(row, (void*)(intptr_t)_rowHexes.size());
-        _rowHexes.push_back(node.hash.toHex());
-        if (_rowHexes.back() == focusedHex) restoredFocus = row;
-
-        lv_obj_add_event_cb(row, [](lv_event_t* e) {
-            auto* self = (LvNodesScreen*)lv_event_get_user_data(e);
-            int idx = (int)(intptr_t)lv_obj_get_user_data(lv_event_get_target(e));
-            if (idx >= 0 && idx < (int)self->_rowHexes.size()) {
-                self->showActionMenu(self->_rowHexes[idx]);
-            }
-        }, LV_EVENT_CLICKED, this);
-
-        lv_group_add_obj(LvInput::group(), row);
-        lv_obj_add_event_cb(row, [](lv_event_t* e) {
-            lv_obj_scroll_to_view(lv_event_get_target(e), LV_ANIM_ON);
-        }, LV_EVENT_FOCUSED, nullptr);
-
-        lv_obj_t* nameLbl = lv_label_create(row);
-        lv_obj_set_style_text_font(nameLbl, &lv_font_rsdeck_12, 0);
-        lv_obj_set_style_text_color(nameLbl, lv_color_hex(
-            node.saved ? Theme::ACCENT : Theme::PRIMARY), 0);
-        lv_label_set_long_mode(nameLbl, LV_LABEL_LONG_CLIP);
-        lv_obj_set_width(nameLbl, Theme::CONTENT_W - 132);
-        std::string name = displayNameFor(node);
-        lv_label_set_text(nameLbl, name.c_str());
-        lv_obj_set_pos(nameLbl, 8, 3);
-
-        lv_obj_t* infoLbl = lv_label_create(row);
-        lv_obj_set_style_text_font(infoLbl, &lv_font_rsdeck_10, 0);
-        lv_obj_set_style_text_color(infoLbl, lv_color_hex(Theme::TEXT_SECONDARY), 0);
-        lv_obj_set_style_text_align(infoLbl, LV_TEXT_ALIGN_RIGHT, 0);
-        lv_label_set_long_mode(infoLbl, LV_LABEL_LONG_CLIP);
-        lv_obj_set_width(infoLbl, 116);
-        std::string meta = peerMetaFor(node, age, devMode);
-        lv_label_set_text(infoLbl, meta.c_str());
-        lv_obj_set_pos(infoLbl, Theme::CONTENT_W - 124, 5);
-
-        lv_obj_t* idLbl = lv_label_create(row);
-        lv_obj_set_style_text_font(idLbl, &lv_font_rsdeck_10, 0);
-        lv_obj_set_style_text_color(idLbl, lv_color_hex(Theme::TEXT_MUTED), 0);
-        lv_label_set_long_mode(idLbl, LV_LABEL_LONG_CLIP);
-        lv_obj_set_width(idLbl, Theme::CONTENT_W - 16);
-        std::string identity = identityLineFor(node);
-        lv_label_set_text(idLbl, identity.c_str());
-        lv_obj_set_pos(idLbl, 8, 20);
-    };
-
-    // Build list: Contacts section, then Online section
-    if (!_sortedContactIndices.empty()) {
-        char hdrBuf[32];
-        snprintf(hdrBuf, sizeof(hdrBuf), "TRUSTED CONTACTS (%d)", (int)_sortedContactIndices.size());
-        addHeader(hdrBuf);
-        for (int idx : _sortedContactIndices) addNodeRow(idx);
-    }
-
-    {
-        char hdrBuf[32];
-        snprintf(hdrBuf, sizeof(hdrBuf), "RECENT PEERS (%d)", (int)_sortedOnlineIndices.size());
-        addHeader(hdrBuf);
-        for (int idx : _sortedOnlineIndices) addNodeRow(idx);
-    }
-
-    if (restoredFocus) LvInput::focusObj(restoredFocus);
-
-    // Restore scroll position so the list doesn't jump to top on refresh
-    if (scrollY > 0) {
-        lv_obj_update_layout(_list);
-        lv_obj_scroll_to_y(_list, scrollY, LV_ANIM_OFF);
-    }
-
 #if HAS_TOUCH
-    // Trackball/touch boards defer visible focus until the user navigates.
     if (!_focusActive) {
-        lv_obj_t* focused = lv_group_get_focused(LvInput::group());
+        auto* focused = lv_group_get_focused(LvInput::group());
         if (focused) lv_obj_clear_state(focused, LV_STATE_FOCUSED | LV_STATE_FOCUS_KEY);
     }
 #endif

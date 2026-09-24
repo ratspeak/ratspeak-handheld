@@ -398,7 +398,7 @@ void LvHomeScreen::refreshUI() {
 
     int online = 0;
     if (_am) {
-        online = _am->nodesOnlineSince(1800000);
+        online = _am->nodeCount();
     }
     lv_label_set_text_fmt(_lblNodes, "%d", online);
     lv_obj_set_style_text_color(_lblNodes, lv_color_hex(

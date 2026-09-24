@@ -4,6 +4,7 @@
 #include <string>
 #include <functional>
 #include "Screen.h"
+#include "ui/PeerPager.h"
 #include "widgets/ScrollList.h"
 #include "reticulum/AnnounceManager.h"
 
@@ -46,7 +47,7 @@ private:
     std::string _selectedNodeHash;
     bool _selectedNodeSaved = false;
 
-    // Section tracking
-    int _contactCount = 0;
-    int _lastKnownCount = 0;
+    handheld::PeerPager _pages;
+    int _pageFocus = -1;
+    void activatePage(unsigned action);
 };

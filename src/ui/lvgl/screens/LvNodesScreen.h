@@ -2,6 +2,8 @@
 
 #include "UIManager.h"
 #include "runtime/ServiceClient.h"
+#include "ui/PeerPager.h"
+#include <array>
 #include <functional>
 #include <string>
 #include <vector>
@@ -66,18 +68,20 @@ private:
     lv_obj_t* _nicknameBox = nullptr;
     lv_obj_t* _nicknameLbl = nullptr;
     lv_obj_t* _nicknameHint = nullptr;
-    int _lastNodeCount = -1;
-    int _lastContactCount = -1;
-
-    // Sorted index vectors (into _am->nodes())
-    std::vector<int> _sortedContactIndices;
-    std::vector<int> _sortedOnlineIndices;
-    // Row → dest-hash snapshot (widget user_data indexes this, never _nodes)
+    handheld::PeerPager _pages;
+    struct Row {
+        lv_obj_t* box = nullptr;
+        lv_obj_t* name = nullptr;
+        lv_obj_t* meta = nullptr;
+        lv_obj_t* id = nullptr;
+        std::string nameText;
+    };
+    std::array<Row, handheld::PeerPager::PageSize> _rows;
     std::vector<std::string> _rowHexes;
-
+    lv_obj_t* _caption = nullptr;
+    lv_obj_t* _navigation[4] = {};
+    void navigate(unsigned action);
     unsigned long _lastRebuild = 0;
-    static constexpr unsigned long REBUILD_INTERVAL_MS = 5000;
-    static constexpr unsigned long AGE_REBUILD_INTERVAL_MS = 30000;
 
     lv_obj_t* _list = nullptr;
     lv_obj_t* _emptyState = nullptr;
