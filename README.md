@@ -28,13 +28,19 @@ for changes and download the package for your device and preferred mode.
 | LilyGO T-Deck Plus | 320×240, keyboard, trackball and touch | Integrated LoRa |
 | LilyGO T-Pager (SX1262) | 480×222, keyboard and scroll encoder | Integrated LoRa |
 | M5Stack Cardputer Adv | 240×135, keyboard | **Cap LoRa-1262 required for LoRa** |
+| Elecrow ThinkNode M9 (development beta) | 320×240, keyboard and D-pad | Integrated LR1110 |
 
 Cardputer support remains beta. An SD card is optional for normal messaging on
-all three boards. Use hardware and an antenna suited to your operating band.
+the supported boards. Use hardware and an antenna suited to your operating band.
+
+M9 is currently a local **Standalone beta**. RNode and Full packages are coming
+soon; the published 2.2.1 downloads cover the three devices above it. The M9's
+arrow keys, OK/Enter and Back control the shared LVGL interface. Its additional
+icon shortcuts are reserved for a later update.
 
 ## Modes
 
-The firmware supports two different modes, available at each startup:
+The released T-Deck, T-Pager and Cardputer firmware supports two modes, available at each startup:
 
 - **Standalone** — all-in-one encrypted LXMF messaging over LoRa or Wi-Fi.
 - **RNode** — radio for Ratspeak, Sideband, or another Reticulum client.
@@ -63,6 +69,13 @@ A send first saves the message; `sent` means transmission started, while
 `storage error` can appear even after delivery. See the
 [handheld guide](https://docs.ratspeak.org/docs/hardware/handheld-guide) for
 controls, history, status labels and recovery.
+
+For M9 development, build with `python3 -m platformio run -e m9`. The resulting
+`.pio/build/m9/m9-standalone-factory.bin` is a complete flash image for offset
+`0x0`; `.pio/build/m9/firmware.bin` is the application for offset `0x10000`.
+Use the USB UART bridge at 115200 baud. Native USB is disabled because its pins
+are used by this board's peripherals. RTC/compass features and battery calibration
+are deferred; GPS and Wi-Fi provide time through the existing shared services.
 
 ## Install
 

@@ -23,10 +23,10 @@ import urllib.request
 import zipfile
 
 from release_identity import load_identity, source_pins
-from release_catalog import BOARDS
+from release_catalog import ALL_BOARDS
 
 ROOT = Path(__file__).resolve().parents[1]
-ALL = list(BOARDS)
+ALL = list(ALL_BOARDS)
 MODES = ["standalone", "launcher", "rnode"]
 LICENSE_NAME = re.compile(r"^(?:licen[cs]e|copying|copyright|notice|unlicense)(?:[._-].*)?$", re.I)
 IDF_REF = "38eeba213aa695aabfd6d89aa9f5078dbe5a94c3"
@@ -45,7 +45,7 @@ SOURCE_NOTICES = {
         "source": "https://github.com/espressif/mbedtls/blob/2b8e772fc1cb0732cda3bae7d1e9d6f4cfaf63d9/library/ssl_tls.c",
         "license": "Apache-2.0 OR GPL-2.0-or-later",
         "comment_style": "blocks",
-        "boards": ["tdeck", "tpager"],
+        "boards": ["tdeck", "tpager", "m9"],
         "modes": ["standalone"],
         "notice_sha256": "3205a23232dc38923b2527f347790e8f51e488e183f4deb6c2bdbe9b8decdaf7",
     },
@@ -55,7 +55,7 @@ SOURCE_NOTICES = {
         "source": "https://github.com/espressif/mbedtls/blob/2b8e772fc1cb0732cda3bae7d1e9d6f4cfaf63d9/include/mbedtls/ssl_internal.h",
         "license": "Apache-2.0 OR GPL-2.0-or-later",
         "comment_style": "blocks",
-        "boards": ["tdeck", "tpager"],
+        "boards": ["tdeck", "tpager", "m9"],
         "modes": ["standalone"],
         "notice_sha256": "643036cd01ff4766604d196abe0d9229915b4057914a74e3db076e0f0fa3bddc",
     },
@@ -65,7 +65,7 @@ SOURCE_NOTICES = {
         "source": "https://github.com/espressif/mbedtls/blob/2b8e772fc1cb0732cda3bae7d1e9d6f4cfaf63d9/library/common.h",
         "license": "Apache-2.0 OR GPL-2.0-or-later",
         "comment_style": "blocks",
-        "boards": ["tdeck", "tpager"],
+        "boards": ["tdeck", "tpager", "m9"],
         "modes": ["standalone"],
         "notice_sha256": "86f8dde32af25c28c2e8f18bd22ae2e0dbde09e2b8422b1248ad13de8018622c",
     },
@@ -312,11 +312,14 @@ class Collector:
             self.add(component, "LICENSE", data, f"https://github.com/ratspeak/{name}/blob/{ref}/LICENSE")
         arduino_json, _ = self.pio_library("ArduinoJson", "7.4.3", "bblanchon/ArduinoJson", "v7.4.3", ALL)
         arduino_json["modes"] = ["standalone"]
-        graphics, graphics_root = self.pio_library("LovyanGFX", "1.1.16", "lovyan03/LovyanGFX", "1.1.16", ["tdeck", "tpager"])
+        graphics, graphics_root = self.pio_library("LovyanGFX", "1.1.16", "lovyan03/LovyanGFX", "1.1.16", ["tdeck", "tpager", "m9"])
         self.source_notices(graphics, graphics_root)
-        lvgl, lvgl_root = self.pio_library("lvgl", "8.3.11", "lvgl/lvgl", "v8.3.11", ["tdeck", "tpager"])
+        lvgl, lvgl_root = self.pio_library("lvgl", "8.3.11", "lvgl/lvgl", "v8.3.11", ["tdeck", "tpager", "m9"])
         lvgl["modes"] = ["standalone"]
         self.file(lvgl, lvgl_root, "src/extra/libs/qrcode/qrcodegen.c", header=True)
+        radio, _ = self.pio_library("RadioLib", "7.7.1", "jgromes/RadioLib",
+            "ef715e1be6643ffb6cc585cde4c33770caf875b1", ["m9"])
+        radio["modes"] = ["standalone"]
         for name, version, repo, ref in (
             ("M5GFX", "0.2.19", "m5stack/M5GFX", "53a7184601f3667b030ba141c58b87ce2acfaa2a"),
             ("M5Unified", "0.2.13", "m5stack/M5Unified", "a6256725481f1bc366655fa48cf03b6095e30ad1"),
@@ -336,7 +339,7 @@ class Collector:
             ("Font Awesome 5.9.0", "FortAwesome/Font-Awesome", "ba907eaec40fab01d410c3023a5572b2cb46cea6", ["LICENSE.txt"]),
         ):
             component = self.component(name, ref, f"https://github.com/{repo}/tree/{ref}",
-                                       ["tdeck", "tpager"], ["standalone"],
+                                       ["tdeck", "tpager", "m9"], ["standalone"],
                                        "Font notices for generated LVGL fonts, including custom Montserrat glyphs.")
             self.remote(component, repo, ref, paths)
             if name == "Montserrat":
@@ -381,7 +384,7 @@ class Collector:
             if name in ("M5GFX", "M5Unified", "M5Cardputer", "IRremote", "LibSSH-ESP32"):
                 component["boards"] = ["cardputer"]
             elif name == "LovyanGFX":
-                component["boards"] = ["tdeck", "tpager"]
+                component["boards"] = ["tdeck", "tpager", "m9"]
             self.local_notices(component, path)
             with zipfile.ZipFile(archive) as package_archive:
                 for notice in component["notices"]:

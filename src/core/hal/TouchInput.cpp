@@ -1,4 +1,5 @@
 #include "TouchInput.h"
+#if HAS_TOUCH
 
 TouchInput* TouchInput::_instance = nullptr;
 
@@ -104,3 +105,8 @@ bool TouchInput::readGT911() {
 
     return true;
 }
+
+#else
+bool TouchInput::begin() { return false; }
+void TouchInput::update() {}
+#endif

@@ -1,5 +1,5 @@
 #include "runtime/FirmwareReleaseCheck.h"
-#if defined(RSDECK) || defined(RATPAGER)
+#if defined(RSDECK) || defined(RATPAGER) || defined(RSM9)
 #include "runtime/ReleaseVersion.h"
 #include <Arduino.h>
 #include <ArduinoJson.h>

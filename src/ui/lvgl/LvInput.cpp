@@ -115,6 +115,9 @@ void init(Keyboard* kb, Trackball* tb, TouchInput* touch) {
 void init(Keyboard* kb, Scrollwheel* sw, TouchInput* touch) {
     s_kb = kb;
     s_sw = sw;
+#else
+void init(Keyboard* kb, TouchInput* touch) {
+    s_kb = kb;
 #endif
     s_touch = touch;
     s_touchIndev = nullptr;

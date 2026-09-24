@@ -344,8 +344,17 @@ void LvSettingsScreen::buildItems() {
     // Identity & Device
     int devStart = idx;
     _items.push_back({"Firmware", SettingType::READONLY, nullptr, nullptr,
-        [](int) { return String(RSDECK_VERSION_STRING); }});
+        [](int) { return String(RSDECK_VERSION_STRING)
+#ifdef BOARD_BETA_LABEL
+            + " / " BOARD_BETA_LABEL
+#endif
+            ; }});
     idx++;
+#if defined(HAS_RNODE_MODE) && !HAS_RNODE_MODE
+    _items.push_back({"RNode", SettingType::READONLY, nullptr, nullptr,
+        [](int) { return String("Coming soon"); }});
+    idx++;
+#endif
     _items.push_back({"LXMF Address", SettingType::READONLY, nullptr, nullptr,
         [this](int) { return _destinationHash.length() > 0 ? _destinationHash : String("unknown"); }});
     idx++;
@@ -468,6 +477,7 @@ void LvSettingsScreen::buildItems() {
         [&s](int v) { s.keyboardAutoOff = (v != 0); },
         [](int v) { return String(onOff(v != 0)); }});
     idx++;
+#if HAS_TRACKBALL || HAS_SCROLLWHEEL
     // Same persisted field/JSON key on all boards; label follows the pointer device
 #if HAS_SCROLLWHEEL
     _items.push_back({"Encoder Speed", SettingType::INTEGER,
@@ -477,6 +487,7 @@ void LvSettingsScreen::buildItems() {
         [&s]() { return s.trackballSpeed; }, [&s](int v) { s.trackballSpeed = v; },
         [](int v) { return String(v); }, 1, 5, 1});
     idx++;
+#endif
     // Input help is reachable with the physical pointer and Enter on boards
     // whose stock translated keyboard does not report Ctrl shortcuts.
     {
@@ -1521,6 +1532,8 @@ void LvSettingsScreen::rebuildItemList() {
             lv_obj_set_style_text_color(hint, lv_color_hex(Theme::TEXT_MUTED), 0);
 #if HAS_SCROLLWHEEL
             lv_label_set_text(hint, "A/D: digit   Wheel: tune   Enter: save   Alt+Back: cancel");
+#elif HAS_DPAD
+            lv_label_set_text(hint, "Left/Right: digit  Up/Down: tune  OK: save");
 #else
             lv_label_set_text(hint, "A/D digit  Ball tune  Enter save  Hold click cancels");
 #endif

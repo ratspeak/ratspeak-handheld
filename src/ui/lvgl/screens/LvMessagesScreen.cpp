@@ -154,7 +154,7 @@ void LvMessagesScreen::createUI(lv_obj_t* parent) {
 }
 void LvMessagesScreen::onEnter() {
     _active=true;
-#if !HAS_SCROLLWHEEL
+#if HAS_TOUCH
     _focusActive=false;
 #endif
     hideActionMenu();
@@ -273,7 +273,7 @@ void LvMessagesScreen::bindRows() {
     const auto selected=window.selectedIndex();
     if (selected<_rowCount) lv_group_focus_obj(_rows[selected].row);
     lv_obj_scroll_to_y(_list,window.scrollOffset(),LV_ANIM_OFF);
-#if !HAS_SCROLLWHEEL
+#if HAS_TOUCH
     if (!_focusActive) {
         auto* focused=lv_group_get_focused(LvInput::group());
         if (focused) lv_obj_clear_state(focused,LV_STATE_FOCUSED|LV_STATE_FOCUS_KEY);
@@ -491,7 +491,7 @@ void LvMessagesScreen::performAction(handheld::Operation operation) {
 }
 bool LvMessagesScreen::handleLongPress() {
     if (!bound()) return false;
-#if !HAS_SCROLLWHEEL
+#if HAS_TOUCH
     if (!_focusActive) return false;
 #endif
     const int index=focusedIndex();if (index<0) return false;
@@ -513,7 +513,7 @@ bool LvMessagesScreen::handleKey(const KeyEvent& event) {
         if (!event.repeat && (event.del || event.character==8 || event.character==0x1b)) hideActionMenu();
         return true;
     }
-#if !HAS_SCROLLWHEEL
+#if HAS_TOUCH
     if (!_focusActive && (event.up || event.down || event.enter)) {
         _focusActive=true;auto* focused=lv_group_get_focused(LvInput::group());
         if (focused) lv_obj_add_state(focused,LV_STATE_FOCUSED|LV_STATE_FOCUS_KEY);

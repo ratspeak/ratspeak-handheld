@@ -12,6 +12,10 @@ constexpr uint32_t GPSManager::BAUD_RATES[];
 void GPSManager::begin() {
     handheld::assertDeviceOwner();
     if (_running) return;
+    if (_powerControl && !_powerControl(true)) {
+        Serial.println("[GPS] Board revision unknown; GNSS left disabled");
+        return;
+    }
 
     // Restore last-known time from NVS on boot
     if (_timeEnabled) restoreTimeFromNVS();
@@ -107,6 +111,7 @@ void GPSManager::stop() {
     }
 
     _serial.end();
+    if (_powerControl) _powerControl(false);
     _running = false;
     _baudDetected = false;
     _locationValid = false;

@@ -314,7 +314,7 @@ void LvHomeScreen::onEnter() {
     _lastUptime = ULONG_MAX;
     _lastHeap = UINT32_MAX;
     _avatarSeed = "";
-#if HAS_SCROLLWHEEL
+#if !HAS_TOUCH
     // Logical focus on the action button; the ring only paints once the user
     // enters the screen (navbar-mode suppression lifts in main.cpp)
     if (_btnAnnounce) LvInput::focusObj(_btnAnnounce);

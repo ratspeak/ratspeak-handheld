@@ -5,7 +5,7 @@
 #include <functional>
 #include <array>
 
-#include "radio/SX1262.h"
+#include "radio/BoardRadio.h"
 #include "radio/SX1262Timing.h"
 #include "radio/RadioTimingPolicy.h"
 #include "transport/TxLease.h"
@@ -14,7 +14,7 @@
 // TX enters via sendRaw from the protocol pump.
 class LoRaInterface {
 public:
-    LoRaInterface(SX1262* radio, const char* name = "LoRaInterface");
+    LoRaInterface(BoardRadio* radio, const char* name = "LoRaInterface");
     ~LoRaInterface();
 
     bool start();
@@ -110,7 +110,7 @@ private:
     uint32_t _generation = 0;
     uint32_t _bitrate = 0;
 
-    SX1262* _radio;
+    BoardRadio* _radio;
     bool _txPending = false;
     std::array<uint8_t, RETICULUM_MTU> _txData{};
     size_t _txLength = 0;

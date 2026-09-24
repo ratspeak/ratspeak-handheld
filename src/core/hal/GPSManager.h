@@ -12,6 +12,7 @@
 
 class GPSManager {
 public:
+    void setPowerControl(bool (*control)(bool)) { _powerControl = control; }
     void begin();
     void loop();       // Non-blocking: reads available UART bytes, feeds parser
     void stop();       // Disable UART, clear state
@@ -53,6 +54,7 @@ private:
     void persistToNVS();
     bool tryBaudRate(uint32_t baud);
 
+    bool (*_powerControl)(bool) = nullptr;
     NMEAParser _parser;
     HardwareSerial _serial{2};   // UART2 on ESP32-S3
     bool _running = false;

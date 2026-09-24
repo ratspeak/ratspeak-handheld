@@ -17,6 +17,8 @@ namespace LvInput {
 void init(Keyboard* kb, Trackball* tb, TouchInput* touch);
 #elif HAS_SCROLLWHEEL
 void init(Keyboard* kb, Scrollwheel* sw, TouchInput* touch);
+#else
+void init(Keyboard* kb, TouchInput* touch = nullptr);
 #endif
 
 // Feed a KeyEvent into the LVGL keypad indev (called from main loop)

@@ -66,5 +66,27 @@
     "standalone_flash_freq": null,
     "rnode_partition_scheme": "default_8MB",
     "rnode_partition_csv": "partitions/rnode-default_8MB.csv"
+  },
+  "m9": {
+    "artifact_prefix": "m9",
+    "flash_size": "16MB",
+    "partition_csv": null,
+    "standalone_partition_csv": "partitions/standalone-16mb.csv",
+    "rnode_target": null,
+    "rnode_prep_target": null,
+    "renderer": "lvgl",
+    "protocol_profile": "small",
+    "runtime": "dedicated",
+    "app_environments": [
+      "m9"
+    ],
+    "device_aliases": [
+      "thinknode_m9"
+    ],
+    "post_build_image": "m9-standalone-factory.bin",
+    "standalone_flash_freq": "80m",
+    "rnode_partition_scheme": null,
+    "rnode_partition_csv": null,
+    "development": true
   }
 }

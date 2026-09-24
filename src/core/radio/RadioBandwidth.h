@@ -7,8 +7,11 @@
 namespace RadioBandwidth {
 struct Value { uint32_t hz; uint8_t code; };
 inline constexpr Value values[] = {
+#if !defined(RSM9)
     {7800, 0x00}, {10400, 0x08}, {15600, 0x01}, {20800, 0x09},
-    {31250, 0x02}, {41700, 0x0a}, {62500, 0x03}, {125000, 0x04},
+    {31250, 0x02}, {41700, 0x0a},
+#endif
+    {62500, 0x03}, {125000, 0x04},
     {250000, 0x05}, {500000, 0x06}
 };
 inline constexpr int count = sizeof(values) / sizeof(values[0]);

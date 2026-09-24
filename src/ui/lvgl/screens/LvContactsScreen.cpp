@@ -119,7 +119,7 @@ void LvContactsScreen::createUI(lv_obj_t* parent) {
 
 void LvContactsScreen::onEnter() {
     _lastContactCount = -1;
-#if !HAS_SCROLLWHEEL
+#if HAS_TOUCH
     _focusActive = false;
 #endif
     rebuildList();
@@ -287,7 +287,7 @@ void LvContactsScreen::rebuildList() {
 
     if (restoredFocus) LvInput::focusObj(restoredFocus);
 
-#if !HAS_SCROLLWHEEL
+#if HAS_TOUCH
     // Trackball/touch boards defer visible focus until the user navigates.
     if (!_focusActive) {
         lv_obj_t* focused = lv_group_get_focused(LvInput::group());
@@ -298,7 +298,7 @@ void LvContactsScreen::rebuildList() {
 
 bool LvContactsScreen::handleLongPress() {
     if (!_am || _contactHexes.empty()) return false;
-#if !HAS_SCROLLWHEEL
+#if HAS_TOUCH
     // On trackball/touch boards, an unfocused hold belongs to the power shell.
     if (!_focusActive) return false;
 #endif
@@ -315,7 +315,7 @@ bool LvContactsScreen::handleLongPress() {
 bool LvContactsScreen::handleKey(const KeyEvent& event) {
     if (!_am || _contactHexes.empty()) return false;
 
-#if !HAS_SCROLLWHEEL
+#if HAS_TOUCH
     if (!_focusActive && (event.up || event.down || event.enter)) {
         _focusActive = true;
         lv_obj_t* focused = lv_group_get_focused(LvInput::group());

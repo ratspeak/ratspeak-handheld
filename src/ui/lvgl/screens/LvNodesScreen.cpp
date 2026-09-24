@@ -238,7 +238,7 @@ void LvNodesScreen::destroyUI() {
 void LvNodesScreen::onEnter() {
     _lastNodeCount = -1;
     _lastContactCount = -1;
-#if !HAS_SCROLLWHEEL
+#if HAS_TOUCH
     _focusActive = false;
 #endif
     _confirmDelete = false;
@@ -407,7 +407,7 @@ void LvNodesScreen::rebuildList() {
         lv_obj_scroll_to_y(_list, scrollY, LV_ANIM_OFF);
     }
 
-#if !HAS_SCROLLWHEEL
+#if HAS_TOUCH
     // Trackball/touch boards defer visible focus until the user navigates.
     if (!_focusActive) {
         lv_obj_t* focused = lv_group_get_focused(LvInput::group());
@@ -519,7 +519,7 @@ bool LvNodesScreen::handleLongPress() {
     }
 #endif
     if (!_am) return false;
-#if !HAS_SCROLLWHEEL
+#if HAS_TOUCH
     // On trackball/touch boards, an unfocused hold belongs to the power shell.
     if (!_focusActive) return false;
 #endif
@@ -539,7 +539,7 @@ bool LvNodesScreen::handleLongPress() {
 bool LvNodesScreen::handleKey(const KeyEvent& event) {
     if (!_am) return false;
 
-#if !HAS_SCROLLWHEEL
+#if HAS_TOUCH
     // --- Focus activation guard (trackball/touch browse mode only) ---
     if (_actionState == NodeAction::BROWSE && !_confirmDelete &&
         !_focusActive && (event.up || event.down || event.enter)) {

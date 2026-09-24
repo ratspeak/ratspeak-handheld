@@ -16,7 +16,7 @@ static_assert(sizeof(LoRaInterface) <= handheld::ResourceBudget::LoRaRetainedByt
 #define RNODE_NIBBLE_SEQ    0xF0
 #define RNODE_SINGLE_MTU    (MAX_PACKET_SIZE - RNODE_HEADER_L)  // 254 bytes payload per frame
 
-LoRaInterface::LoRaInterface(SX1262* radio, const char* name)
+LoRaInterface::LoRaInterface(BoardRadio* radio, const char* name)
     : _radio(radio)
 {
     snprintf(_name, sizeof(_name), "%s", name ? name : "LoRaInterface");
@@ -391,9 +391,7 @@ void LoRaInterface::loop() {
         lastRxDebug = millis();
         int rssi = _radio->currentRssi();
         uint8_t status = _radio->getStatus();
-        uint8_t chipMode = (status >> 4) & 0x07;
-        Serial.printf("[LORA_IF] RX: RSSI=%d dBm, status=0x%02X(mode=%d)\n",
-            rssi, status, chipMode);
+        Serial.printf("[LORA_IF] RX: RSSI=%d dBm, status=0x%02X\n", rssi, status);
     }
 
     if (!_radio->packetAvailable) { drainTx(); return; }

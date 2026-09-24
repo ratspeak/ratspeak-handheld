@@ -1,4 +1,6 @@
-#include "Display.h"
+#include "config/BoardConfig.h"
+#if defined(RSDECK) || defined(RSM9)
+#include "St7789Display.h"
 #include "hal/SharedSPIBus.h"
 #include <lvgl.h>
 #include "runtime/RuntimeMetrics.h"
@@ -7,7 +9,7 @@
 // Double-buffered 10-line strips in PSRAM for DMA flush
 static lv_color_t* s_buf1 = nullptr;
 static lv_color_t* s_buf2 = nullptr;
-static LGFX_TDeck* s_gfx = nullptr;
+static LGFX_Board* s_gfx = nullptr;
 
 static void lvgl_flush_cb(lv_disp_drv_t* drv, const lv_area_t* area, lv_color_t* color_p) {
     uint32_t w = area->x2 - area->x1 + 1;
@@ -29,11 +31,11 @@ bool Display::begin() {
     SharedSPILock bus;
     if (!bus.locked()) return false;
     if (!_gfx.init()) return false;
-    _gfx.setRotation(1);  // Landscape: 320x240
+    _gfx.setRotation(TFT_ROTATION);  // Landscape: 320x240
     _gfx.setBrightness(0);
     _gfx.fillScreen(TFT_BLACK);
 
-    Serial.printf("[DISPLAY] Initialized: %dx%d (rotation=1, LovyanGFX direct)\n",
+    Serial.printf("[DISPLAY] Initialized: %dx%d (LovyanGFX direct)\n",
                   _gfx.width(), _gfx.height());
 
     return true;
@@ -41,7 +43,7 @@ bool Display::begin() {
 
 bool Display::beginLVGL() {
     s_gfx = &_gfx;
-    handheld_lvgl_failure_display(handheld::showLvglFailure<LGFX_TDeck>, s_gfx);
+    handheld_lvgl_failure_display(handheld::showLvglFailure<LGFX_Board>, s_gfx);
 
     lv_init();
 
@@ -98,3 +100,5 @@ void Display::wakeup() {
     if (!bus.locked()) return;
     _gfx.wakeup();
 }
+
+#endif

@@ -29,10 +29,10 @@ class Partition:
 class Board:
     artifact_prefix: str
     flash_size: str
-    partition_csv: str
+    partition_csv: str | None
     standalone_partition_csv: str
-    rnode_target: str
-    rnode_prep_target: str
+    rnode_target: str | None
+    rnode_prep_target: str | None
     renderer: str
     protocol_profile: str
     runtime: str
@@ -40,15 +40,21 @@ class Board:
     device_aliases: tuple[str, ...]
     post_build_image: str
     standalone_flash_freq: str | None
-    rnode_partition_scheme: str
-    rnode_partition_csv: str
+    rnode_partition_scheme: str | None
+    rnode_partition_csv: str | None
+
+    development: bool = False
+
+    @property
+    def modes(self) -> tuple[str, ...]:
+        return ("standalone",) if self.development else PACKAGES
 
     @property
     def capacity(self) -> int:
         return int(self.flash_size.removesuffix("MB")) * 1024 * 1024
 
     def package_name(self, mode: str) -> str:
-        if mode not in PACKAGES:
+        if mode not in self.modes:
             raise ValueError(f"unsupported package: {mode}")
         return f"{self.artifact_prefix}-{mode}"
 
@@ -59,6 +65,8 @@ class Board:
 
     def partitions(self, root: Path = ROOT, *, standalone: bool = False) -> dict[str, Partition]:
         path = self.standalone_partition_csv if standalone else self.partition_csv
+        if path is None:
+            raise ValueError("this board supports only the standalone layout")
         entries = read_partitions(root / path, self.capacity)
         roles = (("app0", "ota_0"), ("app1", "ota_1")) if standalone else (
             ("launcher", "ota_0"), ("standalone", "ota_1"), ("rnode", "ota_2"))
@@ -69,6 +77,8 @@ class Board:
         return entries
 
     def factory_app_offset(self, mode: str, root: Path = ROOT) -> int:
+        if mode not in self.modes:
+            raise ValueError(f"unsupported factory application: {mode}")
         if mode == "standalone":
             return self.partitions(root, standalone=True)["app0"].offset
         if mode == "rnode":
@@ -137,18 +147,26 @@ def load_boards(path: Path = ROOT / "tools/release_boards.json") -> dict[str, Bo
         if name not in board.app_environments:
             raise ValueError(f"{name}: normal application environment is missing")
         for key, value in fields.items():
-            if key in ("app_environments", "device_aliases", "standalone_flash_freq"):
+            if key in ("app_environments", "device_aliases", "standalone_flash_freq", "development"):
+                continue
+            if board.development and value is None and key in ("partition_csv", "rnode_target", "rnode_prep_target", "rnode_partition_scheme", "rnode_partition_csv"):
                 continue
             if not isinstance(value, str) or not re.fullmatch(r"[a-zA-Z0-9_./-]+", value):
                 raise ValueError(f"{name}: invalid catalog value")
+        if not isinstance(board.development, bool):
+            raise ValueError(f"{name}: development must be boolean")
+        if board.development and any(getattr(board, key) is not None for key in ("partition_csv", "rnode_target", "rnode_prep_target", "rnode_partition_scheme", "rnode_partition_csv")):
+            raise ValueError(f"{name}: development board must be standalone only")
         for value in (board.artifact_prefix, board.rnode_target, board.rnode_prep_target):
+            if value is None and board.development:
+                continue
             if not re.fullmatch(r"[a-z][a-z0-9_-]*", value):
                 raise ValueError(f"{name}: invalid artifact name or build target")
         if not re.fullmatch(r"[a-z][a-z0-9_-]*\.bin", board.post_build_image):
             raise ValueError(f"{name}: invalid post-build image name")
         if board.standalone_flash_freq not in (None, "80m", "40m"):
             raise ValueError(f"{name}: unsupported standalone merge flash frequency")
-        if board.rnode_partition_scheme not in ("no_ota", "default_8MB"):
+        if not board.development and board.rnode_partition_scheme not in ("no_ota", "default_8MB"):
             raise ValueError(f"{name}: unsupported RNode partition scheme")
         if board.flash_size not in ("8MB", "16MB"):
             raise ValueError(f"{name}: unsupported flash capacity")
@@ -157,6 +175,8 @@ def load_boards(path: Path = ROOT / "tools/release_boards.json") -> dict[str, Bo
         ):
             raise ValueError(f"{name}: unsupported renderer/protocol/runtime combination")
         for relative in (board.partition_csv, board.standalone_partition_csv, board.rnode_partition_csv):
+            if relative is None and board.development:
+                continue
             if Path(relative).is_absolute() or ".." in Path(relative).parts:
                 raise ValueError(f"{name}: partition path must be source-relative")
         for asset in board_assets(board):
@@ -168,19 +188,21 @@ def load_boards(path: Path = ROOT / "tools/release_boards.json") -> dict[str, Bo
 
 
 def board_assets(board: Board) -> set[str]:
-    return {f"{board.package_name(mode)}.zip" for mode in PACKAGES} | {
-        board.app_name(mode) for mode in APPLICATIONS
+    return {f"{board.package_name(mode)}.zip" for mode in board.modes} | {
+        board.app_name(mode) for mode in APPLICATIONS if mode in board.modes
     }
 
 
-BOARDS = load_boards()
+# Unreleased development targets participate in local builds, not public assets.
+ALL_BOARDS = load_boards()
+BOARDS = {name: board for name, board in ALL_BOARDS.items() if not board.development}
 
 
 def board_for_environment(environment: str) -> tuple[str, Board]:
-    for name, board in BOARDS.items():
+    for name, board in ALL_BOARDS.items():
         if environment in board.app_environments:
             return name, board
-    supported = ", ".join(env for board in BOARDS.values() for env in board.app_environments)
+    supported = ", ".join(env for board in ALL_BOARDS.values() for env in board.app_environments)
     raise ValueError(f"Unknown handheld app environment {environment!r}; supported environments: {supported}")
 
 

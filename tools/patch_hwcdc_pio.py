@@ -35,7 +35,12 @@ def require_selection(source, target, env):
 
 
 def verify_provider(source, target, env):
-    patch.verify_map(Path(env.subst("$BUILD_DIR")) / "firmware.map")
+    defines = {item[0]: str(item[1]) for item in env.get("CPPDEFINES", [])
+               if isinstance(item, (list, tuple)) and len(item) == 2}
+    # UART boards compile an empty HWCDC translation unit. Require the repaired
+    # provider only when native USB CDC is actually selected by the compiler.
+    if defines.get("ARDUINO_USB_CDC_ON_BOOT") == "1" and defines.get("ARDUINO_USB_MODE") == "1":
+        patch.verify_map(Path(env.subst("$BUILD_DIR")) / "firmware.map")
 
 
 env.AddBuildMiddleware(replace_hwcdc)

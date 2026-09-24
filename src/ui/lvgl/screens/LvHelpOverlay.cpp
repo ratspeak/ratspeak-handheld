@@ -65,7 +65,14 @@ void LvHelpOverlay::create() {
     makeLabel(header, "Ratspeak.org", &lv_font_rsdeck_10,
               Theme::TEXT_SECONDARY, 180, LV_TEXT_ALIGN_RIGHT);
 
-#if HAS_SCROLLWHEEL
+#if HAS_DPAD
+    addHelpRow(_overlay, "Arrows", "Move selection / edit value");
+    addHelpRow(_overlay, "OK / Enter", "Open or confirm");
+    addHelpRow(_overlay, "Back", "Return / cancel editing");
+    addHelpRow(_overlay, "Left / Right", "Switch tabs outside editors");
+    addHelpRow(_overlay, "Hold Enter", "Context actions / sleep");
+    addHelpRow(_overlay, "Icon keys", "Coming soon");
+#elif HAS_SCROLLWHEEL
     addHelpRow(_overlay, "Encoder", "Move selection / edit value");
     addHelpRow(_overlay, "Click/Enter", "Open or confirm");
     addHelpRow(_overlay, "Backspace", "Back; then select a tab");
@@ -88,7 +95,7 @@ void LvHelpOverlay::create() {
 #endif
 
     lv_obj_t* footer = makeLabel(_overlay,
-#if HAS_SCROLLWHEEL
+#if !HAS_TOUCH
                                  "Any key closes",
 #else
                                  "Any key or tap closes",

@@ -5,6 +5,8 @@
 // =============================================================================
 
 // --- Board Identity / Branding ---
+#define BOARD_COMPONENT_ID "tdeck"
+#define BOARD_BOOT_NAMESPACE "ratdeck"
 #define DEVICE_NAME              "rsDeck"
 #define DEVICE_AP_PREFIX         "rsdeck"
 #define BOARD_CONFIRM_INPUT_NAME "trackball"
@@ -83,7 +85,7 @@
 #define TFT_BL              42   // Backlight PWM
 #define TFT_WIDTH           320
 #define TFT_HEIGHT          240
-#define TFT_SPI_FREQ        15000000  // 15MHz (30MHz overclockable)
+#define TFT_SPI_FREQ        27000000  // Existing shared-bus display rate
 
 // --- Keyboard (ESP32-C3 over I2C) ---
 #define KB_I2C_ADDR         0x55
@@ -92,6 +94,7 @@
 // --- I2C Bus (shared: keyboard + touchscreen) ---
 #define I2C_SDA             18
 #define I2C_SCL              8
+#define I2C_FREQUENCY   400000
 
 // --- Touchscreen (GT911 capacitive) ---
 #define TOUCH_INT           16
@@ -128,3 +131,8 @@
 // --- Hardware Constants ---
 #define MAX_PACKET_SIZE     255
 #define SPI_FREQUENCY       8000000   // 8 MHz SPI clock for SX1262
+
+#define TFT_RST -1
+#define TFT_ROTATION 1
+#define TFT_BL_INVERT false
+#define TFT_PWM_FREQ 12000

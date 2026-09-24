@@ -12,7 +12,7 @@ namespace handheld {
 // in the board composition; diagnostic packets use the ordinary LoRa queue.
 class DeviceDiagnostics {
 public:
-    DeviceDiagnostics(SX1262& radio, LoRaInterface& lora, ProtocolBackend& backend,
+    DeviceDiagnostics(BoardRadio& radio, LoRaInterface& lora, ProtocolBackend& backend,
                       AnnounceManager*& nodes, bool& online, const char* boardName,
                       const char* payloadPrefix, const char* rawPayload, void (*announce)())
         : radio(radio), rustLoraIface(lora), backend(&backend), announceManager(nodes),
@@ -39,7 +39,7 @@ private:
     void sampleMemory(uint32_t now);
     void printMemory() const;
     HeapObservations memory;
-    SX1262& radio;
+    BoardRadio& radio;
     LoRaInterface& rustLoraIface;
     ProtocolBackend* backend;
     AnnounceManager*& announceManager;

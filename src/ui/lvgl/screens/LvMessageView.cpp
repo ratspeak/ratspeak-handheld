@@ -15,7 +15,7 @@ constexpr int kHeaderH = 36;
 constexpr int kInputH = 31;
 constexpr int kComposerButtonW = 44;
 constexpr int kBubbleMaxW = Theme::CONTENT_W * 3 / 4;
-#if HAS_SCROLLWHEEL
+#if !HAS_TOUCH
 constexpr const char* kComposerPlaceholder = "Message... or Enter to read full";
 #else
 constexpr const char* kComposerPlaceholder = "Message...";
@@ -899,7 +899,7 @@ bool LvMessageView::handleKey(const KeyEvent& event) {
     }
 
     if (event.del || event.character == 0x08) {
-#if HAS_SCROLLWHEEL
+#if !HAS_TOUCH
         if (_inputText.empty() && hasReadFocus()) {
             if (!event.repeat) {
                 _service->historyWindow().focusSpan(HistoryWindow::VisibleSpans);
@@ -924,16 +924,16 @@ bool LvMessageView::handleKey(const KeyEvent& event) {
         if (hasReadFocus()) {
             readFull(_service->historyWindow().focusedSpan()); return true;
         }
-#if HAS_SCROLLWHEEL
-        // The Pager has no Tab key or touch. An empty composer lets a wheel
-        // click enter Read full selection; typing returns to composing.
+#if !HAS_TOUCH
+        // An empty composer lets keyboard-only boards enter Read full
+        // selection with Enter; typing returns to composing.
         if (_inputText.empty()) {
             if (_historyNotice && !lv_obj_has_flag(_historyNotice, LV_OBJ_FLAG_HIDDEN)) {
                 historyAction(_noticeAction); return true;
             }
             focusNextRead();
             if (hasReadFocus() && _ui)
-                _ui->lvStatusBar().showToast("Wheel: select  Enter: read  Back: cancel", 2000);
+                _ui->lvStatusBar().showToast("Up/Down: select  Enter: read  Back: cancel", 2000);
             return true;
         }
 #endif
@@ -941,7 +941,7 @@ bool LvMessageView::handleKey(const KeyEvent& event) {
         return true;
     }
 
-#if HAS_SCROLLWHEEL
+#if !HAS_TOUCH
     if (hasReadFocus() && (event.up || event.down)) {
         focusNextRead(event.up ? -1 : 1);
         return true;
