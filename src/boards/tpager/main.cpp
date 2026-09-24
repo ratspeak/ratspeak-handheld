@@ -1444,6 +1444,7 @@ void loop() {
         ui.lvStatusBar().setAutoIfacePeers(status.autoPeers);
         if (powerMgr.isScreenOn()) {
             ui.lvStatusBar().setBatteryPercent(powerMgr.batteryPercent());
+            ui.lvStatusBar().setCharging(powerMgr.isCharging());
             ui.lvStatusBar().setBatteryDisplay(serviceClient.config.settings().batteryDisplay);
             ui.lvStatusBar().setUse24Hour(serviceClient.config.settings().use24HourTime);
             ui.lvStatusBar().updateTime();

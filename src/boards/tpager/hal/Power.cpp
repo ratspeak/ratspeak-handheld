@@ -2,6 +2,8 @@
 #include "hal/Display.h"
 #include "hal/Keyboard.h"
 #include <Wire.h>
+#include <GaugeDrv.hpp>
+#include <Preferences.h>
 #include <esp_sleep.h>
 #include <driver/rtc_io.h>
 
@@ -61,6 +63,8 @@ uint16_t peripheralRails() {
 }
 
 // BQ25896 charger PMIC
+constexpr uint8_t BQ_REG_CHARGE_CURRENT = 0x04;
+constexpr uint8_t BQ_REG_CHARGE_VOLTAGE = 0x06;
 constexpr uint8_t BQ_REG_WATCHDOG = 0x07;  // [5:4] I2C watchdog, 00 = off
 constexpr uint8_t BQ_REG_BATFET   = 0x09;  // [5] BATFET_DIS, [3] BATFET_DLY
 constexpr uint8_t BQ_REG_STATUS   = 0x0B;  // [2] PG_STAT (VBUS power good)
@@ -69,6 +73,11 @@ constexpr uint8_t BQ_REG_PART     = 0x14;  // [5:3] part number
 // BQ27220 fuel gauge
 constexpr uint8_t GAUGE_CMD_VOLTAGE = 0x08;  // mV
 constexpr uint8_t GAUGE_CMD_SOC     = 0x2C;  // %
+constexpr uint8_t GAUGE_CMD_DESIGN_CAPACITY  = 0x3C;
+constexpr uint16_t GAUGE_DESIGN_CAPACITY_MAH = 1500;
+GaugeBQ27220 gauge;
+constexpr char GAUGE_NVS_NAMESPACE[] = "tpager-pwr";
+constexpr char GAUGE_NVS_CAPACITY_KEY[] = "gauge-cap";
 
 bool bqRead8(uint8_t reg, uint8_t& value) {
     Wire.beginTransmission(BQ25896_ADDR);
@@ -95,6 +104,37 @@ bool gaugeRead16(uint8_t cmd, uint16_t& value) {
     uint16_t hi = Wire.read();
     value = lo | (hi << 8);
     return true;
+}
+
+bool gaugeRead16Retry(uint8_t cmd, uint16_t& value, uint8_t attempts = 3) {
+    while (attempts-- > 0) {
+        if (gaugeRead16(cmd, value)) return true;
+        delay(20);
+    }
+    return false;
+}
+
+bool configureGaugeCapacity() {
+    uint16_t designCapacity = 0;
+    if (!gaugeRead16Retry(GAUGE_CMD_DESIGN_CAPACITY, designCapacity)) return false;
+    if (designCapacity == GAUGE_DESIGN_CAPACITY_MAH) return true;
+
+    Preferences preferences;
+    if (preferences.begin(GAUGE_NVS_NAMESPACE, true)) {
+        const bool attempted =
+            preferences.getUShort(GAUGE_NVS_CAPACITY_KEY, 0) == GAUGE_DESIGN_CAPACITY_MAH;
+        preferences.end();
+        if (attempted) return false;
+    }
+
+    if (!gauge.begin(Wire)) return false;
+    const bool ok = gauge.setNewCapacity(GAUGE_DESIGN_CAPACITY_MAH,
+                                         GAUGE_DESIGN_CAPACITY_MAH);
+    if (preferences.begin(GAUGE_NVS_NAMESPACE, false)) {
+        preferences.putUShort(GAUGE_NVS_CAPACITY_KEY, GAUGE_DESIGN_CAPACITY_MAH);
+        preferences.end();
+    }
+    return ok;
 }
 }  // namespace
 
@@ -160,6 +200,13 @@ void Power::begin() {
             bqWrite8(BQ_REG_BATFET, reg9 & ~0x20);
             Serial.println("[POWER] Cleared stale BATFET_DIS latch");
         }
+        uint8_t chargeCurrent = 0, chargeVoltage = 0, watchdog = 0;
+        bqRead8(BQ_REG_CHARGE_CURRENT, chargeCurrent) &&
+            bqWrite8(BQ_REG_CHARGE_CURRENT, (chargeCurrent & 0x80) | 0x0B);
+        bqRead8(BQ_REG_CHARGE_VOLTAGE, chargeVoltage) &&
+            bqWrite8(BQ_REG_CHARGE_VOLTAGE, (chargeVoltage & 0x03) | 0x70);
+        bqRead8(BQ_REG_WATCHDOG, watchdog) &&
+            bqWrite8(BQ_REG_WATCHDOG, watchdog & ~0x30);
     } else {
         Serial.printf("[POWER] charger not responding at 0x%02X — bus scan:", BQ25896_ADDR);
         for (uint8_t a = 0x08; a <= 0x77; ++a) {
@@ -171,6 +218,9 @@ void Power::begin() {
 
     uint16_t gaugeMv = 0, gaugeSoc = 0;
     if (gaugeRead16(GAUGE_CMD_VOLTAGE, gaugeMv) && gaugeRead16(GAUGE_CMD_SOC, gaugeSoc)) {
+        configureGaugeCapacity();
+        gaugeRead16(GAUGE_CMD_VOLTAGE, gaugeMv);
+        gaugeRead16(GAUGE_CMD_SOC, gaugeSoc);
         Serial.printf("[POWER] BQ27220@0x%02X ok batt=%umV soc=%u%%\n",
                       BQ27220_ADDR,
                       static_cast<unsigned int>(gaugeMv),
@@ -206,6 +256,13 @@ int Power::batteryPercent() const {
     if (v >= 4.2f) return 100;
     if (v <= 3.0f) return 0;
     return (int)((v - 3.0f) / 1.2f * 100.0f);
+}
+
+bool Power::isCharging() const {
+    uint8_t status = 0;
+    if (!bqRead8(BQ_REG_STATUS, status)) return false;
+    const uint8_t chargeState = (status >> 3) & 0x03;
+    return chargeState == 1 || chargeState == 2;
 }
 
 uint8_t Power::percentToPWM(uint8_t pct) const {

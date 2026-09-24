@@ -37,6 +37,7 @@ public:
     // Battery
     float batteryVoltage() const;
     int batteryPercent() const;
+    bool isCharging() const;
 
     // Display backlight — accepts percentage 1-100
     void setBrightness(uint8_t percent);
