@@ -48,13 +48,14 @@ Download the ZIP for your device from [Releases](https://github.com/ratspeak/rat
   Reticulum client over USB or BLE.
 
 Files are named by device: `tdeck-full.zip`, `pager-standalone.zip`,
-`cardputer-rnode.zip`, and `m9-standalone.zip`. For T-Deck, T-Pager and Cardputer, open the
-[Ratspeak web flasher](https://ratspeak.org/download.html#dl-custom), choose
-**Flash** under **Build your own**, and upload the ZIP.
+`cardputer-rnode.zip`, and `m9-standalone.zip`. Open the
+[Ratspeak web flasher](https://ratspeak.org/download.html), select your device,
+and choose **Flash in browser**. To install a downloaded ZIP, choose **Flash**
+under **Build your own** and upload it.
 
 For M9, extract `m9-standalone.zip` and flash its enclosed factory image with
 esptool: `python3 -m esptool --chip esp32s3 --port PORT --baud 115200 write-flash 0x0 m9-standalone.bin`.
-Replace `PORT` with your device's serial port. M9 web flashing is coming later.
+Replace `PORT` with your device's serial port.
 
 ZIPs install a complete firmware layout. Back up your identity and messages
 before flashing. The matching `.bin` files contain only the application and
