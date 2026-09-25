@@ -281,7 +281,7 @@ void LvMessagesScreen::updateStatuses() {
         const auto* value=window.row(i);if (!value) continue;
         char text[128]={};const char* detail=nullptr;
         if (value->flags&Row::Unavailable) detail="Read failed; tap Retry";
-        else if (value->flags&Row::StatusUnavailable) detail="Status unavailable";
+        else if (value->flags&Row::StatusUnavailable) detail=nullptr;
         else detail=messageStatusDetail(static_cast<LXMFStatus>(value->status),value->flags&Row::StatusPending,
             value->error,value->flags&Row::TxSuppressed);
         const char* state=(value->flags&Row::HasOutgoing)?statusText(value->status):"";
@@ -289,7 +289,7 @@ void LvMessagesScreen::updateStatuses() {
         else if (value->unreadCount) snprintf(text,sizeof(text),"%u new%s%s",unsigned(value->unreadCount),*state?" · ":"",state);
         else snprintf(text,sizeof(text),"%s",state);
         lv_label_set_text(_rows[i].status,text);
-        const auto color=(value->flags&(Row::Unavailable|Row::StatusUnavailable))?Theme::WARNING_CLR:
+        const auto color=(value->flags&Row::Unavailable)?Theme::WARNING_CLR:
             value->status==static_cast<uint8_t>(LXMFStatus::FAILED)?Theme::ERROR_CLR:
             value->status==static_cast<uint8_t>(LXMFStatus::DELIVERED)?Theme::SUCCESS:Theme::TEXT_MUTED;
         lv_obj_set_style_text_color(_rows[i].status,lv_color_hex(color),0);
@@ -320,9 +320,9 @@ void LvMessagesScreen::updateCaptions() {
             window->loading() || !window->statusReady()?"Loading conversations...":"No conversations";
         lv_label_set_text(_empty,empty);lv_obj_clear_flag(_empty,LV_OBJ_FLAG_HIDDEN);
     } else lv_obj_add_flag(_empty,LV_OBJ_FLAG_HIDDEN);
-    bool retry=_nameFailed;
+    bool retry=_nameFailed || (window && window->statusRefreshDelayed());
     if (window && bound()) for (size_t i=0;i<window->count();++i)
-        retry|=bool(window->row(i)->flags&(Row::Unavailable|Row::StatusUnavailable));
+        retry|=bool(window->row(i)->flags&Row::Unavailable);
     const bool update=window && _active && window->state()!=Window::State::Exhausted &&
         (retry || !window->freshnessAvailable());
     lv_label_set_text_static(lv_obj_get_child(_update,0),retry?"Retry":"Check updates");

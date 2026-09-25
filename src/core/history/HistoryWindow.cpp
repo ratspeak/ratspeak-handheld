@@ -38,6 +38,7 @@ void HistoryWindow::close() {
     changeView();
     auto& c = control();
     c.mode = Mode::Closed; c.state = State::Closed; c.intent = Intent::None;
+    _pages[c.active].value.info.statusRefresh = {};
     if (!c.awaiting) c.phase = Phase::Idle;
 }
 bool HistoryWindow::visible() const {
@@ -178,6 +179,7 @@ void HistoryWindow::beginIntent() {
     auto& c = control(); const auto intent = c.intent; c.intent = Intent::None;
     auto& page = candidate(); page = livePage();
     auto& info = page.info;
+    if (intent != Intent::Refresh) info.statusRefresh = {};
     c.spanCount = 0; c.usedText = 0; c.publish = false;
     info.spans = 0; info.full = c.mode == Mode::Full;
     c.phase = Phase::Preview;
@@ -351,6 +353,7 @@ void HistoryWindow::finishStatuses(uint32_t now) {
         c.statusFailed = true;
     }
     c.phase = Phase::Idle; c.statusReady = true; c.statusDirty = c.statusFailed;
+    _pages[c.active].value.info.statusRefresh.finish(c.statusFailed, now);
     c.retryAt = c.statusFailed ? now + 1000 : 0;
     if (c.statusPublication == UINT32_MAX) { c.state = State::Exhausted; c.error = Error::Exhausted; }
     else ++c.statusPublication;

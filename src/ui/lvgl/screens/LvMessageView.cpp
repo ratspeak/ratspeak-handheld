@@ -523,6 +523,7 @@ void LvMessageView::updateHistoryControls() {
         if (window.error() == HistoryWindow::Error::Busy) notice = "Storage busy; retry";
         else if (window.error() != HistoryWindow::Error::None) notice = "Read failed; retry";
         else if (!window.freshnessAvailable()) notice = "Updates unavailable; refresh";
+        else if (ready && window.statusRefreshDelayed()) notice = "Status refresh delayed; retry";
         else if (ready && window.newBelow() && window.mode() == HistoryWindow::Mode::Chat) {
             notice = "New messages"; _noticeAction = 2;
         }
@@ -815,7 +816,9 @@ void LvMessageView::applyStatusGlyph(lv_obj_t* lbl, const Span& span) {
             color = Theme::TEXT_MUTED;
             break;
     }
-    const char* detail = span.flags & Span::StatusUnavailable ? "status unavailable" :
+    // A failed refresh does not invalidate the last known delivery state or
+    // constitute a failed status write. The window owns its delayed notice.
+    const char* detail = span.flags & Span::StatusUnavailable ? nullptr :
         messageStatusDetail(static_cast<LXMFStatus>(span.status), span.flags & Span::StatusPending,
                             span.statusError, span.flags & Span::TxSuppressed);
     if (detail) {

@@ -65,6 +65,7 @@ public:
     uint32_t revision() const { return _control.value.publication; }
     uint32_t statusRevision() const { return _control.value.statusPublication; }
     bool statusReady() const { return _control.value.statusReady; }
+    bool statusRefreshDelayed() const { return visible() && live().info.value.statusRefresh.delayed(); }
     uint32_t identityGeneration() const { return _control.value.identity; }
     Order order() const { return _control.value.order; }
     State state() const { return _control.value.state; }
@@ -115,6 +116,7 @@ private:
         Order order = Order::Recent;
         Direction direction = Direction::After;
         bool hasCursor = false, moreBefore = false, moreAfter = false;
+        StatusRefresh statusRefresh;
     };
     static_assert(sizeof(PageInfo) <= 64, "Conversation page metadata exceeds its reserve");
     union InfoBank {

@@ -198,10 +198,10 @@ void MessagesScreen::render(M5Canvas& canvas) {
     Theme::useUiFont(canvas);
     bool unavailable = false;
     for (size_t i = 0; i < _conversations.count(); ++i)
-        unavailable |= bool(_conversations.row(i)->flags & (handheld::storage::ConversationView::Unavailable |
-                                                          handheld::storage::ConversationView::StatusUnavailable));
+        unavailable |= bool(_conversations.row(i)->flags & handheld::storage::ConversationView::Unavailable);
     const char* notice = _deleteNotice ? _deleteNotice : !_conversations.freshnessAvailable() ? "Refresh needed (R)" :
         unavailable || _conversations.state() == Conversations::State::Retrying ? "Read failed; R to retry" :
+        _conversations.statusRefreshDelayed() ? "Status refresh delayed (R)" :
         nullptr;
     const auto heading = notice ? std::string(notice) : "Page " + std::to_string(_conversations.pageNumber());
     canvas.drawString(heading.c_str(), 8, y + 2);

@@ -86,8 +86,7 @@ int visitChatLines(const History& history, Visitor visit) {
             }
         } while (true);
         if (!row.incoming() && !row.unavailable()) {
-            const char* detail = !history.statusReady() ? "checking delivery status" :
-                row.flags & History::Span::StatusUnavailable ? "status unavailable; retrying" :
+            const char* detail = !history.statusReady() || (row.flags & History::Span::StatusUnavailable) ? nullptr :
                 messageStatusDetail(LXMFStatus(row.status), row.flags & History::Span::StatusPending,
                                     row.statusError, row.flags & History::Span::TxSuppressed);
             if (detail) emit(index, detail, Theme::WARNING);
@@ -188,7 +187,10 @@ void MessageView::render(M5Canvas& canvas) {
     canvas.fillRect(0, baseY + 2, 3, CHAT_HEADER_H - 4, Theme::PRIMARY);
     Theme::useUiFont(canvas);
     canvas.setTextColor(Theme::TEXT_PRIMARY);
-    drawFittedHeader(canvas, _sendNotice ? _sendNotice : !_history.freshnessAvailable() ? "History needs manual refresh" : header,
+    drawFittedHeader(canvas, _sendNotice ? _sendNotice : !_history.freshnessAvailable() ? "History needs manual refresh" :
+                    _history.statusRefreshDelayed() ?
+                        (_history.mode() == History::Mode::Full || _history.focusedSpan() < _history.spanCount() ?
+                            "Status delayed; R retries" : "Status delayed; Tab, R") : header,
                     8, baseY + 2, Theme::CONTENT_W - 16);
     canvas.drawFastHLine(0, baseY + CHAT_HEADER_H, Theme::CONTENT_W, Theme::DIVIDER);
 

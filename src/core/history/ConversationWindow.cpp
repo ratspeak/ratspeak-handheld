@@ -42,6 +42,7 @@ template<size_t N> void ConversationWindow<N>::close() {
     changeView();
     auto& c = _control.value;
     c.open = false; c.state = State::Closed; c.intent = Intent::None;
+    _banks[c.active].info.value.statusRefresh = {};
     if (!c.awaiting) c.phase = Phase::Idle;
 }
 template<size_t N> bool ConversationWindow<N>::visible() const {
@@ -143,6 +144,9 @@ template<size_t N> void ConversationWindow<N>::beginIntent() {
         info.hasCursor = true;
         info.page = intent == Intent::Previous ? (info.page > 1 ? info.page - 1 : 1) : info.page + 1;
     }
+    // An automatic body refresh must not restart a continuing status outage.
+    // Navigation, identity/order changes and a closed view start a new grace.
+    info.statusRefresh = intent == Intent::Refresh && visible() ? live().info.value.statusRefresh : StatusRefresh{};
     info.count = 0; info.sourceRevision = c.observedRevision;
     c.index = 0; c.publish = false; c.phase = Phase::Page;
 }
@@ -372,6 +376,7 @@ template<size_t N> void ConversationWindow<N>::finishStatuses(uint32_t now) {
         c.statusFailed = true;
     }
     c.phase = Phase::Idle; c.statusReady = true; c.statusDirty = c.statusFailed;
+    _banks[c.active].info.value.statusRefresh.finish(c.statusFailed, now);
     c.retryAt = c.statusFailed ? now + 1000 : 0;
     if (c.statusPublication == UINT32_MAX) { c.state = State::Exhausted; c.error = storage::Error::RevisionExhausted; }
     else ++c.statusPublication;

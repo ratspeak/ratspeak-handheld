@@ -1,6 +1,7 @@
 #pragma once
 
 #include "storage/StorageContract.h"
+#include "StatusRefresh.h"
 #include <cstddef>
 #include <cstdint>
 
@@ -82,6 +83,7 @@ public:
     // Ready includes explicit unavailable/error projections. This prevents a
     // changing backend or failed read from holding a body publication forever.
     bool statusReady() const { return control().statusReady; }
+    bool statusRefreshDelayed() const { return visible() && livePage().info.statusRefresh.delayed(); }
     uint32_t statusRevision() const { return control().statusPublication; }
 
     // LVGL may point labels at published text. A publication holds the old bank
@@ -159,6 +161,7 @@ private:
         uint8_t count = 0, first = 0, last = 0, spans = 0;
         storage::HistoryDirection direction = storage::HistoryDirection::Before;
         bool moreOlder = false, moreNewer = false, full = false;
+        StatusRefresh statusRefresh;
     };
     static_assert(sizeof(PageInfo) <= 64, "History page control exceeds its row-arena allocation");
     struct Page { storage::HistoryEntry entries[PageSize] = {}; PageInfo info; };
