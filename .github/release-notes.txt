@@ -1,8 +1,13 @@
-- Improve first-contact messaging when a handheld needs to discover the sender before receiving an attachment.
-- Answer path requests more reliably over LoRa and other interfaces, so peers can find a handheld without requiring a manual announce.
-- Browse peers in one continuous list, with steadier selection and live updates on every handheld.
-- Keep message delivery labels stable during status refreshes and show a separate retry action only after persistent refresh failures.
+## v2.2.4
 
-All handheld firmware is beta. Cardputer requires a Cap LoRa-1262 with an antenna for LoRa.
+### Fixed and improved
 
-Factory ZIP installs erase settings, identity, and internal message history. Back up anything you want to keep before installing.
+- Improved first-message delivery when a handheld needs to discover the sender before receiving an attachment.
+- Improved discovery over LoRa and other interfaces, reducing the need for manual announces.
+- Replaced peer-list pages with a continuous list and kept selection stable as peers update.
+- Prevented brief status-refresh failures from replacing or duplicating message delivery labels. A separate retry action appears only after persistent failures.
+
+### Build and compatibility
+
+- Handheld firmware remains in beta. Cardputer requires a Cap LoRa-1262 with an antenna for LoRa.
+- Factory ZIP installations erase settings, identity, and internal message history. Back up anything you want to keep before installing.
