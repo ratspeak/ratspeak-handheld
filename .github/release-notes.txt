@@ -1,9 +1,8 @@
-- Add ThinkNode M9 Standalone support, with keyboard navigation, LoRa, WiFi, GNSS and sound. RNode support is coming soon.
-- Show two chats per page on every handheld, with simpler page controls and message previews.
-- Load chats faster and update recent activity automatically.
-- Fix the Ratspeak Hub preset so WiFi connections can discover peers correctly.
-- Simplify Settings and the empty Contacts screen.
+- Improve first-contact messaging when a handheld needs to discover the sender before receiving an attachment.
+- Answer path requests more reliably over LoRa and other interfaces, so peers can find a handheld without requiring a manual announce.
+- Browse peers in one continuous list, with steadier selection and live updates on every handheld.
+- Keep message delivery labels stable during status refreshes and show a separate retry action only after persistent refresh failures.
 
 All handheld firmware is beta. Cardputer requires a Cap LoRa-1262 with an antenna for LoRa.
 
-Factory ZIP installs erase settings, identity and internal message history. Back up anything you want to keep before installing.
+Factory ZIP installs erase settings, identity, and internal message history. Back up anything you want to keep before installing.
