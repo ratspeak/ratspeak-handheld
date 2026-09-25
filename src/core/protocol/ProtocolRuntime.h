@@ -6,7 +6,7 @@
 #include "protocol/RustInterfacePump.h"
 #include "protocol/RustKeyMap.h"
 #include "protocol/RustLxmfEngine.h"
-#include "protocol/RustPathResponseCache.h"
+#include "runtime/ResourceBudget.h"
 #include "protocol/RustRatchetStore.h"
 #include "protocol/RustLinkManager.h"
 #include "protocol/RustResourceEngine.h"
@@ -129,12 +129,13 @@ private:
     void seedDedup(MessageStore* store);
     bool startEngines(FlashStore* flash, SDStore* sd, MessageStore* store,
                       AnnounceManager* announceMgr);
-    // Build + TX a signed lxmf.delivery announce with the given wire context (CTX_NONE for a
-    // normal announce, CTX_PATH_RESPONSE for a path-request answer). Refreshes _lastAnnounceMs.
-    AnnounceResult emitAnnounce(const uint8_t* appData, size_t len, uint8_t context,
-                                bool pathResponse);
-    // Answer a pending path request: re-announce our dest as a PATH_RESPONSE with the cached name.
-    void sendPathResponseAnnounce();
+    // Construction persists wire ordering before exposing signed bytes. Sent here means built;
+    // admission is separate so a refused path response retains the exact packet and lifetime.
+    AnnounceResult buildAnnouncePacket(const uint8_t* appData, size_t len, uint8_t context,
+                                      uint8_t* raw, size_t capacity, size_t& rawLen);
+    AnnounceResult emitAnnounce(const uint8_t* appData, size_t len);
+    void pollPathResponses();
+    void promotePathResponse(uint8_t ifaceId, uint64_t now);
 
     rs_handheld_rns_t* _ctx = nullptr;
     uint8_t* _nodeBuf = nullptr;
@@ -143,7 +144,7 @@ private:
     bool _identityLoaded = false;
     bool _nodeOpen = false;
     bool _enginesUp = false;
-    enum AnnounceTiming : uint8_t { PathPending = 1, NormalPending = 2, HasPathResponseTime = 4 };
+    enum AnnounceTiming : uint8_t { NormalPending = 2 };
     uint8_t _announceTiming = 0; // Uses the existing alignment gap after lifecycle flags.
     LoRaInterface* _maintenanceRadio = nullptr;
 
@@ -157,19 +158,38 @@ private:
     String _publicKeyHex;
     unsigned long _lastAnnounceMs = 0;
 
-    // Path-request self-response throttle (fix map §4). Layer 2: coalesce a burst of distinct-tag
-    // retries into ONE answer after a grace window. Layer 3: cap the answer rate regardless of tag.
-    // (Layer 1 — same-tag dedup — is handled inside the Rust node before the signal reaches us.)
-    static constexpr uint32_t PATH_REQUEST_GRACE_MS = 400;   // Python PATH_REQUEST_GRACE (burst coalesce)
-    static constexpr uint32_t PATH_RESP_DEDUP_MS = 5000;     // min interval between answers
-    // Explicit flags distinguish an inactive timer from a valid wrapped time0.
-    uint32_t _pathRespPendingUntil = 0;
-    uint32_t _lastPathRespMs = 0;
+    // One owner per physical interface prevents a blocked radio/socket from holding up
+    // another requester. Same-interface bursts share its forthcoming broadcast response.
+    // Duplicate-tag filtering stays in Rust; the five-second interval is pacing, not loss.
+    static constexpr uint32_t PATH_REQUEST_GRACE_MS = 400;
+    static constexpr uint32_t PATH_RESPONSE_INTERVAL_MS = 5000;
+    static constexpr uint32_t PATH_RESPONSE_MAX_AGE_MS = 30000;
+    static constexpr uint32_t PATH_RESPONSE_RETRY_MS = 50;
+    static constexpr size_t PATH_RESPONSE_INTERFACES = RustInterfacePump::WIFI_AP_IFACE_ID + 1;
+    struct PathResponse {
+        uint8_t raw[500] = {};
+        handheld::TxLease lease;
+        uint64_t bornMs = 0;
+        uint64_t readyMs = 0;
+        uint64_t packetBornMs = 0;
+        uint64_t lastSentMs = 0;
+        uint32_t generation = 0;
+        uint16_t rawLen = 0;
+        uint8_t tag[16] = {};
+        uint8_t tagLen = 0;
+        bool pending = false;
+        bool hasLastSent = false;
+        bool replay = false;
+        // A fresh request cannot be satisfied by already-seen replay bytes. Retain
+        // one coalesced followup, without a second packet buffer or renewable age.
+        uint64_t followupBornMs = 0;
+        uint8_t followupTag[16] = {};
+        uint8_t followupTagLen = 0;
+    } _pathResponses[PATH_RESPONSE_INTERFACES];
+    static_assert(sizeof(_pathResponses) <= handheld::ResourceBudget::PathResponses,
+                  "Review per-interface path-response retention budget");
     uint32_t _normalAnnouncePendingUntil = 0;
     size_t _normalAnnouncePendingLen = 0;
-    uint8_t _pendingPathResponseTag[16] = {};
-    size_t _pendingPathResponseTagLen = 0;
-    uint8_t _pendingPathResponseIface = RustInterfacePump::LORA_IFACE_ID;
     // Current name/capability bytes, seeded before ingress and refreshed after
     // committed settings changes. Shared by new path responses and nonempty
     // deferred normal announces; already admitted signed packets are immutable.
@@ -181,7 +201,6 @@ private:
     RustInterfacePump _pump;
     RustKeyMap _keymap;
     RustRatchetStore _ratchets;
-    RustPathResponseCache _pathResponseCache;
     RustLinkManager _links;
     RustResourceEngine _resources;
     RustLxmfEngine _lxmf;

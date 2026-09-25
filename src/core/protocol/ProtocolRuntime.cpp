@@ -296,9 +296,10 @@ void ProtocolRuntime::beginMaintenance(LoRaInterface& radio) {
     stopReceive();
     radio.beginMaintenance();
     _pump.stop();
-    _pathRespPendingUntil = _normalAnnouncePendingUntil = 0;
+    _normalAnnouncePendingUntil = 0;
+    for (auto& response : _pathResponses) response = {};
     _announceTiming = 0;
-    _normalAnnouncePendingLen = _pendingPathResponseTagLen = 0;
+    _normalAnnouncePendingLen = 0;
 }
 
 void ProtocolRuntime::pollMaintenance() {
@@ -351,12 +352,10 @@ void ProtocolRuntime::end() {
     }
     _nodeOpen = false;
     _identityLoaded = false;
-    _pathRespPendingUntil = 0;
     _normalAnnouncePendingUntil = 0;
     _normalAnnouncePendingLen = 0;
     _announceTiming = 0;
-    _pendingPathResponseTagLen = 0;
-    _pathResponseCache.clear();
+    for (auto& response : _pathResponses) response = {};
     _maintenanceRadio = nullptr;
 }
 
@@ -371,20 +370,13 @@ void ProtocolRuntime::loop() {
     if (_maintenanceRadio) { pollMaintenance(); return; }
     if (!_ctx || !_nodeOpen) return;
     _pump.loop();
-    // Fire a scheduled path-response re-announce off the ingest callstack once the grace window
-    // elapses (fix map §4) — a burst of requests inside the window collapses into this one answer.
-    if ((_announceTiming & PathPending) && int32_t(uint32_t(millis()) - _pathRespPendingUntil) >= 0 &&
-        pollRadioBeforeBlockingWork()) {
-        _announceTiming &= ~PathPending;
-        _pathRespPendingUntil = 0;
-        sendPathResponseAnnounce();
-    }
+    pollPathResponses();
     if ((_announceTiming & NormalPending) && int32_t(uint32_t(millis()) - _normalAnnouncePendingUntil) >= 0 &&
         pollRadioBeforeBlockingWork()) {
         _announceTiming &= ~NormalPending;
         _normalAnnouncePendingUntil = 0;
         const uint8_t* app = _normalAnnouncePendingLen ? _lastAppData : nullptr;
-        if (emitAnnounce(app, _normalAnnouncePendingLen, RustWire::CTX_NONE, false) ==
+        if (emitAnnounce(app, _normalAnnouncePendingLen) ==
             AnnounceResult::Deferred) {
             _normalAnnouncePendingUntil = millis() + 1000;
             _announceTiming |= NormalPending;
@@ -524,7 +516,7 @@ ProtocolBackend::AnnounceResult ProtocolRuntime::announce(const uint8_t* appData
         memcpy(_lastAppData, appData, len);
         _lastAppDataLen = len;
     }
-    const AnnounceResult result = emitAnnounce(appData, len, RustWire::CTX_NONE, false);
+    const AnnounceResult result = emitAnnounce(appData, len);
     if (result == AnnounceResult::Deferred) {
         if (len <= APP_DATA_MAX && (len == 0 || appData)) {
             _normalAnnouncePendingLen = len;
@@ -538,8 +530,9 @@ ProtocolBackend::AnnounceResult ProtocolRuntime::announce(const uint8_t* appData
     return result;
 }
 
-ProtocolRuntime::AnnounceResult ProtocolRuntime::emitAnnounce(const uint8_t* appData, size_t len,
-                                                      uint8_t context, bool pathResponse) {
+ProtocolRuntime::AnnounceResult ProtocolRuntime::buildAnnouncePacket(
+        const uint8_t* appData, size_t len, uint8_t context,
+        uint8_t* raw, size_t capacity, size_t& rawLen) {
     handheld::assertDeviceOwner();
     if (!_ctx || !_identityLoaded) {
         Serial.println("[RUST] announce: backend not ready");
@@ -572,90 +565,212 @@ ProtocolRuntime::AnnounceResult ProtocolRuntime::emitAnnounce(const uint8_t* app
         Serial.printf("[RUST] announce build failed (%d)\n", (int)st);
         return AnnounceResult::Failed;
     }
-    // Frame as a HEADER_1 broadcast ANNOUNCE (SINGLE dest) and TX on all interfaces.
-    uint8_t raw[640];
-    size_t rawLen = 0;
+    // Frame as a HEADER_1 broadcast ANNOUNCE (SINGLE dest). The caller owns admission.
+    rawLen = 0;
     st = rs_handheld_rns_packet_build_flagged(
         0, RustWire::PT_ANNOUNCE, RustWire::DT_SINGLE, context, haveRatchet ? 1 : 0, nullptr,
-        annDest, out, outLen, raw, sizeof(raw), &rawLen);
+        annDest, out, outLen, raw, capacity, &rawLen);
     if (st != RS_HANDHELD_OK || rawLen == 0) {
         Serial.printf("[RUST] announce frame build failed (%d)\n", (int)st);
         return AnnounceResult::Failed;
     }
-    handheld::TxLease responseLease;
-    const bool accepted = pathResponse
-                              ? (_pump.captureLease(_pendingPathResponseIface, raw, rawLen,
-                                                    responseLease) &&
-                                 _pump.sendLeased(raw, rawLen, responseLease))
-                              : _pump.sendAll(raw, rawLen);
-    if (!accepted) {
+    return AnnounceResult::Sent;
+}
+
+ProtocolRuntime::AnnounceResult ProtocolRuntime::emitAnnounce(const uint8_t* appData, size_t len) {
+    uint8_t raw[500];
+    size_t rawLen = 0;
+    const auto result = buildAnnouncePacket(appData, len, RustWire::CTX_NONE,
+                                           raw, sizeof(raw), rawLen);
+    if (result != AnnounceResult::Sent) return result;
+    if (!_pump.sendAll(raw, rawLen)) {
         Serial.println("[RUST] announce not accepted by any eligible interface");
         return AnnounceResult::Failed;
     }
-    if (pathResponse && _pendingPathResponseTagLen > 0) {
-        _pathResponseCache.store(_pendingPathResponseTag, _pendingPathResponseTagLen, raw, rawLen,
-                                 _clock.nowMs(), responseLease);
-    }
     _lastAnnounceMs = millis();
-    Serial.printf("[RUST] announce TX %u bytes app=%u%s%s\n", (unsigned)rawLen, (unsigned)len,
-                  pathResponse ? " (path-response)" : "",
-                  haveRatchet ? " ratcheted" : " base-key fallback");
+    Serial.printf("[RUST] announce TX %u bytes app=%u%s\n", (unsigned)rawLen, (unsigned)len,
+                  (raw[0] & 0x20) ? " ratcheted" : " base-key fallback");
 #ifdef PROTOCOL_PACKET_TRACE
-        // Optional serial diagnostic (-DPROTOCOL_PACKET_TRACE): emit the raw
-        // on-wire announce as hex so an offline Python RNS validator can byte-check
-        // what the hardware produced. Not built in mainline/release.
-        Serial.print("[ANN-WIRE] ");
-        for (size_t i = 0; i < rawLen; i++) Serial.printf("%02x", raw[i]);
-        Serial.println();
+    Serial.print("[ANN-WIRE] ");
+    for (size_t i = 0; i < rawLen; i++) Serial.printf("%02x", raw[i]);
+    Serial.println();
 #endif
     return AnnounceResult::Sent;
 }
 
 void ProtocolRuntime::onOwnPathRequest(uint8_t ifaceId, const uint8_t tag[16], size_t tagLen) {
     handheld::assertDeviceOwner();
-    if (_maintenanceRadio) return;
-    if (!tag || tagLen == 0 || tagLen > sizeof(_pendingPathResponseTag)) return;
-    memset(_pendingPathResponseTag, 0, sizeof(_pendingPathResponseTag));
-    memcpy(_pendingPathResponseTag, tag, tagLen);
-    _pendingPathResponseTagLen = tagLen;
-    _pendingPathResponseIface = ifaceId;
-    // A peer's cached path to us expired and it requested ours (endpoint parity with Python
-    // Transport.path_request local-dest branch). Schedule a throttled PATH_RESPONSE re-announce.
-    if (RustWire::schedulePathResponse(millis(), PATH_REQUEST_GRACE_MS, PATH_RESP_DEDUP_MS,
-            _pathRespPendingUntil, _lastPathRespMs, _announceTiming & PathPending,
-            _announceTiming & HasPathResponseTime)) _announceTiming |= PathPending;
-}
-
-void ProtocolRuntime::sendPathResponseAnnounce() {
-    handheld::assertDeviceOwner();
-    const uint8_t* cachedRaw = nullptr;
-    const handheld::TxLease* cachedLease = nullptr;
-    size_t cachedRawLen = 0;
-    if (_pathResponseCache.recall(_pendingPathResponseTag, _pendingPathResponseTagLen,
-                                  _clock.nowMs(), cachedRaw, cachedRawLen, cachedLease)) {
-        if (_pump.sendRetainedTo(_pendingPathResponseIface, cachedRaw, cachedRawLen, *cachedLease)) {
-            _lastAnnounceMs = millis();
-            _lastPathRespMs = millis();
-            _announceTiming |= HasPathResponseTime;
-            Serial.printf("[RUST] path-response replay TX %u exact cached bytes\n",
-                          (unsigned)cachedRawLen);
-        } else {
-            Serial.println("[RUST] cached path-response not accepted by request interface");
+    if (_maintenanceRadio || !_ctx || !_identityLoaded || ifaceId >= PATH_RESPONSE_INTERFACES ||
+        !tag || tagLen == 0 || tagLen > 16) return;
+    const uint32_t generation = _pump.interfaceGeneration(ifaceId);
+    if (!generation) return;
+    const uint64_t now = _clock.nowMs();
+    auto& response = _pathResponses[ifaceId];
+    if (response.generation != generation) response = {};
+    if (response.pending && (now < response.bornMs ||
+                             now - response.bornMs >= PATH_RESPONSE_MAX_AGE_MS)) {
+        response.pending = false;
+        response.rawLen = 0;
+        response.lease = {};
+    }
+    promotePathResponse(ifaceId, now);
+    if (response.pending) {
+        // A fresh forthcoming broadcast serves this physical interface's burst.
+        // A cached replay may already have been seen: retain a fresh followup too.
+        // Rust's bounded tag cache can evict, so its duplicate gate is not a substitute.
+        if (response.replay && !response.followupTagLen &&
+            (response.tagLen != tagLen || memcmp(response.tag, tag, tagLen))) {
+            memcpy(response.followupTag, tag, tagLen);
+            response.followupTagLen = uint8_t(tagLen);
+            response.followupBornMs = now;
         }
+        // Never replace the first tag, bytes, generation or either original deadline.
         return;
     }
-    // Reuse the cached display-name app_data; empty is a valid announce if we've never announced.
-    const uint8_t* app = _lastAppDataLen ? _lastAppData : nullptr;
-    const AnnounceResult result =
-        emitAnnounce(app, _lastAppDataLen, RustWire::CTX_PATH_RESPONSE, true);
-    if (result == AnnounceResult::Sent) {
-        _lastPathRespMs = millis();
-        _announceTiming |= HasPathResponseTime;
-    } else if (result == AnnounceResult::Deferred) {
-        // Never mark a deferred response as transmitted. Retry once the 1-second wall-order
-        // granularity can advance; this avoids fabricating a timestamp a few seconds in future.
-        _pathRespPendingUntil = millis() + 1000;
-        _announceTiming |= PathPending;
+
+    // Keep exact-tag replay ahead of fresh signing, with the original packet lifetime.
+    // A new request may authorize a new output generation; existing pending work cannot.
+    const PathResponse* cached = nullptr;
+    for (const auto& candidate : _pathResponses) {
+        if (candidate.rawLen && candidate.tagLen == tagLen &&
+            !memcmp(candidate.tag, tag, tagLen) && now >= candidate.packetBornMs &&
+            now - candidate.packetBornMs < PATH_RESPONSE_MAX_AGE_MS) {
+            cached = &candidate;
+            break;
+        }
+    }
+    response.replay = cached != nullptr;
+    if (cached) {
+        if (cached != &response) {
+            memcpy(response.raw, cached->raw, cached->rawLen);
+            response.rawLen = cached->rawLen;
+            response.lease = cached->lease;
+            response.packetBornMs = cached->packetBornMs;
+        }
+        response.lease.interfaceId = ifaceId;
+        response.lease.generation = generation;
+        response.bornMs = response.packetBornMs;
+    } else {
+        response.rawLen = 0;
+        response.lease = {};
+        response.bornMs = now;
+        response.packetBornMs = 0;
+    }
+    memcpy(response.tag, tag, tagLen);
+    response.tagLen = uint8_t(tagLen);
+    response.generation = generation;
+    response.readyMs = now + PATH_REQUEST_GRACE_MS;
+    if (response.hasLastSent && response.lastSentMs + PATH_RESPONSE_INTERVAL_MS > response.readyMs)
+        response.readyMs = response.lastSentMs + PATH_RESPONSE_INTERVAL_MS;
+    response.pending = true;
+}
+
+void ProtocolRuntime::promotePathResponse(uint8_t ifaceId, uint64_t now) {
+    auto& response = _pathResponses[ifaceId];
+    if (response.pending || !response.followupTagLen) return;
+    if (now < response.followupBornMs ||
+        now - response.followupBornMs >= PATH_RESPONSE_MAX_AGE_MS) {
+        response.followupTagLen = 0;
+        return;
+    }
+    memcpy(response.tag, response.followupTag, response.followupTagLen);
+    response.tagLen = response.followupTagLen;
+    response.bornMs = response.followupBornMs;
+    response.followupTagLen = 0;
+    response.rawLen = 0;
+    response.lease = {};
+    response.packetBornMs = 0;
+    response.replay = false;
+    response.readyMs = response.bornMs + PATH_REQUEST_GRACE_MS;
+    if (response.hasLastSent && response.lastSentMs + PATH_RESPONSE_INTERVAL_MS > response.readyMs)
+        response.readyMs = response.lastSentMs + PATH_RESPONSE_INTERVAL_MS;
+    response.pending = true;
+}
+
+void ProtocolRuntime::pollPathResponses() {
+    const uint64_t now = _clock.nowMs();
+    // A newly built signed packet can serve this snapshot of eligible interfaces. Its
+    // immutable copies have independent admission, original request age and generation.
+    const PathResponse* built = nullptr;
+    bool buildUnavailable = false;
+    for (uint8_t id = 0; id < PATH_RESPONSE_INTERFACES; ++id) {
+        auto& response = _pathResponses[id];
+        if (response.generation && response.generation != _pump.interfaceGeneration(id)) {
+            response = {};
+            continue;
+        }
+        if (response.pending && (now < response.bornMs ||
+                                 now - response.bornMs >= PATH_RESPONSE_MAX_AGE_MS)) {
+            response.pending = false;
+            response.rawLen = 0;
+            response.lease = {};
+            Serial.printf("[RUST] path-response expired iface=%u\n", (unsigned)id);
+        }
+        promotePathResponse(id, now);
+        if (!response.pending || now < response.readyMs) continue;
+        if (!response.rawLen) {
+            if (built) {
+                memcpy(response.raw, built->raw, built->rawLen);
+                response.rawLen = built->rawLen;
+            } else {
+                // Flash/signing must yield during an active radio burst; already-built
+                // socket replies below still progress independently of that radio.
+                if (!pollRadioBeforeBlockingWork()) continue;
+                if (buildUnavailable) {
+                    response.readyMs = now + 1000;
+                    continue;
+                }
+                size_t rawLen = 0;
+                const auto result = buildAnnouncePacket(_lastAppDataLen ? _lastAppData : nullptr,
+                    _lastAppDataLen, RustWire::CTX_PATH_RESPONSE,
+                    response.raw, sizeof(response.raw), rawLen);
+                if (result == AnnounceResult::Deferred) {
+                    response.readyMs = now + 1000;
+                    buildUnavailable = true;
+                    continue;
+                }
+                if (result != AnnounceResult::Sent) {
+                    // Construction/storage failures can be temporary too. Retry within
+                    // the unchanged operation deadline, never on every owner loop.
+                    response.readyMs = now + 1000;
+                    buildUnavailable = true;
+                    continue;
+                }
+                response.rawLen = uint16_t(rawLen);
+                built = &response;
+            }
+            if (!_pump.captureLeaseAt(id, response.raw, response.rawLen, response.bornMs,
+                                       PATH_RESPONSE_MAX_AGE_MS, response.lease) ||
+                response.lease.generation != response.generation) {
+                response.pending = false;
+                response.rawLen = 0;
+                if (built == &response) built = nullptr;
+                continue;
+            }
+            response.packetBornMs = response.bornMs;
+        }
+        if (!_pump.leaseLive(response.lease)) {
+            response.pending = false;
+            response.rawLen = 0;
+            if (built == &response) built = nullptr;
+            continue;
+        }
+        if (_pump.sendLeased(response.raw, response.rawLen, response.lease)) {
+            response.pending = false;
+            response.lastSentMs = now;
+            response.hasLastSent = true;
+            _lastAnnounceMs = millis();
+            Serial.printf("[RUST] path-response TX %u bytes iface=%u\n",
+                          (unsigned)response.rawLen, (unsigned)id);
+#ifdef PROTOCOL_PACKET_TRACE
+            Serial.print("[ANN-WIRE] ");
+            for (size_t i = 0; i < response.rawLen; ++i) Serial.printf("%02x", response.raw[i]);
+            Serial.println();
+#endif
+        }
+        // A live lease refused by a full queue/socket stays owned here, byte-for-byte.
+        // Retry admission at a bounded cadence without moving its original expiry.
+        if (response.pending) response.readyMs = now + PATH_RESPONSE_RETRY_MS;
     }
 }
 

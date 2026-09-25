@@ -32,6 +32,9 @@ struct ResourceBudget {
     static constexpr size_t AutoPeers = 16; // preserves configured maximum
     static constexpr size_t LoRaRetainedBytes = 4096;
     static constexpr size_t PendingFrame = 640;
+    // Seven signed packets with original lifetimes, pacing and bounded replay followups.
+    // Their bytes also serve as the bounded exact-tag replay cache (no duplicate pool).
+    static constexpr size_t PathResponses = 7 * 720;
     static constexpr size_t InputEvents = 8;
     static constexpr size_t InputEventBytes = 16;
     static constexpr size_t InputRetention = InputEvents * InputEventBytes;
