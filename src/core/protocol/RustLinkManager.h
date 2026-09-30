@@ -63,6 +63,9 @@ public:
     const uint8_t* activeLinkId(const uint8_t dest[16]) const;
     uint8_t activeLinkIface(const uint8_t dest[16]) const;
     bool linkActive(const uint8_t dest[16]) const;
+    // A false ensureLink may be local backpressure. Only an admitted handshake
+    // owns a network timeout; callers must not age a full pool as peer failure.
+    bool linkEstablishing(const uint8_t dest[16]) const;
 
     enum class RequestError : uint8_t { Timeout, LinkClosed, Unsupported, Invalid };
     struct RequestSink {

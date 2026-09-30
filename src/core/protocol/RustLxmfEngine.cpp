@@ -632,11 +632,11 @@ void RustLxmfEngine::attempt(Ticket ticket) {
     }
 }
 
-void RustLxmfEngine::onResourceOutcome(Ticket ticket, bool delivered) {
+void RustLxmfEngine::onResourceOutcome(Ticket ticket, handheld::outgoing::ResourceOutcome outcome) {
     auto* value = row(ticket);
     if (!value || value->phase != Phase::Resource) return;
     value->receiptMask &= ~8; value->phase = Phase::Settled;
-    setStatus(ticket, delivered ? LXMFStatus::DELIVERED : LXMFStatus::FAILED);
+    setStatus(ticket, outcome == handheld::outgoing::ResourceOutcome::Delivered ? LXMFStatus::DELIVERED : LXMFStatus::FAILED);
 }
 
 bool RustLxmfEngine::validatesReceipt(const OutgoingRow& value, const rs_handheld_local_frame_t& frame) const {

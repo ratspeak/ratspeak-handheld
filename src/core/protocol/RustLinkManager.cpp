@@ -173,6 +173,12 @@ bool RustLinkManager::sendLinkFrame(Link& l, uint8_t context, const uint8_t* pay
                 payload, len, outHash);
 }
 
+bool RustLinkManager::linkEstablishing(const uint8_t dest[16]) const {
+    for (const auto& link : _links)
+        if (link.initiator && link.state == State::InitRequested && !memcmp(link.peerDest, dest, 16)) return true;
+    return false;
+}
+
 bool RustLinkManager::ensureLink(const uint8_t dest[16], const uint8_t pubkey[64],
                                  const rs_handheld_route_t& route) {
     if (route.kind != RS_HANDHELD_ROUTE_DIRECT) return false;

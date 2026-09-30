@@ -27,9 +27,9 @@ public:
         RustLxmfEngine* lxmf = nullptr;
         RustLinkManager* links = nullptr;
     };
-    // Called with the exact outgoing ticket when a resource resolves: true on a valid
-    // delivery proof, false on cancellation/timeout — LXMF flips DELIVERED / FAILED.
-    using OutcomeCb = std::function<void(handheld::outgoing::Ticket, bool)>;
+    using Outcome = handheld::outgoing::ResourceOutcome;
+    // The exact ticket and cause let AUTO distinguish timeout from explicit refusal.
+    using OutcomeCb = std::function<void(handheld::outgoing::Ticket, Outcome)>;
 
     void begin(const Deps& deps) { _d = deps; }
     void setOutcomeCallback(OutcomeCb cb) { _outcome = cb; }
@@ -115,7 +115,7 @@ private:
     void cancelOutbound();
     void closeInbound(bool cancel, bool keepReceipt = false);
     uint32_t waitMs(uint8_t iface, uint32_t packets, uint32_t minimum) const;
-    void closeOutbound(bool delivered, bool notify = true);
+    void closeOutbound(Outcome, bool notify = true);
 
     Deps _d;
     Out _out;

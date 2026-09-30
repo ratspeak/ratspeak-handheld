@@ -115,18 +115,18 @@ bool RustResourceEngine::startSend(handheld::outgoing::Ticket ticket, const uint
     _out.reqReceived = false;
     if (!frameLinkEncrypted(ifaceId, linkId, key, RustWire::PT_DATA, RustWire::CTX_RESOURCE_ADV,
                             adv, advLen)) {
-        closeOutbound(false, false);
+        closeOutbound(Outcome::Cancelled, false);
         return false;
     }
     Serial.printf("[RUST-RES] sender ADV sent (%u parts)\n", (unsigned)numParts);
     return true;
 }
 
-void RustResourceEngine::closeOutbound(bool delivered, bool notify) {
+void RustResourceEngine::closeOutbound(Outcome outcome, bool notify) {
     const auto ticket = _out.ticket;
     rs_handheld_rns_resource_outbound_close(_d.ctx);
     _out = Out{};
-    if (notify && _outcome) _outcome(ticket, delivered);
+    if (notify && _outcome) _outcome(ticket, outcome);
 }
 
 void RustResourceEngine::cancelSend(handheld::outgoing::Ticket ticket) {
@@ -135,13 +135,13 @@ void RustResourceEngine::cancelSend(handheld::outgoing::Ticket ticket) {
     // The independent terminal-control pool owns any admitted cancellation.
     frameLinkEncrypted(_out.iface, _out.linkId, _out.key, RustWire::PT_DATA,
         RustWire::CTX_RESOURCE_ICL, _out.resourceHash, 32, true);
-    closeOutbound(false);
+    closeOutbound(Outcome::Cancelled);
 }
 
 void RustResourceEngine::cancelOutbound() {
     if (!frameLinkEncrypted(_out.iface, _out.linkId, _out.key, RustWire::PT_DATA,
                             RustWire::CTX_RESOURCE_ICL, _out.resourceHash, 32, true)) return;
-    closeOutbound(false);
+    closeOutbound(Outcome::NetworkFailure);
 }
 
 void RustResourceEngine::closeInbound(bool cancel, bool keepReceipt) {
@@ -267,7 +267,7 @@ void RustResourceEngine::onLinkFrame(const uint8_t peerDest[16], const uint8_t l
     if (f.context == RustWire::CTX_RESOURCE_RCL && outbound) {
         uint8_t hash[48]; size_t len = 0;
         if (rs_handheld_rns_link_decrypt(key, f.payload, f.payload_len, hash, sizeof(hash), &len) ==
-            RS_HANDHELD_OK && len == 32 && !memcmp(hash, _out.resourceHash, 32)) closeOutbound(false);
+            RS_HANDHELD_OK && len == 32 && !memcmp(hash, _out.resourceHash, 32)) closeOutbound(Outcome::Rejected);
         return;
     }
 
@@ -303,7 +303,7 @@ void RustResourceEngine::onLinkFrame(const uint8_t peerDest[16], const uint8_t l
                 RS_HANDHELD_OK &&
             valid) {
             Serial.println("[RUST-RES] sender transfer DELIVERED");
-            closeOutbound(true);
+            closeOutbound(Outcome::Delivered);
         }
         return;
     }
@@ -382,7 +382,7 @@ void RustResourceEngine::loop() {
     // A dead Link cannot carry terminal ICL. Close the exact local transfer
     // instead of retrying an impossible cancellation admission forever.
     if (_out.active && (!_d.lxmf || _d.lxmf->resourceSendBinding(_out.ticket, _out.iface, _out.linkId) != _out.linkBinding))
-        closeOutbound(false);
+        closeOutbound(Outcome::NetworkFailure);
     if (_out.active) {
         servePendingParts();
         const uint32_t idleLimit = _out.reqReceived
@@ -449,7 +449,7 @@ void RustResourceEngine::endAll() {
 
 void RustResourceEngine::dropPeer(const uint8_t peerDest[16]) {
     if (_out.active && memcmp(_out.peerDest, peerDest, 16) == 0) {
-        closeOutbound(false, false);
+        closeOutbound(Outcome::Cancelled, false);
     }
     if (_in.active && memcmp(_in.peerDest, peerDest, 16) == 0) {
         closeInbound(false);

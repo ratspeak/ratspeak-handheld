@@ -52,7 +52,7 @@ public:
     int queuedCount() const;
     void loop();
     void onLinkSetupFailure(const uint8_t peer[16], const rs_handheld_route_t& failedRoute);
-    void onResourceOutcome(Ticket, bool delivered);
+    void onResourceOutcome(Ticket, handheld::outgoing::ResourceOutcome);
     handheld::TxOffer offerResource(Ticket, uint8_t iface, const uint8_t* raw, size_t length, uint64_t bornMs);
     uint64_t resourceSendBinding(Ticket, uint8_t iface, const uint8_t linkId[16]) const;
     static bool receiptHook(void*, handheld::TxReceipt, handheld::TxReceiptEvent);

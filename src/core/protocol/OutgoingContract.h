@@ -22,6 +22,8 @@ struct Submission {
     constexpr bool accepted() const { return rejection == Rejection::None && ticket.valid(); }
 };
 enum class Poll : uint8_t { Invalid, Pending, Ready };
+// Explicit rejection and local cancellation must not become network fallback.
+enum class ResourceOutcome : uint8_t { Delivered, NetworkFailure, Rejected, Cancelled };
 // Immutable until acknowledge(). Committed remains authoritative when error
 // describes an optional mirror failure or cancellation suppressed network TX.
 struct InitialResult {

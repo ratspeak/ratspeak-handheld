@@ -136,7 +136,7 @@ bool ProtocolRuntime::startEngines(FlashStore* flash, SDStore* sd, MessageStore*
     rd.lxmf = &_lxmf;
     _resources.begin(rd);
     // Resource proof = delivery ack: flip the tracked resource-sent message DELIVERED/FAILED.
-    _resources.setOutcomeCallback([this](handheld::outgoing::Ticket ticket, bool delivered) {
+    _resources.setOutcomeCallback([this](handheld::outgoing::Ticket ticket, handheld::outgoing::ResourceOutcome delivered) {
         _lxmf.onResourceOutcome(ticket, delivered);
     });
 
