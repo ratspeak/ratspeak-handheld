@@ -51,6 +51,13 @@ struct LXMFMessage {
             case LXMFStatus::PROPAGATED: return "PROPAGATED";
             case LXMFStatus::PROP_UNAVAILABLE: return "PROP UNAVAILABLE";
             case LXMFStatus::PROP_UNCONFIRMED: return "PROP UNCONFIRMED";
+            case LXMFStatus::RECIPIENT_UNKNOWN: return "RECIPIENT UNKNOWN";
+            case LXMFStatus::STAMP_UNKNOWN: return "STAMP UNKNOWN";
+            case LXMFStatus::STAMP_COST_HIGH: return "STAMP COST HIGH";
+            case LXMFStatus::STAMP_FAILED: return "STAMP FAILED";
+            case LXMFStatus::PROP_TOO_LARGE: return "PROP TOO LARGE";
+            case LXMFStatus::PROP_REJECTED: return "PROP REJECTED";
+            case LXMFStatus::PROP_INVALID: return "PROP INVALID";
         }
         return "?";
     }

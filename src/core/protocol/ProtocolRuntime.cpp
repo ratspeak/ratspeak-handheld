@@ -135,7 +135,7 @@ bool ProtocolRuntime::startEngines(FlashStore* flash, SDStore* sd, MessageStore*
     rd.pump = &_pump;
     rd.lxmf = &_lxmf;
     _resources.begin(rd);
-    // Resource proof = delivery ack: flip the tracked resource-sent message DELIVERED/FAILED.
+    // The outgoing owner interprets proof by delivery purpose (recipient or relay).
     _resources.setOutcomeCallback([this](handheld::outgoing::Ticket ticket, handheld::outgoing::ResourceOutcome delivered) {
         _lxmf.onResourceOutcome(ticket, delivered);
     });
@@ -151,6 +151,7 @@ bool ProtocolRuntime::startEngines(FlashStore* flash, SDStore* sd, MessageStore*
     ed.onMessage = &_onMessage;
     ed.statusCb = &_statusCb;
     ed.ourDestHash = _destHash;
+    ed.propagation = &_propagationNodes;
     if (!_lxmf.begin(ed)) return false;
     _enginesUp = true;
     return true;
@@ -513,7 +514,7 @@ void ProtocolRuntime::pollPropagation() {
         if (const auto* node = _propagationNodes.at(i)) refresh(node->address);
     const auto& settings = _propagationNodes.settings();
     if (settings.hasManual) refresh(settings.manual);
-    _propagationNodes.select(now, _resources.activeTransfers() == 0);
+    _propagationNodes.select(now, _resources.activeTransfers() == 0 && !_lxmf.propagationBusy() && !_links.requestPending());
 }
 
 void ProtocolRuntime::onLocalFrame(const rs_handheld_local_frame_t& f, uint8_t ifaceId) {

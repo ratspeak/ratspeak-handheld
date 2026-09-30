@@ -966,8 +966,7 @@ void MessageTransactions::trim(const Request& request, Result& result) {
                 if (after.counter && !historyLess(after, entry)) continue;
                 StoredRecordHeader header; const auto error = load(key, document, header);
                 if (error != Error::None) { result.error = error; continue; }
-                if (!header.incoming && header.status != 4 && header.status != 5 &&
-                    header.status != 9 && header.status != 10) continue;
+                if (!header.incoming && header.status != 4 && header.status != 9 && !messaging::failedStatus(header.status)) continue;
                 size_t at = 0;
                 while (at < selected && historyLess({oldest[at].counter, oldest[at].incoming}, entry)) ++at;
                 if (at == 8) continue;

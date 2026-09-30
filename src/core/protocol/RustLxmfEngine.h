@@ -6,6 +6,8 @@
 #include "config/Config.h"
 #include "RustIncomingDelivery.h"
 #include "OutgoingContract.h"
+#include "PropagationNodes.h"
+#include "RustStampWork.h"
 
 class MessageStore;
 class RustClock;
@@ -30,6 +32,7 @@ public:
         LXMFManager::MessageCallback* onMessage = nullptr;
         LXMFManager::StatusCallback* statusCb = nullptr;
         const uint8_t* ourDestHash = nullptr;  // 16 bytes, our lxmf.delivery dest
+        handheld::propagation::Nodes* propagation = nullptr;
     };
 
     using Ticket = handheld::outgoing::Ticket;
@@ -51,6 +54,7 @@ public:
     void finishPeerDelete(const uint8_t peer[16], const handheld::storage::Result&);
     int queuedCount() const;
     void loop();
+    bool propagationBusy() const { return _relay.ticket.valid(); }
     void onLinkSetupFailure(const uint8_t peer[16], const rs_handheld_route_t& failedRoute);
     void onResourceOutcome(Ticket, handheld::outgoing::ResourceOutcome);
     handheld::TxOffer offerResource(Ticket, uint8_t iface, const uint8_t* raw, size_t length, uint64_t bornMs);
@@ -70,10 +74,11 @@ public:
 private:
     static constexpr uint8_t RowCount = 20, ReceiptBase = 128, ProofAttempts = 3;
     static_assert(ReceiptBase + RowCount * 4 <= UINT8_MAX, "Outgoing receipt namespace overlaps invalid handle");
-    enum class Phase : uint8_t { Free, Saving, Query, Ready, Reading, Prepared, AwaitProof, Resource, Grace, Settled };
+    enum class Phase : uint8_t { Free, Saving, Query, Ready, Reading, Prepared, AwaitProof, Resource, Grace, Settled, Relay };
     enum Flag : uint16_t { Acknowledged = 1, Suppressed = 2, InitialSuppressed = 4,
         PreferLink = 8, ViaLink = 16, Rediscover = 32, Deleted = 64, DeletePending = 128,
-        Recovered = 256, Notify = 512, BlockedRecord = 1024, ProofGrace = 2048 };
+        Recovered = 256, Notify = 512, BlockedRecord = 1024, ProofGrace = 2048,
+        PolicyAuto = 4096, PolicyAlways = 8192, RelayRequired = 16384, PausedRelay = 32768 };
     struct OutgoingRow {
         double timestamp = 0;
         uint64_t storageSequence = 0, nextAttempt = 0, linkSince = 0, receiptSince = 0, statusRetry = 0;
@@ -115,6 +120,27 @@ private:
     void offerPrepared(Ticket);
     void setStatus(Ticket, LXMFStatus);
     void finishRouteFailure(Ticket);
+    bool beginRelay(Ticket);
+    void advanceRelay(Ticket);
+    void prepareRelay(Ticket);
+    bool settleRelayStorage(Ticket);
+    void sendRelay(Ticket, size_t entryLength);
+    void finishRelay(Ticket, LXMFStatus, bool networkFailure = false);
+    void resetRelay();
+    bool relayAllowed() const;
+    struct RelayWork {
+        enum class Stage : uint8_t { Select, Load, Read, RecipientStamp, Encrypt, NodeStamp, Link, Reload, Await };
+        RustStampWork work;
+        Ticket ticket;
+        uint64_t born = 0, requestAt = 0, sentAt = 0;
+        uint8_t node[16]{}, nodeKey[64]{}, transient[32]{}, preparedId[32]{};
+        uint8_t recipientStamp[32]{}, nodeStamp[32]{}, packetHash[32]{};
+        uint32_t waitMs = 0;
+        Stage stage = Stage::Select;
+        uint8_t recipientCost = 0, nodeCost = 0;
+        bool prepared = false, verified = false, emitted = false, packet = false;
+    };
+    static_assert(sizeof(RelayWork) <= handheld::ResourceBudget::RelayPreparation, "Review relay metadata budget");
     bool validatesReceipt(const OutgoingRow&, const rs_handheld_local_frame_t&) const;
     bool buildPacketProof(const uint8_t packetHash[32], uint8_t raw[128], size_t& length);
     void requestUnknownSource(const uint8_t source[16]);
@@ -124,10 +150,12 @@ private:
     Deps _d;
     OutgoingRow _rows[RowCount];
     BodyWorkspace _body;
+    RelayWork _relay;
     handheld::storage::RecordKey _recoveryCursor;
     uint8_t _deletingPeer[16] = {};
     uint32_t _identityGeneration = 0, _statusRevision = 0;
     uint8_t _cursor = 0;
+    bool _propagationWasEnabled = false;
     bool _accepting = false, _recovering = false, _polling = false, _deleting = false;
     SourceRequest _sourceRequests[SOURCE_REQUEST_SLOTS];
     RustIncomingDelivery _incoming;

@@ -683,6 +683,13 @@ void LvMessageView::appendMessage(size_t index, const Span& span, const char* te
                 textColor = Theme::TEXT_PRIMARY; break;
             case LXMFStatus::FAILED:
             case LXMFStatus::PROP_UNAVAILABLE:
+            case LXMFStatus::RECIPIENT_UNKNOWN:
+            case LXMFStatus::STAMP_UNKNOWN:
+            case LXMFStatus::STAMP_COST_HIGH:
+            case LXMFStatus::STAMP_FAILED:
+            case LXMFStatus::PROP_TOO_LARGE:
+            case LXMFStatus::PROP_REJECTED:
+            case LXMFStatus::PROP_INVALID:
                 textColor = Theme::ERROR_CLR; break;
             default:
                 textColor = Theme::TEXT_PRIMARY; break;
@@ -805,6 +812,13 @@ void LvMessageView::applyStatusGlyph(lv_obj_t* lbl, const Span& span) {
             break;
         case LXMFStatus::FAILED:
         case LXMFStatus::PROP_UNAVAILABLE:
+        case LXMFStatus::RECIPIENT_UNKNOWN:
+        case LXMFStatus::STAMP_UNKNOWN:
+        case LXMFStatus::STAMP_COST_HIGH:
+        case LXMFStatus::STAMP_FAILED:
+        case LXMFStatus::PROP_TOO_LARGE:
+        case LXMFStatus::PROP_REJECTED:
+        case LXMFStatus::PROP_INVALID:
             color = Theme::ERROR_CLR;
             break;
         case LXMFStatus::UNCONFIRMED:

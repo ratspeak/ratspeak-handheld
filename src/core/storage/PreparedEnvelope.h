@@ -40,14 +40,18 @@ inline bool make(uint8_t (&out)[Header], const RecordKey& key, const uint8_t sou
 }
 // CRC detects storage damage. The protocol owner independently recomputes the
 // transient hash and validates its message binding before any network operation.
-inline bool valid(const uint8_t* bytes, size_t length, const RecordKey& key,
-                  const uint8_t source[16], const uint8_t* messageId = nullptr) {
-    if (!bytes || !source || !key.counter || key.incoming || length < Header + 112 || length > Max ||
+inline bool validParts(const uint8_t* bytes, const uint8_t* entry, size_t length, const RecordKey& key,
+                       const uint8_t source[16], const uint8_t* messageId = nullptr) {
+    if (!bytes || !entry || !source || !key.counter || key.incoming || length < 112 || length > EntryMax ||
         std::memcmp(bytes, "HPW1", 4) || read32(bytes + 4) != key.counter ||
         std::memcmp(bytes + 8, source, 16) || std::memcmp(bytes + 24, key.peer, 16) ||
-        std::memcmp(bytes + Header, key.peer, 16) || bytes[107] ||
-        size_t(bytes[104] | uint16_t(bytes[105]) << 8) != length - Header ||
+        std::memcmp(entry, key.peer, 16) || bytes[107] ||
+        size_t(bytes[104] | uint16_t(bytes[105]) << 8) != length ||
         (messageId && std::memcmp(bytes + 40, messageId, 32))) return false;
-    return read32(bytes + 108) == ~checksum(checksum(UINT32_MAX, bytes, 108), bytes + Header, length - Header);
+    return read32(bytes + 108) == ~checksum(checksum(UINT32_MAX, bytes, 108), entry, length);
+}
+inline bool valid(const uint8_t* bytes, size_t length, const RecordKey& key,
+                  const uint8_t source[16], const uint8_t* messageId = nullptr) {
+    return bytes && length >= Header && validParts(bytes, bytes + Header, length - Header, key, source, messageId);
 }
 }
