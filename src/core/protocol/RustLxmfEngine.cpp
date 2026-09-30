@@ -209,6 +209,14 @@ void RustLxmfEngine::setStatus(Ticket ticket, LXMFStatus status) {
     auto* value = row(ticket);
     if (!value || (value->flags & Deleted) || value->desired == LXMFStatus::DELIVERED || value->desired == status) return;
     value->desired = status; value->statusRetry = 0; value->flags |= Notify; ++_statusRevision;
+    if (_relay.ticket == ticket && _relay.direct &&
+        (handheld::messaging::failedStatus(uint8_t(status)) || status == LXMFStatus::UNCONFIRMED)) {
+        if (value->proofCount && !(value->flags & ProofGrace)) {
+            value->flags |= ProofGrace; value->receiptSince = _d.clock->nowMs();
+            value->phase = Phase::Grace;
+        }
+        resetRelay();
+    }
     if (status == LXMFStatus::DELIVERED) {
         value->receiptMask = 0; value->phase = Phase::Settled; releaseBody(ticket);
         if (_d.resources) _d.resources->cancelSend(ticket);
@@ -592,6 +600,21 @@ void RustLxmfEngine::attempt(Ticket ticket) {
         }
         return;
     }
+    uint8_t recipientCost = 0;
+    const bool knownCost = _d.keymap && _d.keymap->recallCost(value->peer, RustClock::synchronizedEpochSecs(), now, recipientCost);
+    if (_relay.ticket == ticket && _relay.direct && !knownCost) {
+        releaseBody(ticket); value->phase = Phase::Settled; setStatus(ticket, LXMFStatus::STAMP_UNKNOWN); return;
+    }
+    if (knownCost && recipientCost > RustStampWork::MaxCost) {
+        releaseBody(ticket); value->phase = Phase::Settled; setStatus(ticket, LXMFStatus::STAMP_COST_HIGH); return;
+    }
+    if (knownCost && recipientCost) {
+        value->flags |= PreferLink | ViaLink;
+        if (route.kind != RS_HANDHELD_ROUTE_DIRECT) {
+            value->route = route; value->flags |= Rediscover;
+            releaseBody(ticket); value->phase = Phase::Ready; value->nextAttempt = now; return;
+        }
+    }
     const auto& header = _body.header;
     if (!(value->flags & (ViaLink | PreferLink))) {
         uint8_t ephemeral[32], iv[16], cipher[600], destination[16], messageId[32]; size_t cipherLength = 0;
@@ -633,6 +656,13 @@ void RustLxmfEngine::attempt(Ticket ticket) {
         packed, RS_HANDHELD_RESOURCE_DATA_MAX, &length, destination, value->messageId);
     if (built != RS_HANDHELD_OK || memcmp(destination, value->peer, 16)) {
         releaseBody(ticket); value->phase = Phase::Settled; setStatus(ticket, LXMFStatus::FAILED); return;
+    }
+    if (recipientCost || (_relay.ticket == ticket && _relay.direct)) {
+        if (!directStamp(ticket, recipientCost)) return;
+        if (rs_handheld_lxmf_append_stamp(packed, length, RS_HANDHELD_RESOURCE_DATA_MAX,
+                _relay.recipientStamp, &length) != RS_HANDHELD_OK) {
+            releaseBody(ticket); value->phase = Phase::Settled; setStatus(ticket, LXMFStatus::STAMP_FAILED); return;
+        }
     }
     if (length <= RS_HANDHELD_LINK_MDU) {
         uint8_t raw[500]; size_t rawLength = 0;
@@ -739,6 +769,10 @@ void RustLxmfEngine::advance(Ticket ticket) {
         return;
     }
     if (!_accepting) return;
+    if (value->phase == Phase::Stamp) {
+        if (_relay.ticket == ticket && !_relay.work.busy()) { value->phase = Phase::Ready; value->nextAttempt = 0; }
+        return;
+    }
     if (value->flags & RelayRequired) {
         if ((!_d.propagation || !_d.propagation->settings().enabled) && _relay.ticket != ticket &&
             (value->phase == Phase::Relay || value->phase == Phase::Reading)) {
@@ -934,7 +968,8 @@ void RustLxmfEngine::resetRelay() {
     _relay.work.reset(); _relay.ticket = {};
     _relay.born = _relay.requestAt = _relay.sentAt = 0;
     _relay.stage = RelayWork::Stage::Select;
-    _relay.recipientCost = _relay.nodeCost = 0;
+    _relay.recipientCost = _relay.nodeCost = _relay.stampedCost = 0;
+    _relay.direct = _relay.haveRecipientStamp = false;
     _relay.prepared = _relay.verified = _relay.emitted = _relay.packet = false;
     _relay.waitMs = 0;
     memset(_relay.node, 0, sizeof _relay.node);
@@ -947,6 +982,7 @@ void RustLxmfEngine::resetRelay() {
 }
 
 bool RustLxmfEngine::relayAllowed() const {
+    if (_relay.direct) return _accepting;
     if (!_d.propagation || !_d.propagation->settings().enabled) return false;
     const auto& settings = _d.propagation->settings();
     return !_relay.ticket.valid() || _relay.stage == RelayWork::Stage::Select ||
@@ -959,6 +995,11 @@ bool RustLxmfEngine::beginRelay(Ticket ticket) {
     if (!value || !(value->flags & PolicyAuto) || value->flags & (RelayRequired | Suppressed) ||
         !_d.propagation || !_d.propagation->settings().enabled) return false;
     releaseBody(ticket);
+    if (_relay.ticket == ticket && _relay.direct) {
+        _relay.direct = false; _relay.stage = RelayWork::Stage::Select;
+        _relay.born = _d.clock->nowMs(); _relay.requestAt = 0;
+        _relay.work.reset(); // Completed recipient nonce is retained with its MID.
+    }
     value->flags |= RelayRequired;
     value->flags &= ~Rediscover;
     value->receiptMask = 0; // Invalidate queued direct attempts before committing fallback.
@@ -1051,6 +1092,11 @@ void RustLxmfEngine::advanceRelay(Ticket ticket) {
         if (_relay.work.busy()) return;
         if (_relay.work.state() != RustStampWork::State::Complete) { finishRelay(ticket, LXMFStatus::STAMP_FAILED); return; }
         memcpy(recipient ? _relay.recipientStamp : _relay.nodeStamp, _relay.work.progress().stamp, 32);
+        if (recipient) {
+            _relay.haveRecipientStamp = true;
+            _relay.stampedCost = uint8_t(std::min<uint16_t>(255, _relay.work.progress().value));
+            memcpy(_relay.preparedId, value->messageId, 32);
+        }
         _relay.work.reset();
         _relay.stage = recipient ? Stage::Encrypt : Stage::Link;
         _relay.born = now; _relay.requestAt = 0;
@@ -1106,7 +1152,9 @@ void RustLxmfEngine::prepareRelay(Ticket ticket) {
     if (!node || uploadSize > node->transferBytes) { finishRelay(ticket, LXMFStatus::PROP_TOO_LARGE); return; }
     memcpy(value->messageId, messageId, 32);
     if (_relay.prepared) { _relay.verified = true; _relay.stage = Stage::NodeStamp; return; }
-    if (_relay.stage == Stage::Read && _relay.recipientCost) {
+    if (_relay.stage == Stage::Read && _relay.recipientCost &&
+        !(_relay.haveRecipientStamp && _relay.stampedCost >= _relay.recipientCost &&
+          !memcmp(_relay.preparedId, messageId, 32))) {
         _relay.stage = Stage::RecipientStamp; return;
     }
     if (_relay.recipientCost && rs_handheld_lxmf_append_stamp(packed, length, RS_HANDHELD_RESOURCE_DATA_MAX,
@@ -1221,4 +1269,33 @@ void RustLxmfEngine::sendRelay(Ticket ticket, size_t entryLength) {
             value->nextAttempt = now + TX_RETRY_MS;
         }
     }
+}
+
+bool RustLxmfEngine::directStamp(Ticket ticket, uint8_t cost) {
+    auto* value = row(ticket);
+    if (!value) return false;
+    const uint64_t now = _d.clock->nowMs();
+    if (_relay.ticket.valid() && _relay.ticket != ticket) {
+        releaseBody(ticket); value->phase = Phase::Ready; value->nextAttempt = now + TX_RETRY_MS; return false;
+    }
+    if (!_relay.ticket.valid()) {
+        _relay.ticket = ticket; _relay.direct = true; _relay.born = now; _relay.recipientCost = cost;
+        memcpy(_relay.preparedId, value->messageId, 32);
+        if (!_relay.work.start(value->messageId, 0, cost, now)) {
+            releaseBody(ticket); value->phase = Phase::Settled; setStatus(ticket, LXMFStatus::STAMP_FAILED); return false;
+        }
+    }
+    if (!_relay.direct || memcmp(_relay.preparedId, value->messageId, 32) || cost > _relay.recipientCost) {
+        releaseBody(ticket); value->phase = Phase::Settled; setStatus(ticket, LXMFStatus::STAMP_FAILED); return false;
+    }
+    if (_relay.work.busy()) {
+        releaseBody(ticket); value->phase = Phase::Stamp; return false;
+    }
+    if (_relay.work.state() != RustStampWork::State::Complete) {
+        releaseBody(ticket); value->phase = Phase::Settled; setStatus(ticket, LXMFStatus::STAMP_FAILED); return false;
+    }
+    memcpy(_relay.recipientStamp, _relay.work.progress().stamp, 32);
+    _relay.stampedCost = uint8_t(std::min<uint16_t>(255, _relay.work.progress().value));
+    _relay.haveRecipientStamp = true;
+    return true;
 }

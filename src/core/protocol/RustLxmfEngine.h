@@ -54,7 +54,7 @@ public:
     void finishPeerDelete(const uint8_t peer[16], const handheld::storage::Result&);
     int queuedCount() const;
     void loop();
-    bool propagationBusy() const { return _relay.ticket.valid(); }
+    bool propagationBusy() const { return _relay.ticket.valid() && !_relay.direct; }
     void onLinkSetupFailure(const uint8_t peer[16], const rs_handheld_route_t& failedRoute);
     void onResourceOutcome(Ticket, handheld::outgoing::ResourceOutcome);
     handheld::TxOffer offerResource(Ticket, uint8_t iface, const uint8_t* raw, size_t length, uint64_t bornMs);
@@ -74,7 +74,7 @@ public:
 private:
     static constexpr uint8_t RowCount = 20, ReceiptBase = 128, ProofAttempts = 3;
     static_assert(ReceiptBase + RowCount * 4 <= UINT8_MAX, "Outgoing receipt namespace overlaps invalid handle");
-    enum class Phase : uint8_t { Free, Saving, Query, Ready, Reading, Prepared, AwaitProof, Resource, Grace, Settled, Relay };
+    enum class Phase : uint8_t { Free, Saving, Query, Ready, Reading, Prepared, AwaitProof, Resource, Grace, Settled, Relay, Stamp };
     enum Flag : uint16_t { Acknowledged = 1, Suppressed = 2, InitialSuppressed = 4,
         PreferLink = 8, ViaLink = 16, Rediscover = 32, Deleted = 64, DeletePending = 128,
         Recovered = 256, Notify = 512, BlockedRecord = 1024, ProofGrace = 2048,
@@ -121,6 +121,7 @@ private:
     void setStatus(Ticket, LXMFStatus);
     void finishRouteFailure(Ticket);
     bool beginRelay(Ticket);
+    bool directStamp(Ticket, uint8_t cost);
     void advanceRelay(Ticket);
     void prepareRelay(Ticket);
     bool settleRelayStorage(Ticket);
@@ -137,8 +138,9 @@ private:
         uint8_t recipientStamp[32]{}, nodeStamp[32]{}, packetHash[32]{};
         uint32_t waitMs = 0;
         Stage stage = Stage::Select;
-        uint8_t recipientCost = 0, nodeCost = 0;
+        uint8_t recipientCost = 0, nodeCost = 0, stampedCost = 0;
         bool prepared = false, verified = false, emitted = false, packet = false;
+        bool direct = false, haveRecipientStamp = false;
     };
     static_assert(sizeof(RelayWork) <= handheld::ResourceBudget::RelayPreparation, "Review relay metadata budget");
     bool validatesReceipt(const OutgoingRow&, const rs_handheld_local_frame_t&) const;
