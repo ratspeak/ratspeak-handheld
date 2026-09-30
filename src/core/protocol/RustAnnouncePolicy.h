@@ -15,10 +15,10 @@ public:
                        const rs_handheld_announce_event_t& event, uint64_t wallSecs,
                        uint64_t uptimeMs) {
         if (!keymap.learn(event.destination_hash, event.public_key, uptimeMs)) return false;
+        keymap.learnCost(event, wallSecs, uptimeMs);
         if (event.has_ratchet) {
             ratchets.rememberPeer(ctx, event.destination_hash, event.ratchet, wallSecs, uptimeMs);
         }
         return true;
     }
 };
-

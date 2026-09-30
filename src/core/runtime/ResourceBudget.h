@@ -20,6 +20,7 @@ struct ResourceBudget {
     static constexpr size_t PropagationNodes = 2048; // Five per first-hop family plus manual pin.
     static constexpr size_t StampState = 384; // One Rust incremental job; never a full workblock.
     static constexpr size_t StampOwner = 128;
+    static constexpr size_t RecipientStampCosts = 1344; // 32 bounded policy rows; codec reuses KeyMap's I/O buffer.
     static constexpr size_t CanvasHistoryText = 4096;
     static constexpr size_t CanvasHistoryRows = 1024;
     // Two independent 400-byte drafts, peer/identity bindings and editor state.

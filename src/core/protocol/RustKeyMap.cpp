@@ -34,10 +34,14 @@ bool RustKeyMap::begin(FlashStore* flash, rs_handheld_rns_t* ctx, int32_t profil
     _blob.assign(cap, 0);
     _dirty = false;
     _lastSaveMs = nowMs;
+    _lastCostSaveMs = nowMs; _costs = {};
     if (!_flash || !_ctx) return false;
 
     const bool hadBlob = _flash->exists(PATH_BLOB) || _flash->exists(PATH_BLOB_BACKUP);
     bool restored = restore(nowMs);
+    size_t costsLength = 0;
+    if (_flash->readFileFully(PATH_COSTS, _blob.data(), _blob.size(), costsLength))
+        _costs.restore(_blob.data(), costsLength); // Invalid optional metadata stays unknown.
     if (!restored && _flash->exists(PATH_LEGACY_JSON)) {
         return migrateJson(nowMs);
     } else if (restored && _flash->exists(PATH_LEGACY_JSON)) {
@@ -130,10 +134,29 @@ size_t RustKeyMap::size() const {
 
 void RustKeyMap::loop(uint64_t nowMs) { flush(nowMs, false); }
 
+void RustKeyMap::learnCost(const rs_handheld_announce_event_t& event, uint64_t wallSecs, uint64_t nowMs) {
+    uint8_t known = 0, cost = 0;
+    if (rs_handheld_lxmf_delivery_cost(event.app_data, event.app_data_len, &known, &cost) == RS_HANDHELD_OK)
+        _costs.learn(event.destination_hash, known != 0, cost, wallSecs, nowMs);
+}
+
 bool RustKeyMap::flush(uint64_t nowMs, bool force) {
-    if (!_dirty) return true;
-    if (!force && nowMs - _lastSaveMs < SAVE_INTERVAL_MS) return true;
-    return persist(nowMs);
+    bool ok = true;
+    if (_dirty && (force || nowMs - _lastSaveMs >= SAVE_INTERVAL_MS)) ok = persist(nowMs);
+    if (_costs.dirty() && (force || nowMs - _lastCostSaveMs >= SAVE_INTERVAL_MS)) {
+        _lastCostSaveMs = nowMs; // Failed optional writes do not hammer flash every poll.
+        ok = persistCosts() && ok;
+    }
+    return ok;
+}
+
+bool RustKeyMap::persistCosts() {
+    if (!_flash || _blob.size() < handheld::propagation::RecipientStampCosts::BlobMax) return false;
+    const size_t length = _costs.encode(_blob.data(), _blob.size());
+    if (!length || !_flash->writeAtomic(PATH_COSTS, _blob.data(), length)) return false;
+    // FlashStore's atomic writer verifies exact bytes before promotion. Do not
+    // reimport the live cache: doing so would discard current-boot monotonic ages.
+    _costs.committed(); return true;
 }
 
 bool RustKeyMap::persist(uint64_t nowMs) {
