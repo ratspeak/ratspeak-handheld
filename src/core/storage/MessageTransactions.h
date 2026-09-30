@@ -85,10 +85,12 @@ private:
     void pending(const Request&, uint8_t*, size_t, Result&);
     void prepared(const Request&, uint8_t*, size_t length, size_t capacity, Result&);
     void purgeJournal(const Request&, uint8_t*, size_t length, size_t capacity, Result&);
+    void rrcTransaction(const Request&, uint8_t*, size_t length, size_t capacity, Result&);
     void conversationPage(const Request&, uint8_t*, size_t, Result&);
     void conversation(const Request&, uint8_t*, size_t, Result&);
     void trim(const Request&, Result&);
     bool reserveCounter(uint32_t&);
+    bool reserveRrcCounter(uint32_t& counter, uint32_t minimum);
     bool retainedCopy(const RecordKey&, unsigned medium, MessageDocument&);
     bool initializeCounter();
     uint32_t deletedThrough(const uint8_t peer[16], MessageDocument&, uint8_t* markerState = nullptr,
@@ -98,6 +100,7 @@ private:
     bool _external = false, _deferred = false;
     uint8_t _blockedMedia = 0, _preferBackup = 0;
     uint32_t _nextCounter = 1, _reservedThrough = 0;
+    uint32_t _rrcNextCounter = 1, _rrcReservedThrough = 0;
     uint64_t _mutationEpoch = 1;
     uint32_t _summaryClock = 0;
     uint8_t _summaryMedia = 0;

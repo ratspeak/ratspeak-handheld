@@ -1,5 +1,6 @@
 #include "MessageTransactions.h"
 #include "PreparedEnvelope.h"
+#include "RrcRecord.h"
 #include "PurgeJournal.h"
 #include "config/Config.h"
 #include <Preferences.h>
@@ -1120,6 +1121,8 @@ void MessageTransactions::purgeJournal(const Request& request, uint8_t* bytes, s
     result.outcome = Outcome::Committed;
 }
 
+#include "RrcTransactions.inc"
+
 void MessageTransactions::execute(const Request& request, uint8_t* bytes, size_t length, size_t capacity, Result& result) {
     if (_deferred && !bindWorker()) {
         result.key = request.key; result.error = Error::Unavailable; return;
@@ -1127,6 +1130,9 @@ void MessageTransactions::execute(const Request& request, uint8_t* bytes, size_t
     StorageLease lease;
     result.key = request.key;
     if (!lease.held()) { result.error = Error::Unavailable; return; }
+    if (rrc::operation(request.operation)) {
+        rrcTransaction(request, bytes, length, capacity, result); return;
+    }
     checkSummaryMedia();
     if (request.operation != Operation::ReadRecord && request.operation != Operation::ReadPending &&
         request.operation != Operation::ReadHistoryPage && request.operation != Operation::ReadConversationPage &&

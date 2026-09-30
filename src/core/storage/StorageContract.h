@@ -24,7 +24,8 @@ constexpr bool operator!=(Ticket a, Ticket b) { return !(a == b); }
 enum class Operation : uint8_t {
     CreateIncoming, CreateOutgoing, UpdateStatus, MarkRead, DeleteConversation,
     ReadRecord, ReadHistoryPage, ReadPending, ReadConversationPage, ReadConversation, Trim,
-    LoadPrepared, WritePrepared, LoadPurge, WritePurge, ClearPurge
+    LoadPrepared, WritePrepared, LoadPurge, WritePurge, ClearPurge,
+    RrcRead, RrcAppend, RrcWrite, RrcStatus, RrcPage, RrcMarkRead, RrcClear
 };
 enum class Rejection : uint8_t {
     None, Busy, Invalid, TooLarge, NoMemory, Unavailable, Fenced, Exhausted
@@ -55,6 +56,10 @@ struct RecordKey {
 // Scalars are copied at admission. Title/content occupy the slot's separate
 // bounded byte buffer, with explicit lengths (embedded NUL bytes are preserved).
 struct Request {
+    // RRC operations use a typed RrcRecord payload. For those operations only,
+    // messageId[0..16] is an opaque local filename key (not an LXMF ID), offset
+    // is the expected record revision, and key.counter is a page/status cursor.
+    // They never participate in LXMF counts, deletion fences or history queries.
     // ReadPending: exclusive after (counter, peer), outgoing only.
     // ReadHistoryPage: peer plus exclusive (counter, incoming) in historyDirection.
     // Counter zero starts Before at newest, After at oldest; never discard a

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "RrcRecord.h"
+
 #include <Arduino.h>
 #include "config/Config.h"
 #include "storage/FlashStore.h"
@@ -52,6 +54,9 @@ public:
     // Load rechecks the durable message. Failed/Stale may still return a valid
     // journal for exact-match local abandonment, never remote purge permission.
     Submission requestPurgeJournal(const uint8_t local[16]);
+    // Shared ordered executor, distinct RRC schema/namespace and result owner.
+    Submission requestRrc(handheld::storage::Operation, const handheld::storage::rrc::Record&,
+        const uint8_t fileKey[16] = nullptr, uint32_t cursor = 0, uint32_t expectedRevision = 0);
     Submission requestWritePurge(const handheld::storage::purge::Journal&);
     Submission requestClearPurge(const handheld::storage::purge::Journal&);
     Submission requestHistoryPage(const std::string& peer, HistoryEntry cursor = {}, uint8_t limit = 48,

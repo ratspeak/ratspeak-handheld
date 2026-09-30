@@ -23,7 +23,7 @@ MessageTransactions& MessageStore::transactions() const {
 MessageStore::Submission MessageStore::submit(Request request, const WriteQueue::PayloadPart* parts,
                                               size_t count, size_t capacity) {
     handheld::assertDeviceOwner();
-    if (_deleteFence.valid() && !memcmp(_fencedPeer, request.key.peer, 16))
+    if (!rrc::operation(request.operation) && _deleteFence.valid() && !memcmp(_fencedPeer, request.key.peer, 16))
         return {{}, Rejection::Fenced};
     const auto submission = _writeQueue.submit(request, parts, count, capacity);
     if (submission.accepted() && request.operation == Operation::DeleteConversation) {
@@ -127,6 +127,19 @@ MessageStore::Submission MessageStore::requestPurgeJournal(const uint8_t local[1
     return submit(request, nullptr, 0, purge::Size);
 }
 
+MessageStore::Submission MessageStore::requestRrc(Operation operation, const rrc::Record& record,
+    const uint8_t fileKey[16], uint32_t cursor, uint32_t expectedRevision) {
+    if (!rrc::operation(operation) || !record.valid(record.length()) ||
+        ((operation == Operation::RrcAppend || operation == Operation::RrcStatus ||
+          (operation == Operation::RrcRead && record.kind() == rrc::Kind::Message)) && !fileKey))
+        return {{}, Rejection::Invalid};
+    Request request; request.operation = operation; request.key.counter = cursor;
+    request.offset = expectedRevision;
+    if (fileKey) memcpy(request.messageId, fileKey, 16);
+    const WriteQueue::PayloadPart part{record.bytes, record.length()};
+    return submit(request, &part, 1, Budget::SmallPayload);
+}
+
 MessageStore::Submission MessageStore::requestWritePurge(const purge::Journal& journal) {
     if (!journal.valid()) return {{}, Rejection::Invalid};
     Request request; request.operation = Operation::WritePurge; request.key = journal.key();
@@ -216,6 +229,7 @@ bool MessageStore::setExternalStorageEnabled(bool enabled) {
 
 void MessageStore::settle(const Request& request, const Result& result) noexcept {
     if (result.outcome != Outcome::Committed) return;
+    if (rrc::operation(request.operation)) return; // RRC owner publishes its own revision/unread.
     if (request.operation == Operation::ReadRecord || request.operation == Operation::ReadHistoryPage ||
         request.operation == Operation::ReadConversationPage || request.operation == Operation::ReadConversation ||
         request.operation == Operation::ReadPending || request.operation == Operation::LoadPurge ||
