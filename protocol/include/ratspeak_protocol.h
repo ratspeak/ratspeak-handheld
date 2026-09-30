@@ -67,6 +67,24 @@ typedef enum rs_handheld_status {
 /* Opaque, Rust-owned backend context. */
 typedef struct rs_handheld_rns rs_handheld_rns_t;
 
+/* One resumable stamp job, owned exclusively by the caller until destroy. */
+typedef struct RsHandheldStamp rs_handheld_stamp_t;
+typedef struct rs_handheld_stamp_progress {
+    uint64_t attempts;
+    uint8_t stamp[32];
+    uint16_t completed_rounds, total_rounds, value;
+    uint8_t state; /* 0 preparing, 1 searching, 2 complete, 3 exhausted, 4 cancelled */
+} rs_handheld_stamp_progress_t;
+/* kind: 0 recipient, 1 propagation. Fresh CSPRNG seed. Cost <=20, attempts <=8388608.
+ * Failure leaves *out unchanged. Serialize calls; buffers must be disjoint. */
+rs_handheld_status_t rs_handheld_stamp_create(const uint8_t material[32], uint8_t kind,
+    uint8_t cost, const uint8_t seed[32], uint64_t attempt_limit, rs_handheld_stamp_t **out);
+/* At most 4 preparation rounds or 1024 nonces. Zero budgets inspect progress. */
+rs_handheld_status_t rs_handheld_stamp_step(rs_handheld_stamp_t *job, uint16_t rounds,
+    uint32_t attempts, rs_handheld_stamp_progress_t *out);
+rs_handheld_status_t rs_handheld_stamp_cancel(rs_handheld_stamp_t *job);
+void rs_handheld_stamp_destroy(rs_handheld_stamp_t *job); /* null is a no-op */
+
 /* Static NUL-terminated version string, owned by Rust. Never null; do not free. */
 const char *rs_handheld_rns_version(void);
 

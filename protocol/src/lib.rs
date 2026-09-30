@@ -393,6 +393,8 @@ mod lxmf;
 pub use lxmf::*;
 mod propagation;
 pub use propagation::*;
+mod stamps;
+pub use stamps::*;
 mod proof;
 pub use proof::*;
 mod link;
