@@ -263,6 +263,11 @@ void RustInterfacePump::ingest(const uint8_t* data, size_t len, uint8_t ifaceId)
             _counters.rxAnnounces++;
             if (_sink) _sink->onPropagationAnnounce(_event, ifaceId);
             break;
+        case RS_HANDHELD_INGEST_ANNOUNCE_RRC:
+            _counters.rxAccepted++;
+            _counters.rxAnnounces++;
+            if (_sink) _sink->onRrcAnnounce(_event, ifaceId);
+            break;
         case RS_HANDHELD_INGEST_ANNOUNCE_IGNORED:
             // Signature/binding may be valid, but freshness rejected it. Never surface the stale
             // event to KeyMap/contact/peer-ratchet policy and never count it as accepted.

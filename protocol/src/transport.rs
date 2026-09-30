@@ -74,6 +74,8 @@ pub(super) const INGEST_PATH_REQUEST_SELF: i32 = 10;
 pub(super) const INGEST_ANNOUNCE_OTHER: i32 = 11;
 /// An accepted `lxmf.propagation` announce, surfaced separately from contacts.
 pub(super) const INGEST_ANNOUNCE_PROPAGATION: i32 = 13;
+/// Accepted RRC hub announcement; never learned as an LXMF contact.
+pub(super) const INGEST_ANNOUNCE_RRC: i32 = 14;
 
 /// True iff the announce payload is for the `lxmf.delivery` aspect (name_hash match). Cheap parse;
 /// no signature check (the caller already validated for path-learning).
@@ -485,11 +487,16 @@ pub unsafe extern "C" fn rs_handheld_rns_packet_ingest_with_mode(
                         view.header.flags.context_flag,
                         "lxmf.propagation",
                     );
+                    let rrc =
+                        is_named_announce(view.payload, view.header.flags.context_flag, "rrc.hub");
                     if propagation
+                        || rrc
                         || is_lxmf_delivery_announce(view.payload, view.header.flags.context_flag)
                     {
                         if propagation {
                             action_code = INGEST_ANNOUNCE_PROPAGATION;
+                        } else if rrc {
+                            action_code = INGEST_ANNOUNCE_RRC;
                         }
                         if !out_event.is_null() {
                             let ev = unsafe { &mut *out_event };

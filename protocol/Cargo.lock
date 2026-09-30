@@ -225,6 +225,7 @@ version = "0.0.1"
 dependencies = [
  "lxmf-lite-core",
  "rns-lite-core",
+ "sha2",
 ]
 
 [[package]]

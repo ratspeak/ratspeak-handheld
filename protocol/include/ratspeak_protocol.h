@@ -301,6 +301,7 @@ size_t rs_handheld_rns_transport_align(int32_t profile);
 #define RS_HANDHELD_INGEST_ANNOUNCE_IGNORED      12
 // Accepted propagation announce: event filled; never project it as a contact.
 #define RS_HANDHELD_INGEST_ANNOUNCE_PROPAGATION  13
+#define RS_HANDHELD_INGEST_ANNOUNCE_RRC          14
 
 /* rs_handheld_rns_poll_outbound *out_reason codes (OutboundReason in src/lib.rs). */
 #define RS_HANDHELD_TX_ANNOUNCE_REBROADCAST 0
@@ -759,6 +760,48 @@ rs_handheld_status_t rs_handheld_rns_lxmf_parse_link_view(const rs_handheld_rns_
  * seed. Owner checks role/state and wipes the seed on teardown. */
 rs_handheld_status_t rs_handheld_rns_link_packet_proof(const uint8_t seed[32],
     const uint8_t packet_hash[32], uint8_t *out, size_t out_cap, size_t *out_len);
+
+/* RRC v1 packet codec. All offsets borrow the original, unchanged input packet.
+ * No heap allocation or persistent context. Decoding never authenticates a hub:
+ * the Link/session owner must enforce source and session bindings. */
+typedef struct { uint16_t offset, length; } rs_handheld_rrc_span_t;
+typedef struct {
+    uint64_t kind, timestamp_ms;
+    uint8_t id[8], source[16], destination[16], has_destination;
+} rs_handheld_rrc_meta_t;
+typedef struct {
+    rs_handheld_rrc_meta_t meta;
+    rs_handheld_rrc_span_t room, nickname, body, text;
+    uint8_t body_kind; /* absent=0, text=1, other CBOR=2 */
+} rs_handheld_rrc_view_t;
+typedef struct {
+    rs_handheld_rrc_span_t name, version;
+    uint32_t limits[5]; /* nickname, room, body, rooms, messages/minute */
+    uint8_t limits_present, capabilities;
+} rs_handheld_rrc_welcome_t;
+rs_handheld_status_t rs_handheld_rrc_decode(const uint8_t *data, size_t length,
+    rs_handheld_rrc_view_t *out);
+/* body_kind: absent=0, text=1, encoded CBOR=2, HELLO client-version=3.
+ * Null out counts only. On insufficient capacity the output is untouched. */
+rs_handheld_status_t rs_handheld_rrc_encode(const rs_handheld_rrc_meta_t *meta,
+    const uint8_t *room, size_t room_length, const uint8_t *nickname, size_t nickname_length,
+    const uint8_t *body, size_t body_length, uint8_t body_kind,
+    uint8_t *out, size_t capacity, size_t *out_length);
+rs_handheld_status_t rs_handheld_rrc_welcome(const uint8_t *data, size_t length,
+    rs_handheld_rrc_welcome_t *out);
+/* Validates the entire roster before returning a member. Null out_member counts. */
+rs_handheld_status_t rs_handheld_rrc_member(const uint8_t *data, size_t length,
+    size_t index, uint8_t out_member[16], size_t *out_count);
+rs_handheld_status_t rs_handheld_rrc_announce_name(const uint8_t *data, size_t length,
+    rs_handheld_rrc_span_t *out);
+/* UTF-8 trim; rooms additionally lowercase using the desktop Unicode rules.
+ * nickname=1 validates a nickname, nickname=0 a room. Output excludes NUL. */
+rs_handheld_status_t rs_handheld_rrc_normalize(const uint8_t *data, size_t length,
+    uint8_t nickname, uint8_t *out, size_t capacity, size_t *out_length);
+/* Domain-separated local conversation key; never a Reticulum destination.
+ * kind=0 normalized room, kind=1 full participant identity. */
+rs_handheld_status_t rs_handheld_rrc_storage_key(uint8_t kind, const uint8_t *data,
+    size_t length, uint8_t out[16]);
 
 rs_handheld_status_t rs_handheld_rns_proof_build(const rs_handheld_rns_t *ctx, const uint8_t packet_hash[32],
                                        int32_t implicit, uint8_t *out, size_t out_cap,

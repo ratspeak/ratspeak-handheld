@@ -1240,6 +1240,99 @@ fn propagation_announce_has_separate_event_and_never_resurrects_a_replay() {
 }
 
 #[test]
+fn rrc_announce_has_separate_event_and_never_resurrects_a_replay() {
+    let ctx = loaded_ctx();
+    let _node = open_transport_into(ctx, 0);
+    let id = LocalIdentity::from_private_key(&[0x67; 64]);
+    let dest = id.destination_hash("rrc.hub");
+    let metadata = [0xa1, 0x63, b'h', b'u', b'b', 0x64, b'H', b'i', b'l', b'l'];
+    let mut data = [0; 600];
+    let rh = compose_random_hash(&RNG_SEED, UNIX_SECS);
+    let n = id
+        .create_announce_named("rrc.hub", &rh, None, &metadata, &mut data)
+        .unwrap();
+    let packet = frame_announce(&data[..n], &dest);
+    let mut action = -1;
+    let mut event: RsHandheldAnnounceEvent = unsafe { std::mem::zeroed() };
+    assert_eq!(
+        unsafe {
+            rs_handheld_rns_packet_ingest(
+                ctx,
+                packet.as_ptr(),
+                packet.len(),
+                1,
+                1000,
+                &mut action,
+                &mut event,
+                core::ptr::null_mut(),
+            )
+        },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!(action, INGEST_ANNOUNCE_RRC);
+    assert_eq!(event.destination_hash, dest);
+    assert_eq!(event.public_key, *id.public_key());
+    assert_eq!(&event.app_data[..event.app_data_len as usize], metadata);
+    let mut name = RrcSpan::default();
+    assert_eq!(
+        unsafe {
+            rs_handheld_rrc_announce_name(
+                event.app_data.as_ptr(),
+                event.app_data_len as usize,
+                &mut name,
+            )
+        },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!(
+        &event.app_data[name.offset as usize..name.offset as usize + name.length as usize],
+        b"Hill"
+    );
+    event.destination_hash = [0; 16];
+    assert_eq!(
+        unsafe {
+            rs_handheld_rns_packet_ingest(
+                ctx,
+                packet.as_ptr(),
+                packet.len(),
+                1,
+                2000,
+                &mut action,
+                &mut event,
+                core::ptr::null_mut(),
+            )
+        },
+        RsHandheldStatus::Ok
+    );
+    assert_ne!(action, INGEST_ANNOUNCE_RRC);
+    assert_eq!(event.destination_hash, [0; 16]);
+    // New packet bytes with an older accepted ordering value remain suppressed.
+    let old_rh = compose_random_hash(&[9; 5], UNIX_SECS - 1);
+    let n = id
+        .create_announce_named("rrc.hub", &old_rh, None, &metadata, &mut data)
+        .unwrap();
+    let stale = frame_announce(&data[..n], &dest);
+    assert_eq!(
+        unsafe {
+            rs_handheld_rns_packet_ingest(
+                ctx,
+                stale.as_ptr(),
+                stale.len(),
+                1,
+                3000,
+                &mut action,
+                &mut event,
+                core::ptr::null_mut(),
+            )
+        },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!(action, 12);
+    assert_eq!(event.destination_hash, [0; 16]);
+    unsafe { rs_handheld_rns_shutdown(ctx) };
+}
+
+#[test]
 fn propagation_metadata_ffi_has_bounded_names_and_atomic_outputs() {
     let bytes = [
         0x97, 0xc2, 1, 0xc3, 1, 1, 0x93, 16, 3, 18, 0x81, 1, 0xc4, 4, b'a', 0, b'b', 0x1b,
