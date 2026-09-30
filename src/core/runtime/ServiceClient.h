@@ -71,6 +71,8 @@ public:
     uint32_t action(Operation op, const std::string& peer = "", const std::string& body = "",
                     uint32_t argument = 0, Completion completion = {});
     uint32_t requestPeerName(const std::string& peer, TextCompletion completion);
+    using PropagationCompletion = std::function<void(const Result&, const propagation::NodeView*, size_t)>;
+    uint32_t requestPropagationNodes(PropagationCompletion);
     // Pending Send only. Completion is still consumed; navigation does not cancel.
     bool cancelSend(uint32_t requestId) { return _mailbox.cancelSend(requestId); }
     bool applySettings(Completion completion = {}, bool applyRadio = true);

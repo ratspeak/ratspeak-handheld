@@ -47,6 +47,8 @@ public:
 
     virtual void configurePropagation(const handheld::propagation::Settings&) {}
     virtual size_t propagationNodes(handheld::propagation::NodeView*, size_t) const { return 0; }
+    virtual handheld::propagation::SyncView propagationStatus() const { return {}; }
+    virtual bool propagationSync() { return false; }
 
     // Admission copies spans and reserves a terminal persistence result. Only a
     // Ready/Committed result means saved; each accepted ticket must be acknowledged.

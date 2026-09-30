@@ -60,6 +60,26 @@ uint32_t ServiceClient::submit(Request request, const void* body, size_t length,
     return id;
 }
 
+uint32_t ServiceClient::requestPropagationNodes(PropagationCompletion completion) {
+    if (!completion) return 0;
+    Request request; request.operation = Operation::PropagationNodes;
+    constexpr size_t capacity = propagation::NodeViewCapacity * sizeof(propagation::NodeView);
+    return submit(request, nullptr, 0, capacity,
+        [completion = std::move(completion)](const Result& result, const char* data) {
+            propagation::NodeView nodes[propagation::NodeViewCapacity]{};
+            Result checked = result; size_t count = 0;
+            if (result.outcome == Outcome::Ok) {
+                if (result.total > propagation::NodeViewCapacity || result.length != result.total * sizeof(nodes[0])) {
+                    checked.outcome = Outcome::Invalid; checked.length = 0;
+                } else {
+                    count = result.total; memcpy(nodes, data, result.length);
+                    for (size_t i = 0; i < count; ++i) nodes[i].name[sizeof nodes[i].name - 1] = 0;
+                }
+            }
+            completion(checked, nodes, count); // Borrow ends on return, no retained cache.
+        });
+}
+
 uint32_t ServiceClient::action(Operation op, const std::string& peer, const std::string& body,
                               uint32_t argument, Completion completion) {
     if (peer.size() > 32) { tell("Invalid destination"); return 0; }

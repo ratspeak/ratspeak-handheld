@@ -486,6 +486,16 @@ size_t ProtocolRuntime::propagationNodes(handheld::propagation::NodeView* out, s
     return count;
 }
 
+handheld::propagation::SyncView ProtocolRuntime::propagationStatus() const {
+    handheld::assertDeviceOwner();
+    return _enginesUp ? _lxmf.inbox().view() : handheld::propagation::SyncView{};
+}
+
+bool ProtocolRuntime::propagationSync() {
+    handheld::assertDeviceOwner();
+    return _enginesUp && _lxmf.inbox().requestSync();
+}
+
 void ProtocolRuntime::onPropagationAnnounce(const rs_handheld_announce_event_t& event, uint8_t) {
     handheld::assertDeviceOwner();
     if (_maintenanceRadio || !_ctx) return;

@@ -17,6 +17,28 @@ struct SyncView {
     uint8_t received = 0;
     bool busy = false;
 };
+inline const char* syncLabel(SyncStatus status) {
+    switch (status) {
+    case SyncStatus::Off: return "OFF";
+    case SyncStatus::Idle: return "IDLE";
+    case SyncStatus::Waiting: return "WAITING";
+    case SyncStatus::Connecting: return "CONNECTING";
+    case SyncStatus::Listing: return "CHECKING INBOX";
+    case SyncStatus::Receiving: return "RECEIVING";
+    case SyncStatus::Saving: return "SAVING";
+    case SyncStatus::Purging: return "PURGING";
+    case SyncStatus::Complete: return "SYNC COMPLETE";
+    case SyncStatus::Unavailable: return "PROP UNAVAILABLE";
+    case SyncStatus::Unsupported: return "REPLY UNSUPPORTED";
+    case SyncStatus::Invalid: return "INVALID REPLY";
+    case SyncStatus::StorageError: return "STORAGE ERROR";
+    case SyncStatus::SourceUnknown: return "SENDER UNKNOWN";
+    case SyncStatus::StampCostHigh: return "STAMP COST HIGH";
+    }
+    return "UNAVAILABLE";
+}
+
+constexpr size_t NodeViewCapacity = 10;
 
 struct NodeView {
     uint8_t address[16]{};

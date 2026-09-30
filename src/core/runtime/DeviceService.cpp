@@ -108,7 +108,9 @@ void DeviceService::notice(const char* text) {
 bool DeviceService::readyForCommand() {
     if (!_storageOwnerBound || _backend.pollRadioBeforeBlockingWork()) return true;
     const auto* request = _mailbox.nextRequest();
-    if (!request || !_messages.deferredIO()) return false;
+    if (!request) return false;
+    if (request->operation == Operation::PropagationNodes || request->operation == Operation::PropagationSync) return true;
+    if (!_messages.deferredIO()) return false;
     switch (request->operation) {
         case Operation::Send: case Operation::MarkRead: case Operation::DeleteConversation:
         case Operation::ConversationPage: case Operation::ConversationDetail:
@@ -282,6 +284,7 @@ void DeviceService::refreshStatus() {
     _status.links = _backend.linkCount();
     _status.queued = _backend.lxmfQueuedCount();
     _status.resources = _backend.activeResourceTransfers();
+    _status.propagation = _backend.propagationStatus();
     _status.lastAnnounce = _backend.lastAnnounceTime();
     _status.unread = _messages.totalUnreadCount();
     _status.storeRevision = _messages.revision();
@@ -441,7 +444,7 @@ void DeviceService::execute(uint8_t slot) {
     }
     if (!_maintenance.accepting() && (request.operation == Operation::Announce ||
         request.operation == Operation::Diagnostics || request.operation == Operation::HomeReady ||
-        request.operation == Operation::Scan)) {
+        request.operation == Operation::Scan || request.operation == Operation::PropagationSync)) {
         complete(slot, Outcome::Cancelled, "Cancelled for maintenance"); return;
     }
     const auto length = _mailbox.length(slot);
@@ -527,6 +530,21 @@ void DeviceService::execute(uint8_t slot) {
         } else if (saved.complete()) { _settingsSlot = slot; finishSettings(slot); }
         else complete(slot, Outcome::Failed, saved.detail);
         break;
+    }
+    case Operation::PropagationSync: {
+        const bool requested = _backend.propagationSync();
+        complete(slot, requested ? Outcome::Ok : Outcome::Failed,
+                 requested ? "Sync requested" : "Propagation is OFF, busy, or synced within 30s");
+        break;
+    }
+    case Operation::PropagationNodes: {
+        propagation::NodeView nodes[propagation::NodeViewCapacity]{};
+        const size_t count = _backend.propagationNodes(nodes, propagation::NodeViewCapacity);
+        if (count > propagation::NodeViewCapacity || !_mailbox.write(slot, nodes, count * sizeof(nodes[0]))) {
+            complete(slot, Outcome::Failed, "Propagation list unavailable"); break;
+        }
+        Result result; result.outcome = Outcome::Ok; result.total = count; result.length = count * sizeof(nodes[0]);
+        _mailbox.complete(slot, result); break;
     }
     case Operation::Settings: {
         const String json = _config.encode();

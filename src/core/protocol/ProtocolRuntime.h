@@ -88,6 +88,8 @@ public:
     uint32_t announceFilterCount() const override;
     void configurePropagation(const handheld::propagation::Settings&) override;
     size_t propagationNodes(handheld::propagation::NodeView*, size_t) const override;
+    handheld::propagation::SyncView propagationStatus() const override;
+    bool propagationSync() override;
 
     handheld::outgoing::Submission lxmfSubmit(const uint8_t dest[16],
         const uint8_t* title, size_t titleLength, const uint8_t* content,

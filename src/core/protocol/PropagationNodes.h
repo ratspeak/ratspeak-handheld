@@ -12,6 +12,7 @@ class Nodes {
 public:
     static constexpr size_t PerFamily = 5;
     static constexpr size_t Capacity = PerFamily * 2;
+    static_assert(Capacity == NodeViewCapacity, "UI snapshot must cover both bounded node families");
     static constexpr uint8_t MaxStampCost = 20;
     static constexpr uint64_t MetadataAge = 24ULL * 60 * 60 * 1000;
     struct Node {

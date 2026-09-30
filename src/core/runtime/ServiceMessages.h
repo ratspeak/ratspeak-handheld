@@ -4,14 +4,15 @@
 #include <cstdint>
 #include <type_traits>
 #include "storage/ConversationView.h"
+#include "config/PropagationSettings.h"
 
 namespace handheld {
 
 enum class Operation : uint8_t {
-    Nodes, PeerName, ConversationPage, ConversationDetail, HistoryPage, ReadRecord, HistoryStatus, Settings, Identities, Scan,
+    Nodes, PeerName, ConversationPage, ConversationDetail, HistoryPage, ReadRecord, HistoryStatus, Settings, Identities, Scan, PropagationNodes,
     Send, MarkRead, DeleteConversation, SaveContact, DeleteContact, RenameContact,
     ApplySettings, Announce, CreateIdentity, ImportIdentity, Diagnostics,
-    HomeReady, Restart, PowerOff, SwitchIdentity, FormatSD, WipeSD, FactoryReset,
+    PropagationSync, HomeReady, Restart, PowerOff, SwitchIdentity, FormatSD, WipeSD, FactoryReset,
     EnableSDAndRestart, ClearOldDataAndRestart
 };
 enum class Admission : uint8_t { Admitted, Busy, NotReady, Invalid };
@@ -22,7 +23,7 @@ constexpr bool lifecycleOperation(Operation op) {
     return op >= Operation::Restart;
 }
 constexpr bool queryOperation(Operation op) {
-    return op <= Operation::Scan;
+    return op <= Operation::PropagationNodes;
 }
 
 struct Request {
@@ -69,6 +70,7 @@ struct Result {
 };
 
 struct Status {
+    propagation::SyncView propagation;
     uint32_t generation = 1;
     uint32_t storeRevision = 0;
     uint32_t historyRevision = 0; // Structural invalidation only; MAX is exhausted.
