@@ -405,6 +405,10 @@ void RustLxmfEngine::settleStorage(Ticket ticket) {
 
 bool RustLxmfEngine::receiptHook(void* context, handheld::TxReceipt receipt, handheld::TxReceiptEvent event) {
     auto& owner = *static_cast<RustLxmfEngine*>(context);
+    static_assert(RustLinkManager::RequestReceiptSlot >= RustIncomingDelivery::ReceiptCount &&
+                  RustLinkManager::IdentifyReceiptSlot < ReceiptBase, "Receipt namespaces must not overlap");
+    if (receipt.slot == RustLinkManager::RequestReceiptSlot || receipt.slot == RustLinkManager::IdentifyReceiptSlot)
+        return owner._d.links && owner._d.links->requestReceipt(receipt, event);
     if (receipt.slot < RustIncomingDelivery::ReceiptCount)
         return RustIncomingDelivery::receiptHook(&owner._incoming, receipt, event);
     if (receipt.slot < ReceiptBase || receipt.slot >= ReceiptBase + RowCount * 4) return false;
@@ -1123,6 +1127,12 @@ void RustLxmfEngine::advanceRelay(Ticket ticket) {
     }
     if (_relay.stage == Stage::Link) {
         const auto* node = _d.propagation->find(_relay.node);
+        // One bounded PN stamp job per attempt. An authenticated policy rise
+        // cannot repeatedly restart CPU work while a packet waits for a Link.
+        if (node && node->cost > _relay.nodeCost) {
+            finishRelay(ticket, node->cost > RustStampWork::MaxCost ? LXMFStatus::STAMP_COST_HIGH : LXMFStatus::STAMP_FAILED);
+            return;
+        }
         rs_handheld_route_t route{};
         const bool usable = node && handheld::propagation::Nodes::usable(*node, now) &&
             !memcmp(node->publicKey, _relay.nodeKey, 64) &&
@@ -1132,9 +1142,6 @@ void RustLxmfEngine::advanceRelay(Ticket ticket) {
             if (now - _relay.born >= LINK_WAIT_TIMEOUT_MS) { finishRelay(ticket, LXMFStatus::PROP_UNAVAILABLE, true); return; }
             if (now >= _relay.requestAt) { requestPath(_relay.node); _relay.requestAt = now + DISCOVERY_RETRY_MS; }
             return;
-        }
-        if (node->cost > _relay.nodeCost) {
-            _relay.nodeCost = node->cost; _relay.stage = Stage::NodeStamp; return;
         }
         _relay.born = now; // Local contention cannot age a future path-discovery window.
         // ensureLink owns the admitted-handshake deadline. Local pool or driver

@@ -225,8 +225,10 @@ void RustPropagationInbox::poll() {
         _stage = sending == Stage::List ? Stage::ListWait : sending == Stage::Fetch ? Stage::FetchWait : Stage::PurgeWait;
         _status = sending == Stage::List ? Status::Listing : sending == Stage::Fetch ? Status::Receiving : Status::Purging;
         const uint32_t timeout = 60000 + d.pump->interfaceTxWaitMs(_interface, 16);
+        const Stage waiting = _stage;
         if (!d.links->startGet(_node, operation, operation ? _journal.transientId() : nullptr,
-                              RS_HANDHELD_RESOURCE_DATA_MAX - 24, *this, timeout)) {
+                              RS_HANDHELD_RESOURCE_DATA_MAX - 24, *this, timeout) && _stage == waiting) {
+            // A synchronous dropped receipt may already have finished us.
             _stage = sending; _requestAt = now + 250;
         }
         return;

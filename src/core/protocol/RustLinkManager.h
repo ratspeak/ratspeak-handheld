@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include "ratspeak_protocol.h"
+#include "transport/TxLease.h"
 
 class RustClock;
 class RustKeyMap;
@@ -80,6 +81,9 @@ public:
     // message body is retained. Caller owns retries after local refusal.
     bool startGet(const uint8_t dest[16], uint8_t operation, const uint8_t* transientId,
                   uint16_t limitBytes, RequestSink& sink, uint32_t timeoutMs);
+    // Dedicated receipt slot, between incoming credits and outgoing rows.
+    static constexpr uint8_t RequestReceiptSlot = 64, IdentifyReceiptSlot = 65;
+    bool requestReceipt(handheld::TxReceipt, handheld::TxReceiptEvent);
     bool requestPending() const { return _request.sink != nullptr; }
     void cancelRequest(RequestSink& sink);
     bool responseId(uint8_t iface, const uint8_t linkId[16], uint8_t out[16]) const;
@@ -158,6 +162,7 @@ private:
         uint32_t waitMs = 0, sequence = 0, linkGeneration = 0, interfaceGeneration = 0;
         uint8_t id[16]{};
         uint8_t slot = UINT8_MAX, iface = UINT8_MAX;
+        bool started = false;
     };
     Request _request;
     uint32_t _requestSequence = 0;

@@ -565,17 +565,19 @@ bool RustLinkManager::identify(Link& link) {
         !buildLinkPacket(link.peerDest, RustWire::CTX_LINKIDENTIFY, plaintext, sizeof plaintext,
                          raw, sizeof raw, length)) return false;
     const auto generation = _generations[&link - _links];
-    if (!_d.pump->sendTo(link.iface, raw, length) || generation != _generations[&link - _links] ||
-        link.state != State::Active) return false;
-    link.identified = true;
-    return true;
+    handheld::TxLease lease;
+    if (!_d.pump->captureLeaseAt(link.iface, raw, length, _request.bornMs, _request.waitMs, lease)) return false;
+    lease.setReceipt({_request.sequence, IdentifyReceiptSlot});
+    const auto offer = _d.pump->offerReceipt(raw, length, lease);
+    return (offer == handheld::TxOffer::Started || offer == handheld::TxOffer::Queued) &&
+        generation == _generations[&link - _links] && link.state == State::Active;
 }
 
 bool RustLinkManager::startGet(const uint8_t dest[16], uint8_t operation, const uint8_t* transientId,
                               uint16_t limitBytes, RequestSink& sink, uint32_t timeoutMs) {
     if (_request.sink || _requestSequence == UINT32_MAX || !timeoutMs || !_d.pump) return false;
     Link* link = findByDest(dest);
-    if (!link || !identify(*link)) return false;
+    if (!link || link->state != State::Active || !link->initiator) return false;
     uint8_t plaintext[96], raw[500], hash[32]; size_t length = 0, rawLength = 0;
     const uint64_t now = _d.clock ? _d.clock->nowMs() : uint64_t(millis());
     const auto epoch = RustClock::epochSecs();
@@ -593,7 +595,13 @@ bool RustLinkManager::startGet(const uint8_t dest[16], uint8_t operation, const 
     _request.linkGeneration = _generations[_request.slot];
     _request.interfaceGeneration = _d.pump->interfaceGeneration(link->iface);
     memcpy(_request.id, hash, 16); // packet requests use the transmitted packet hash
-    const bool admitted = _d.pump->sendLeased(raw, rawLength, lease);
+    if (!identify(*link) || _request.sequence != sequence) {
+        if (_request.sequence == sequence) _request = {};
+        return false;
+    }
+    lease.setReceipt({sequence, RequestReceiptSlot});
+    const auto offer = _d.pump->offerReceipt(raw, rawLength, lease);
+    const bool admitted = offer == handheld::TxOffer::Started || offer == handheld::TxOffer::Queued;
     if (!admitted && _request.sequence == sequence) _request = {};
     return admitted;
 }
@@ -604,6 +612,19 @@ bool RustLinkManager::requestLive() const {
         return false;
     const auto now = _d.clock ? _d.clock->nowMs() : uint64_t(millis());
     return now >= _request.bornMs && now - _request.bornMs < _request.waitMs;
+}
+
+bool RustLinkManager::requestReceipt(handheld::TxReceipt receipt, handheld::TxReceiptEvent event) {
+    const bool identify = receipt.slot == IdentifyReceiptSlot;
+    if ((!identify && receipt.slot != RequestReceiptSlot) || !_request.sink || receipt.generation != _request.sequence)
+        return false;
+    if (event == handheld::TxReceiptEvent::Validate) return !_request.started && requestLive() &&
+        (!identify || !_links[_request.slot].identified);
+    if (event == handheld::TxReceiptEvent::Started) {
+        if (identify) _links[_request.slot].identified = true;
+        else _request.started = true;
+    } else failRequest(RequestError::Timeout);
+    return true;
 }
 
 void RustLinkManager::cancelRequest(RequestSink& sink) {
@@ -617,7 +638,7 @@ void RustLinkManager::failRequest(RequestError error) {
 }
 
 bool RustLinkManager::responseId(uint8_t iface, const uint8_t linkId[16], uint8_t out[16]) const {
-    if (!requestLive() || _request.iface != iface || memcmp(_links[_request.slot].linkId, linkId, 16)) return false;
+    if (!_request.started || !requestLive() || _request.iface != iface || memcmp(_links[_request.slot].linkId, linkId, 16)) return false;
     memcpy(out, _request.id, 16);
     return true;
 }
