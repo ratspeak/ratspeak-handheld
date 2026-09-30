@@ -85,6 +85,29 @@ rs_handheld_status_t rs_handheld_stamp_step(rs_handheld_stamp_t *job, uint16_t r
 rs_handheld_status_t rs_handheld_stamp_cancel(rs_handheld_stamp_t *job);
 void rs_handheld_stamp_destroy(rs_handheld_stamp_t *job); /* null is a no-op */
 
+/* Bounded relay codecs. Buffers are exclusive; all other inputs/outputs are
+ * disjoint and non-null. Crypto failure invalidates buffer contents. All scalar
+ * outputs publish only on success. Capacity is at most RESOURCE_DATA_MAX. */
+rs_handheld_status_t rs_handheld_lxmf_relay_size(size_t packed_length, uint8_t recipient_stamp,
+    size_t *entry_length, size_t *upload_length);
+rs_handheld_status_t rs_handheld_lxmf_append_stamp(uint8_t *buffer, size_t length,
+    size_t capacity, const uint8_t stamp[32], size_t *out_length);
+rs_handheld_status_t rs_handheld_lxmf_relay_encrypt(const rs_handheld_rns_t *ctx,
+    const uint8_t recipient[64], uint64_t wall_secs, uint64_t uptime_ms,
+    const uint8_t ephemeral[32], const uint8_t iv[16], uint8_t *buffer,
+    size_t length, size_t capacity, size_t *out_length, uint8_t transient_id[32]);
+rs_handheld_status_t rs_handheld_lxmf_transient_id(const uint8_t *data, size_t length, uint8_t out[32]);
+rs_handheld_status_t rs_handheld_lxmf_relay_upload(uint8_t *buffer, size_t encrypted_length,
+    size_t capacity, double timestamp, const uint8_t stamp[32], size_t *out_length);
+/* Restores full packed LXMF. Caller must then validate sender/signature and
+ * commit locally before allowing a node purge. Retained keys stay inside Rust. */
+rs_handheld_status_t rs_handheld_lxmf_relay_decrypt(const rs_handheld_rns_t *ctx,
+    uint8_t *buffer, size_t length, size_t *out_length, uint8_t transient_id[32]);
+rs_handheld_status_t rs_handheld_lxmf_available_first(const uint8_t *data, size_t length,
+    uint8_t id[32], uint32_t *count);
+rs_handheld_status_t rs_handheld_lxmf_fetched_view(const uint8_t *data, size_t length,
+    size_t *offset, size_t *entry_length);
+
 /* Static NUL-terminated version string, owned by Rust. Never null; do not free. */
 const char *rs_handheld_rns_version(void);
 
