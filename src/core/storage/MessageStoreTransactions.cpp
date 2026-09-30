@@ -110,9 +110,10 @@ MessageStore::Submission MessageStore::requestPrepared(const RecordKey& key, con
 }
 
 MessageStore::Submission MessageStore::requestPrepare(const RecordKey& key, const uint8_t source[16],
-    const uint8_t messageId[32], const uint8_t transientId[32], const uint8_t* entry, size_t length) {
+    const uint8_t messageId[32], const uint8_t transientId[32], const uint8_t* entry, size_t length,
+    uint8_t recipientCost) {
     uint8_t header[prepared::Header];
-    if (!prepared::make(header, key, source, messageId, transientId, entry, length)) return {{}, Rejection::Invalid};
+    if (!prepared::make(header, key, source, messageId, transientId, entry, length, recipientCost)) return {{}, Rejection::Invalid};
     Request request; request.operation = Operation::WritePrepared; request.key = key;
     memcpy(request.source, source, 16); memcpy(request.messageId, messageId, 32); request.hasMessageId = true;
     const WriteQueue::PayloadPart parts[] = {{header, sizeof(header)}, {entry, length}};
