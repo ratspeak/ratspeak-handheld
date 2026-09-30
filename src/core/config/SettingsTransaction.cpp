@@ -87,6 +87,8 @@ SettingsTransaction::Result SettingsTransaction::apply(UserConfig& effective, Us
     if (&effective == &candidate) return {State::Invalid, "Settings candidate must be separate"};
     if (effective._recoveryRequired) return Recovery;
     if (effective._namePending) return Pending;
+    if (!candidate.settings().propagation.valid())
+        return {State::Invalid, "Invalid propagation settings"};
     if (const char* error = changedCredentialError(effective.settings(), candidate.settings()))
         return {State::Invalid, error};
     const int index = identities.activeIndex();

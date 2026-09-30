@@ -362,6 +362,19 @@ bool UserConfig::parseJson(const char* json, size_t length, bool persisted, bool
         parsed.announceInterval = handheld::announce::normalizeMinutes(doc["announce_int"] | 30);
         parsed.devMode     = doc["dev_mode"]     | false;
 
+        // Absent fields migrate to OFF/AUTO/AUTO. Invalid new policy values
+        // refuse the whole candidate instead of silently changing delivery mode.
+        if ((!doc["prop_on"].isNull() && !doc["prop_on"].is<bool>()) ||
+            (!doc["prop_select"].isNull() && !doc["prop_select"].is<uint8_t>()) ||
+            (!doc["prop_delivery"].isNull() && !doc["prop_delivery"].is<uint8_t>()) ||
+            (!doc["prop_node"].isNull() && !doc["prop_node"].is<const char*>())) return false;
+        parsed.propagation.enabled = doc["prop_on"] | false;
+        parsed.propagation.selection = static_cast<handheld::propagation::Selection>(doc["prop_select"] | 0);
+        parsed.propagation.delivery = static_cast<handheld::propagation::Delivery>(doc["prop_delivery"] | 0);
+        const JsonString node = doc["prop_node"].as<JsonString>();
+        if (!parsed.propagation.valid() ||
+            !parsed.propagation.setManual(node.c_str(), node.size())) return false;
+
         sanitizeSettings(parsed);
         if (!handheld::config::Memory::admits(0)) return memoryFailure();
         // Swapping whole values also releases old String capacities. Arduino's
@@ -463,6 +476,13 @@ String UserConfig::serializeToJson(bool persisted, size_t limit, bool* unavailab
     doc["sd_storage"] = _settings.sdStorageEnabled;
     doc["announce_int"] = _settings.announceInterval;
     doc["dev_mode"]     = _settings.devMode;
+    if (!_settings.propagation.valid()) return "";
+    doc["prop_on"] = _settings.propagation.enabled;
+    doc["prop_select"] = static_cast<uint8_t>(_settings.propagation.selection);
+    doc["prop_delivery"] = static_cast<uint8_t>(_settings.propagation.delivery);
+    char propagationNode[33]{};
+    _settings.propagation.manualHex(propagationNode);
+    doc["prop_node"] = propagationNode;
 
     String json;
     if (doc.overflowed()) return memoryFailure();

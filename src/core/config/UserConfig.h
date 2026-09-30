@@ -11,6 +11,7 @@
 #include "config/Config.h"
 #include "config/BoardConfig.h"
 #include "config/ConfigMemory.h"
+#include "config/PropagationSettings.h"
 
 enum RatWiFiMode : uint8_t { RAT_WIFI_OFF = 0, RAT_WIFI_AP = 1, RAT_WIFI_STA = 2 };
 
@@ -76,6 +77,8 @@ struct UserSettings {
 
     // TCP outbound connections (STA mode only)
     std::vector<TCPEndpoint> tcpConnections;
+
+    handheld::propagation::Settings propagation;
 
     // Display
     uint16_t screenDimTimeout = 30;   // seconds
