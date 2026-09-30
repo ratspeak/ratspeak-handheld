@@ -1,4 +1,5 @@
 #include "MessageTransactions.h"
+#include "PreparedEnvelope.h"
 #include "config/Config.h"
 #include <Preferences.h>
 #include <limits>
@@ -806,6 +807,78 @@ void MessageTransactions::pending(const Request& request, uint8_t* bytes, size_t
     result.outcome = Outcome::Committed;
 }
 
+void MessageTransactions::prepared(const Request& request, uint8_t* bytes, size_t length,
+                                   size_t capacity, Result& result) {
+    namespace prep = handheld::storage::prepared;
+    capacity = std::min(capacity, size_t(request.readCapacity));
+    const bool writing = request.operation == Operation::WritePrepared;
+    if (!bytes || capacity < prep::Max || !request.key.counter || request.key.incoming ||
+        (writing && (!request.hasMessageId || !prep::valid(bytes, length, request.key,
+                                                         request.source, request.messageId)))) {
+        result.error = Error::InvalidRecord; return;
+    }
+    auto flash = medium(0);
+    if (!flash.isReady()) { result.error = Error::Unavailable; return; }
+    MessageDocument document; StoredRecordHeader header;
+    result.error = load(request.key, document, header);
+    if (result.error != Error::None) return;
+    if (header.incoming || memcmp(header.source, request.source, 16) ||
+        memcmp(header.destination, request.key.peer, 16) ||
+        (header.status != 7 && header.status != 8) ||
+        (writing && header.hasMessageId && memcmp(header.messageId, request.messageId, 32))) {
+        result.error = Error::Stale; return;
+    }
+    result.revision = header.revision;
+    char primary[128], backup[128];
+    path(request.key, 0, primary, ".prop"); path(request.key, 0, backup, ".prop.bak");
+    // Never replace an existing encrypted entry, even when a writer retried
+    // after losing its completion. A corrupt primary cannot roll back to a
+    // different backup or silently regenerate ciphertext.
+    const char* existing = flash.exists(primary) ? primary : flash.exists(backup) ? backup : nullptr;
+    if (existing) {
+        if (!retainedCopy(request.key, 0, document)) { result.error = Error::Read; return; }
+        File file = flash.open(existing);
+        if (!file) { result.error = Error::Read; return; }
+        const size_t size = file.size();
+        if (size > capacity || size < prep::Header + 112) { result.error = Error::InvalidRecord; return; }
+        size_t received = 0;
+        while (received < size) {
+            const size_t part = file.read(bytes + received, size - received);
+            if (!part || part > size - received) { result.error = Error::Read; return; }
+            received += part;
+        }
+        if (!header.hasMessageId || !prep::valid(bytes, size, request.key, request.source, header.messageId)) {
+            result.error = Error::InvalidRecord; return;
+        }
+        result.length = uint16_t(size); result.duplicate = writing;
+        result.outcome = Outcome::Committed; return;
+    }
+    if (!writing) { result.outcome = Outcome::Committed; return; }
+    if (!header.hasMessageId) {
+        if (header.revision == UINT32_MAX) { result.error = Error::RevisionExhausted; return; }
+        char id[65]; encodeHex(request.messageId, 32, id);
+        document.document()["msgid"] = JsonString(id, size_t(64), false);
+        document.document()["store_revision"] = header.revision + 1;
+        if (document.document().overflowed()) { result.error = Error::Allocation; return; }
+        ++header.revision;
+    }
+    // The record binding must be durable on the same authoritative medium
+    // before an envelope can authorize any transmission.
+    result.error = commit(request.key, document, false, result);
+    result.sd = {}; // This operation's envelope is flash-authoritative.
+    if (result.error != Error::None || !result.flash.committed) {
+        if (result.error == Error::None) result.error = Error::Write;
+        return;
+    }
+    result.revision = header.revision;
+    const MemorySource source(bytes, length);
+    result.flash.committed = false;
+    result.flash.error = result.error = flash.write(primary, source);
+    if (result.error != Error::None) return;
+    result.flash.committed = true;
+    result.length = uint16_t(length); result.outcome = Outcome::Committed;
+}
+
 void MessageTransactions::trim(const Request& request, Result& result) {
     if (deletedThrough(request.key.peer) == UINT32_MAX) { result.error = Error::Stale; return; }
     MessageDocument document;
@@ -884,6 +957,14 @@ void MessageTransactions::trim(const Request& request, Result& result) {
                         !retainedCopy(key, 1, document)) continue;
                 }
                 char primary[128], backup[128]; path(key, unsigned(target), primary); path(key, unsigned(target), backup, ".bak");
+                if (target == 0) {
+                    bool removed = true;
+                    for (const char* suffix : {".prop", ".prop.bak", ".prop.tmp"}) {
+                        char preparedPath[128]; path(key, 0, preparedPath, suffix);
+                        if (store.exists(preparedPath) && !store.remove(preparedPath)) removed = false;
+                    }
+                    if (!removed) { result.error = Error::Write; continue; }
+                }
                 const bool primaryRemoved = !store.exists(primary) || store.remove(primary);
                 const bool backupRemoved = !store.exists(backup) || store.remove(backup);
                 if (primaryRemoved && backupRemoved) { progress = true; ++result.total; result.outcome = Outcome::Committed; }
@@ -924,7 +1005,7 @@ void MessageTransactions::execute(const Request& request, uint8_t* bytes, size_t
     checkSummaryMedia();
     if (request.operation != Operation::ReadRecord && request.operation != Operation::ReadPending &&
         request.operation != Operation::ReadHistoryPage && request.operation != Operation::ReadConversationPage &&
-        request.operation != Operation::ReadConversation) {
+        request.operation != Operation::ReadConversation && request.operation != Operation::ReadPrepared) {
         if (_mutationEpoch == UINT64_MAX) { result.error = Error::RevisionExhausted; return; }
         ++_mutationEpoch;
         // Invalidate before attempting a write: partial mirrors, failed cleanup
@@ -953,6 +1034,8 @@ void MessageTransactions::execute(const Request& request, uint8_t* bytes, size_t
     case Operation::ReadConversationPage: conversationPage(request, bytes, capacity, result); break;
     case Operation::ReadConversation: conversation(request, bytes, capacity, result); break;
     case Operation::Trim: trim(request, result); break;
+    case Operation::ReadPrepared: case Operation::WritePrepared:
+        prepared(request, bytes, length, capacity, result); break;
     default: result.error = Error::InvalidRecord;
     }
 }

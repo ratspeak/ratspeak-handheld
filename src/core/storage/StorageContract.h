@@ -23,7 +23,8 @@ constexpr bool operator!=(Ticket a, Ticket b) { return !(a == b); }
 
 enum class Operation : uint8_t {
     CreateIncoming, CreateOutgoing, UpdateStatus, MarkRead, DeleteConversation,
-    ReadRecord, ReadHistoryPage, ReadPending, ReadConversationPage, ReadConversation, Trim
+    ReadRecord, ReadHistoryPage, ReadPending, ReadConversationPage, ReadConversation, Trim,
+    ReadPrepared, WritePrepared
 };
 enum class Rejection : uint8_t {
     None, Busy, Invalid, TooLarge, NoMemory, Unavailable, Fenced, Exhausted

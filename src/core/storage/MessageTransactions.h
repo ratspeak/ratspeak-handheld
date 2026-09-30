@@ -83,6 +83,7 @@ private:
     void read(const Request&, uint8_t*, size_t, Result&);
     void history(const Request&, uint8_t*, size_t, Result&);
     void pending(const Request&, uint8_t*, size_t, Result&);
+    void prepared(const Request&, uint8_t*, size_t length, size_t capacity, Result&);
     void conversationPage(const Request&, uint8_t*, size_t, Result&);
     void conversation(const Request&, uint8_t*, size_t, Result&);
     void trim(const Request&, Result&);

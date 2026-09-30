@@ -40,6 +40,12 @@ public:
     Submission requestDelete(const std::string& peer, uint32_t identityGeneration = 0, uint32_t peerGeneration = 0);
     Submission requestRecord(const RecordKey&, uint32_t offset = 0, uint16_t capacity = 4096);
     Submission requestPending(const RecordKey& after = {});
+    // Immutable recipient-encrypted entry bound to this original outgoing record.
+    // Read: committed length zero means absent; any read/corruption error fails closed.
+    // Write: an existing valid entry wins. Always consume the returned owned bytes.
+    Submission requestPrepared(const RecordKey&, const uint8_t source[16]);
+    Submission requestPrepare(const RecordKey&, const uint8_t source[16], const uint8_t messageId[32],
+                              const uint8_t transientId[32], const uint8_t* entry, size_t length);
     Submission requestHistoryPage(const std::string& peer, HistoryEntry cursor = {}, uint8_t limit = 48,
                                   HistoryDirection direction = HistoryDirection::Before);
     Submission requestConversationPage(handheld::storage::ConversationCursor cursor = {}, bool hasCursor = false,

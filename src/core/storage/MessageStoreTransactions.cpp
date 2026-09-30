@@ -1,5 +1,6 @@
 #include "MessageStore.h"
 #include "MessageTransactions.h"
+#include "PreparedEnvelope.h"
 #include "runtime/TaskOwner.h"
 #include <algorithm>
 #include <cmath>
@@ -101,6 +102,23 @@ MessageStore::Submission MessageStore::requestPending(const RecordKey& after) {
     return submit(request, nullptr, 0, sizeof(StoredRecordHeader));
 }
 
+MessageStore::Submission MessageStore::requestPrepared(const RecordKey& key, const uint8_t source[16]) {
+    if (!key.counter || key.incoming || !source) return {{}, Rejection::Invalid};
+    Request request; request.operation = Operation::ReadPrepared; request.key = key;
+    memcpy(request.source, source, 16);
+    return submit(request, nullptr, 0, prepared::Max);
+}
+
+MessageStore::Submission MessageStore::requestPrepare(const RecordKey& key, const uint8_t source[16],
+    const uint8_t messageId[32], const uint8_t transientId[32], const uint8_t* entry, size_t length) {
+    uint8_t header[prepared::Header];
+    if (!prepared::make(header, key, source, messageId, transientId, entry, length)) return {{}, Rejection::Invalid};
+    Request request; request.operation = Operation::WritePrepared; request.key = key;
+    memcpy(request.source, source, 16); memcpy(request.messageId, messageId, 32); request.hasMessageId = true;
+    const WriteQueue::PayloadPart parts[] = {{header, sizeof(header)}, {entry, length}};
+    return submit(request, parts, 2, prepared::Max);
+}
+
 MessageStore::Submission MessageStore::requestHistoryPage(const std::string& peer, HistoryEntry cursor, uint8_t limit,
                                                          HistoryDirection direction) {
     Request request; request.operation = Operation::ReadHistoryPage;
@@ -176,7 +194,7 @@ void MessageStore::settle(const Request& request, const Result& result) noexcept
     if (result.outcome != Outcome::Committed) return;
     if (request.operation == Operation::ReadRecord || request.operation == Operation::ReadHistoryPage ||
         request.operation == Operation::ReadConversationPage || request.operation == Operation::ReadConversation ||
-        request.operation == Operation::ReadPending) return;
+        request.operation == Operation::ReadPending || request.operation == Operation::ReadPrepared) return;
     if (result.duplicate) return;
     // Only committed aggregate deltas and invalidation live here. There is no
     // presentation cache or allocation between persistence and result visibility.
