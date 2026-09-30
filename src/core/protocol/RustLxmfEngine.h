@@ -8,6 +8,7 @@
 #include "OutgoingContract.h"
 #include "PropagationNodes.h"
 #include "RustStampWork.h"
+#include "RustPropagationInbox.h"
 
 class MessageStore;
 class RustClock;
@@ -55,6 +56,8 @@ public:
     int queuedCount() const;
     void loop();
     bool propagationBusy() const { return _relay.ticket.valid() && !_relay.direct; }
+    RustPropagationInbox& inbox() { return _inbox; }
+    const RustPropagationInbox& inbox() const { return _inbox; }
     void onLinkSetupFailure(const uint8_t peer[16], const rs_handheld_route_t& failedRoute);
     void onResourceOutcome(Ticket, handheld::outgoing::ResourceOutcome);
     handheld::TxOffer offerResource(Ticket, uint8_t iface, const uint8_t* raw, size_t length, uint64_t bornMs);
@@ -72,6 +75,7 @@ public:
     RustIncomingDelivery& incoming() { return _incoming; }
     const RustIncomingDelivery& incoming() const { return _incoming; }
 private:
+    friend class RustPropagationInbox;
     static constexpr uint8_t RowCount = 20, ReceiptBase = 128, ProofAttempts = 3;
     static_assert(ReceiptBase + RowCount * 4 <= UINT8_MAX, "Outgoing receipt namespace overlaps invalid handle");
     enum class Phase : uint8_t { Free, Saving, Query, Ready, Reading, Prepared, AwaitProof, Resource, Grace, Settled, Relay, Stamp };
@@ -161,4 +165,7 @@ private:
     bool _accepting = false, _recovering = false, _polling = false, _deleting = false;
     SourceRequest _sourceRequests[SOURCE_REQUEST_SLOTS];
     RustIncomingDelivery _incoming;
+    RustPropagationInbox _inbox;
 };
+static_assert(sizeof(RustPropagationInbox) <= handheld::ResourceBudget::PropagationInbox,
+              "Review propagation inbox metadata budget");

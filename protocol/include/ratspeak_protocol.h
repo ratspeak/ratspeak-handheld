@@ -104,7 +104,9 @@ rs_handheld_status_t rs_handheld_lxmf_relay_upload(uint8_t *buffer, size_t encry
 rs_handheld_status_t rs_handheld_lxmf_relay_decrypt(const rs_handheld_rns_t *ctx,
     uint8_t *buffer, size_t length, size_t *out_length, uint8_t transient_id[32]);
 rs_handheld_status_t rs_handheld_lxmf_available_first(const uint8_t *data, size_t length,
-    uint8_t id[32], uint32_t *count);
+                                                    uint8_t id[32], uint32_t *count);
+rs_handheld_status_t rs_handheld_lxmf_available_at(const uint8_t *data, size_t length, uint32_t index,
+                                                 uint8_t id[32], uint32_t *count);
 rs_handheld_status_t rs_handheld_lxmf_fetched_view(const uint8_t *data, size_t length,
     size_t *offset, size_t *entry_length);
 

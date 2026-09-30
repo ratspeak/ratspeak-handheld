@@ -71,6 +71,7 @@ bool RustLxmfEngine::begin(const Deps& deps) {
     incoming.pump = deps.pump; incoming.links = deps.links; incoming.onMessage = deps.onMessage;
     incoming.ourDestHash = deps.ourDestHash;
     if (!_incoming.begin(incoming, false)) { _accepting = false; return false; }
+    _inbox.begin(*this);
     _d.pump->setReceiptHook(receiptHook, this);
     return true;
 }
@@ -240,6 +241,7 @@ bool RustLxmfEngine::cancel(Ticket ticket) {
 bool RustLxmfEngine::beginPeerDelete(const uint8_t peer[16]) {
     if (!_accepting || _deleting || !peer) return false;
     _deleting = true; memcpy(_deletingPeer, peer, 16);
+    _inbox.dropPeer(peer);
     _incoming.dropPeer(peer);
     for (uint8_t i = 0; i < RowCount; ++i) {
         auto& value = _rows[i];
@@ -267,6 +269,7 @@ void RustLxmfEngine::finishPeerDelete(const uint8_t peer[16], const handheld::st
 }
 void RustLxmfEngine::stopAdmissions() {
     _accepting = false; _recovering = false;
+    _inbox.stop();
     for (uint8_t i = 0; i < RowCount; ++i) {
         auto& value = _rows[i];
         if (value.phase == Phase::Free) continue;
@@ -277,7 +280,7 @@ void RustLxmfEngine::stopAdmissions() {
     }
 }
 bool RustLxmfEngine::drained() const {
-    if (_deleting) return false;
+    if (_deleting || !_inbox.drained()) return false;
     for (const auto& value : _rows) if (value.phase != Phase::Free) return false;
     return _body.slot == UINT8_MAX;
 }
@@ -530,6 +533,7 @@ void RustLxmfEngine::finishRouteFailure(Ticket ticket) {
 
 void RustLxmfEngine::onLinkSetupFailure(const uint8_t peer[16], const rs_handheld_route_t& failedRoute) {
     if (!_accepting) return;
+    _inbox.onLinkSetupFailure(peer);
     if (_relay.ticket.valid() && !memcmp(_relay.node, peer, 16)) {
         finishRelay(_relay.ticket, LXMFStatus::PROP_UNAVAILABLE, true);
     }
@@ -797,6 +801,7 @@ void RustLxmfEngine::loop() {
     _incoming.poll();
     if (!_d.store || !_d.clock) { _polling = false; return; }
     _d.store->poll();
+    _inbox.poll();
     const bool enabled = _d.propagation && _d.propagation->settings().enabled;
     if (enabled && !_propagationWasEnabled && _accepting) {
         _recovering = true; _recoveryCursor = {};

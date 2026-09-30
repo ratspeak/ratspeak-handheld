@@ -9,6 +9,15 @@ namespace handheld::propagation {
 enum class Selection : uint8_t { Auto = 0, Manual = 1 };
 enum class Delivery : uint8_t { Auto = 0, Always = 1 };
 
+enum class SyncStatus : uint8_t { Off, Idle, Waiting, Connecting, Listing, Receiving, Saving, Purging,
+    Complete, Unavailable, Unsupported, Invalid, StorageError, SourceUnknown, StampCostHigh };
+struct SyncView {
+    uint8_t node[16]{};
+    SyncStatus status = SyncStatus::Off;
+    uint8_t received = 0;
+    bool busy = false;
+};
+
 struct NodeView {
     uint8_t address[16]{};
     char name[32]{};

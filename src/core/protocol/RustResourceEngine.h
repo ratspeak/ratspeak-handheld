@@ -52,6 +52,7 @@ public:
 
 private:
     friend class RustLxmfEngine;
+    friend class RustPropagationInbox;
     // One service-owned synchronous staging buffer. Outgoing encoding is copied
     // into a packet or Rust Resource before a driver/callback can run. Incoming
     // assembly is copied into storage before application notifications. Neither

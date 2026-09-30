@@ -21,6 +21,7 @@ struct ResourceBudget {
     static constexpr size_t StampState = 384; // One Rust incremental job; never a full workblock.
     static constexpr size_t StampOwner = 128;
     static constexpr size_t RelayPreparation = 512; // One stamp owner plus metadata; no retained body.
+    static constexpr size_t PropagationInbox = 256; // Journal and scalar state; shared codec/storage credits.
     static constexpr size_t RecipientStampCosts = 1344; // 32 bounded policy rows; codec reuses KeyMap's I/O buffer.
     static constexpr size_t CanvasHistoryText = 4096;
     static constexpr size_t CanvasHistoryRows = 1024;

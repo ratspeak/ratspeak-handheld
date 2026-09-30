@@ -257,11 +257,29 @@ pub unsafe extern "C" fn rs_handheld_lxmf_available_first(
     id: *mut [u8; 32],
     count: *mut u32,
 ) -> RsHandheldStatus {
+    unsafe { rs_handheld_lxmf_available_at(data, length, 0, id, count) }
+}
+
+/// Validate the complete list and copy one indexed ID. Out-of-range positions
+/// publish zero ID with the actual count; malformed input publishes nothing.
+/// # Safety
+/// Non-null readable input and disjoint aligned writable outputs.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rs_handheld_lxmf_available_at(
+    data: *const u8,
+    length: usize,
+    index: u32,
+    id: *mut [u8; 32],
+    count: *mut u32,
+) -> RsHandheldStatus {
     guard(|| {
         if data.is_null() || id.is_null() || count.is_null() || length > rns_resource::DATA_MAX {
             return RsHandheldStatus::ErrInvalidArg;
         }
-        match relay::first_available(unsafe { core::slice::from_raw_parts(data, length) }) {
+        match relay::available_at(
+            unsafe { core::slice::from_raw_parts(data, length) },
+            index as usize,
+        ) {
             Ok((first, total)) => {
                 unsafe {
                     *id = first.unwrap_or([0; 32]);
@@ -514,6 +532,22 @@ mod tests {
                 RsHandheldStatus::Ok
             );
             assert_eq!((id, count), ([0; 32], 0));
+            let list = [0x92, 0xc4, 32]
+                .into_iter()
+                .chain([1; 32])
+                .chain([0xc4, 32])
+                .chain([2; 32])
+                .collect::<Vec<_>>();
+            assert_eq!(
+                rs_handheld_lxmf_available_at(list.as_ptr(), list.len(), 1, &mut id, &mut count),
+                RsHandheldStatus::Ok
+            );
+            assert_eq!((id, count), ([2; 32], 2));
+            assert_eq!(
+                rs_handheld_lxmf_available_at(list.as_ptr(), list.len(), 2, &mut id, &mut count),
+                RsHandheldStatus::Ok
+            );
+            assert_eq!((id, count), ([0; 32], 2));
             let fetch = [0x91, 0xc4, 3, 1, 2, 3];
             assert_eq!(
                 rs_handheld_lxmf_fetched_view(fetch.as_ptr(), fetch.len(), &mut entry, &mut upload),
