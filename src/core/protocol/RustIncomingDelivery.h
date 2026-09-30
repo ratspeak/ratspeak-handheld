@@ -29,7 +29,14 @@ public:
         IncomingRef incoming;
         ReceiveError error = ReceiveError::Invalid;
     };
-    enum class Kind : uint8_t { Packet, LinkPacket, Resource, Control, ReservedResource, NoProof, PreparedResource };
+    enum class Kind : uint8_t { Packet, LinkPacket, Resource, Control, ReservedResource, NoProof, PreparedResource, Propagation };
+    enum class CommitState : uint8_t { Invalid, Pending, Committed, Failed };
+    struct CommitResult {
+        handheld::storage::RecordKey key;
+        uint8_t messageId[32]{};
+        uint32_t revision = 0;
+        handheld::storage::Error error = handheld::storage::Error::None;
+    };
     // Stack-only validated ingress/proof input. A Resource reservation preserves
     // the ADV birth/deadline; the raw bytes are copied before return.
     struct ReceiptSeed {
@@ -63,6 +70,11 @@ public:
 
     bool begin(const Deps&, bool bindReceiptHook = true);
     ReceiveResult accept(const MessageView&, const ReceiptSeed&);
+    // Propagation retains a scalar result until explicit release. It emits no
+    // transport proof and never treats a disappeared row as a storage commit.
+    // There is one propagation consumer per MID; duplicates share the same ref.
+    CommitState heldCommit(IncomingRef, CommitResult&) const;
+    bool releaseHeld(IncomingRef);
     bool captureSeed(ReceiptSeed&, Kind, uint8_t iface, const uint8_t* raw, size_t length,
                      const uint8_t* linkId = nullptr);
     handheld::TxReceipt reserveResource(uint8_t iface, const uint8_t linkId[16], const uint8_t hash[32]);
@@ -85,6 +97,7 @@ public:
     static bool receiptHook(void*, handheld::TxReceipt, handheld::TxReceiptEvent);
 
 private:
+    static constexpr uint16_t ProofBits = (1u << ReceiptCount) - 1, HeldCommit = 1u << 15;
     enum class Phase : uint8_t { Free, Reserved, AwaitStore, Committed, Reaction, Invisible };
     enum class State : uint8_t { Free, Reserved, Eligible, Queued };
     struct IncomingRow {
