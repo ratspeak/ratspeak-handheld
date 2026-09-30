@@ -10,6 +10,7 @@
 class RustClock;
 class RustInterfacePump;
 class RustLxmfEngine;
+class RustLinkManager;
 
 // One outbound + one inbound Reticulum Resource transfer. Rust owns codecs and crypto;
 // this owner schedules interface I/O, retries, cancellation and durable delivery.
@@ -24,6 +25,7 @@ public:
         RustClock* clock = nullptr;
         RustInterfacePump* pump = nullptr;
         RustLxmfEngine* lxmf = nullptr;
+        RustLinkManager* links = nullptr;
     };
     // Called with the exact outgoing ticket when a resource resolves: true on a valid
     // delivery proof, false on cancellation/timeout — LXMF flips DELIVERED / FAILED.
@@ -93,6 +95,8 @@ private:
         bool requestPending = false;
         bool cancelPending = false;
         bool awaitingSource = false;
+        bool response = false;
+        uint8_t requestId[16]{};
         unsigned long sourcePollMs = 0;
         handheld::TxReceipt receipt;
     };

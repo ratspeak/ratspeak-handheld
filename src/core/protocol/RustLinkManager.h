@@ -63,6 +63,24 @@ public:
     const uint8_t* activeLinkId(const uint8_t dest[16]) const;
     uint8_t activeLinkIface(const uint8_t dest[16]) const;
     bool linkActive(const uint8_t dest[16]) const;
+
+    enum class RequestError : uint8_t { Timeout, LinkClosed, Unsupported, Invalid };
+    struct RequestSink {
+        virtual ~RequestSink() = default;
+        // Encoded MessagePack value; borrow ends on return. The request has
+        // already retired, so the callback may admit its next operation.
+        virtual void onLinkResponse(const uint8_t* value, size_t length) = 0;
+        virtual void onLinkRequestFailed(RequestError) = 0;
+    };
+    // One inbox control request across the existing Link pool. No packet or
+    // message body is retained. Caller owns retries after local refusal.
+    bool startGet(const uint8_t dest[16], uint8_t operation, const uint8_t* transientId,
+                  uint16_t limitBytes, RequestSink& sink, uint32_t timeoutMs);
+    bool requestPending() const { return _request.sink != nullptr; }
+    void cancelRequest(RequestSink& sink);
+    bool responseId(uint8_t iface, const uint8_t linkId[16], uint8_t out[16]) const;
+    bool completeResponse(uint8_t iface, const uint8_t linkId[16], const uint8_t* data, size_t length);
+    void failResponse(uint8_t iface, const uint8_t linkId[16], const uint8_t requestId[16], RequestError error);
     bool receiptBinding(uint8_t iface, const uint8_t linkId[16], uint8_t& slot, uint32_t& generation) const;
     bool receiptLive(uint8_t slot, uint32_t generation, uint8_t iface) const;
     const uint8_t* receiptPeer(uint8_t slot, uint32_t generation) const;
@@ -83,6 +101,7 @@ private:
         uint8_t sessionKey[64] = {};
         bool haveKey = false;
         bool initiator = false;
+        bool identified = false;
         uint8_t iface = UINT8_MAX;
         uint8_t hops = 1;
         bool hasNextHop = false;
@@ -123,6 +142,21 @@ private:
     void queueKeepalive(Link& l);
     void retryKeepalive(Link& l);
     void sendTeardown(Link& l);
+    bool identify(Link&);
+    bool requestLive() const;
+    void failRequest(RequestError);
+    bool buildLinkPacket(const uint8_t dest[16], uint8_t context, const uint8_t* plaintext,
+                         size_t len, uint8_t* raw, size_t capacity, size_t& rawLength);
+
+    struct Request {
+        RequestSink* sink = nullptr;
+        uint64_t bornMs = 0;
+        uint32_t waitMs = 0, sequence = 0, linkGeneration = 0, interfaceGeneration = 0;
+        uint8_t id[16]{};
+        uint8_t slot = UINT8_MAX, iface = UINT8_MAX;
+    };
+    Request _request;
+    uint32_t _requestSequence = 0;
 
     Deps _d;
     Link _links[MAX_LINKS];

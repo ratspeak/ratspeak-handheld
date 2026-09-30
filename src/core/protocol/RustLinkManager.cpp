@@ -105,6 +105,7 @@ void RustLinkManager::closeLink(Link& l) {
     l.keepalivePending = false;
     l.keepaliveInterfaceGeneration = 0;
     l.state = State::Closed;
+    if (_request.sink && _request.slot == size_t(&l - _links)) failRequest(RequestError::LinkClosed);
 }
 
 void RustLinkManager::failSetup(Link& l) {
@@ -122,6 +123,8 @@ void RustLinkManager::failSetup(Link& l) {
 }
 
 void RustLinkManager::endAll() {
+    // Runtime teardown retires consumer ownership without a reentrant restart.
+    _request = {};
     for (auto& l : _links) closeLink(l);
 }
 
@@ -440,6 +443,13 @@ void RustLinkManager::onLinkData(Link& l, const rs_handheld_local_frame_t& f) {
         if (_d.resources) _d.resources->onLinkFrame(l.peerDest, l.linkId, l.sessionKey, l.iface, f);
         return;
     }
+    if (f.context == RustWire::CTX_RESPONSE && l.initiator && l.state == State::Active) {
+        uint8_t pt[RS_HANDHELD_LINK_MDU]; size_t length = 0;
+        if (rs_handheld_rns_link_decrypt(l.sessionKey, f.payload, f.payload_len,
+                pt, sizeof pt, &length) == RS_HANDHELD_OK)
+            completeResponse(l.iface, l.linkId, pt, length);
+        return;
+    }
     if (f.context == RustWire::CTX_NONE) {
         // Link-delivered LXMF (DIRECT): decrypt -> full packed message -> LXMF engine.
         uint8_t pt[RS_HANDHELD_LINK_MDU + 32];
@@ -503,6 +513,11 @@ bool RustLinkManager::sendLinkData(const uint8_t dest[16], const uint8_t* plaint
 
 bool RustLinkManager::buildLinkDataPacket(const uint8_t dest[16], const uint8_t* plaintext, size_t len,
     uint8_t* raw, size_t capacity, size_t& rawLength) {
+    return buildLinkPacket(dest, RustWire::CTX_NONE, plaintext, len, raw, capacity, rawLength);
+}
+
+bool RustLinkManager::buildLinkPacket(const uint8_t dest[16], uint8_t context,
+    const uint8_t* plaintext, size_t len, uint8_t* raw, size_t capacity, size_t& rawLength) {
     rawLength = 0;
     Link* l = findByDest(dest);
     if (!l || l->state != State::Active || !l->haveKey) return false;
@@ -514,8 +529,88 @@ bool RustLinkManager::buildLinkDataPacket(const uint8_t dest[16], const uint8_t*
         RS_HANDHELD_OK) {
         return false;
     }
-    return rs_handheld_rns_packet_build(0, RustWire::PT_DATA, RustWire::DT_LINK, RustWire::CTX_NONE,
+    return rs_handheld_rns_packet_build(0, RustWire::PT_DATA, RustWire::DT_LINK, context,
         nullptr, l->linkId, enc, encLen, raw, capacity, &rawLength) == RS_HANDHELD_OK && rawLength;
+}
+
+bool RustLinkManager::identify(Link& link) {
+    if (link.state != State::Active || !link.initiator || !_d.pump) return false;
+    if (link.identified) return true;
+    uint8_t plaintext[128], raw[500]; size_t length = 0;
+    if (rs_handheld_rns_link_identify(_d.ctx, link.linkId, plaintext) != RS_HANDHELD_OK ||
+        !buildLinkPacket(link.peerDest, RustWire::CTX_LINKIDENTIFY, plaintext, sizeof plaintext,
+                         raw, sizeof raw, length)) return false;
+    const auto generation = _generations[&link - _links];
+    if (!_d.pump->sendTo(link.iface, raw, length) || generation != _generations[&link - _links] ||
+        link.state != State::Active) return false;
+    link.identified = true;
+    return true;
+}
+
+bool RustLinkManager::startGet(const uint8_t dest[16], uint8_t operation, const uint8_t* transientId,
+                              uint16_t limitBytes, RequestSink& sink, uint32_t timeoutMs) {
+    if (_request.sink || _requestSequence == UINT32_MAX || !timeoutMs || !_d.pump) return false;
+    Link* link = findByDest(dest);
+    if (!link || !identify(*link)) return false;
+    uint8_t plaintext[96], raw[500], hash[32]; size_t length = 0, rawLength = 0;
+    const uint64_t now = _d.clock ? _d.clock->nowMs() : uint64_t(millis());
+    const auto epoch = RustClock::epochSecs();
+    if (rs_handheld_lxmf_get_request(epoch ? double(epoch) : double(now) / 1000.0, operation,
+        transientId, limitBytes, plaintext, sizeof plaintext, &length) != RS_HANDHELD_OK ||
+        !buildLinkPacket(dest, RustWire::CTX_REQUEST, plaintext, length, raw, sizeof raw, rawLength) ||
+        rs_handheld_rns_packet_hash(raw, rawLength, 0, hash) != RS_HANDHELD_OK) return false;
+    handheld::TxLease lease;
+    if (!_d.pump->captureLeaseAt(link->iface, raw, rawLength, now, timeoutMs, lease)) return false;
+    const auto sequence = ++_requestSequence;
+    _request = {};
+    _request.sink = &sink; _request.sequence = sequence;
+    _request.bornMs = now; _request.waitMs = timeoutMs;
+    _request.slot = uint8_t(link - _links); _request.iface = link->iface;
+    _request.linkGeneration = _generations[_request.slot];
+    _request.interfaceGeneration = _d.pump->interfaceGeneration(link->iface);
+    memcpy(_request.id, hash, 16); // packet requests use the transmitted packet hash
+    const bool admitted = _d.pump->sendLeased(raw, rawLength, lease);
+    if (!admitted && _request.sequence == sequence) _request = {};
+    return admitted;
+}
+
+bool RustLinkManager::requestLive() const {
+    if (!_request.sink || !_d.pump || !receiptLive(_request.slot, _request.linkGeneration, _request.iface) ||
+        !_request.interfaceGeneration || _d.pump->interfaceGeneration(_request.iface) != _request.interfaceGeneration)
+        return false;
+    const auto now = _d.clock ? _d.clock->nowMs() : uint64_t(millis());
+    return now >= _request.bornMs && now - _request.bornMs < _request.waitMs;
+}
+
+void RustLinkManager::cancelRequest(RequestSink& sink) {
+    if (_request.sink == &sink) _request = {};
+}
+
+void RustLinkManager::failRequest(RequestError error) {
+    auto* sink = _request.sink;
+    _request = {};
+    if (sink) sink->onLinkRequestFailed(error);
+}
+
+bool RustLinkManager::responseId(uint8_t iface, const uint8_t linkId[16], uint8_t out[16]) const {
+    if (!requestLive() || _request.iface != iface || memcmp(_links[_request.slot].linkId, linkId, 16)) return false;
+    memcpy(out, _request.id, 16);
+    return true;
+}
+
+bool RustLinkManager::completeResponse(uint8_t iface, const uint8_t linkId[16], const uint8_t* data, size_t length) {
+    uint8_t expected[16]; size_t offset = 0, valueLength = 0;
+    if (!responseId(iface, linkId, expected) ||
+        rs_handheld_lxmf_response_view(data, length, expected, &offset, &valueLength) != RS_HANDHELD_OK) return false;
+    auto* sink = _request.sink;
+    _request = {};
+    sink->onLinkResponse(data + offset, valueLength);
+    return true;
+}
+
+void RustLinkManager::failResponse(uint8_t iface, const uint8_t linkId[16], const uint8_t requestId[16], RequestError error) {
+    uint8_t expected[16];
+    if (responseId(iface, linkId, expected) && !memcmp(expected, requestId, 16)) failRequest(error);
 }
 
 const uint8_t* RustLinkManager::activeLinkKey(const uint8_t dest[16]) const {
@@ -552,6 +647,7 @@ size_t RustLinkManager::activeCount() const {
 }
 
 void RustLinkManager::loop() {
+    if (_request.sink && !requestLive()) failRequest(RequestError::Timeout);
     unsigned long now = millis();
     for (auto& l : _links) {
         if (l.state == State::Active || l.state == State::Stale || l.state == State::RespPending)

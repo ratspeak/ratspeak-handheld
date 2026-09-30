@@ -1,5 +1,6 @@
 
 #include "protocol/RustResourceEngine.h"
+#include "protocol/RustLinkManager.h"
 #include "protocol/RustClock.h"
 #include "protocol/RustEntropy.h"
 #include "protocol/RustInterfacePump.h"
@@ -210,8 +211,15 @@ void RustResourceEngine::onLinkFrame(const uint8_t peerDest[16], const uint8_t l
         if (!_d.lxmf || _d.lxmf->incoming().resourcePending(ifaceId, linkId, resHash)) return;
         const auto receipt = _d.lxmf->incoming().reserveResource(ifaceId, linkId, resHash);
         if (!receipt.valid()) { Serial.println("[RUST-RES] no receipt credit; ADV deferred"); return; }
-        rs_handheld_status_t st = rs_handheld_rns_resource_advertise_accept(
-            _d.ctx, adv, advLen, &numParts, &transferSize, &dataSize, resHash);
+        uint8_t expectedId[16]{}, responseId[16]{};
+        const bool response = _d.links && _d.links->responseId(ifaceId, linkId, expectedId) &&
+            rs_handheld_rns_resource_response_id(adv, advLen, responseId) == RS_HANDHELD_OK &&
+            !memcmp(expectedId, responseId, 16);
+        const rs_handheld_status_t st = response
+            ? rs_handheld_rns_resource_response_accept(_d.ctx, adv, advLen, &numParts,
+                &transferSize, &dataSize, resHash, expectedId)
+            : rs_handheld_rns_resource_advertise_accept(_d.ctx, adv, advLen, &numParts,
+                &transferSize, &dataSize, resHash);
         if (st != RS_HANDHELD_OK) {
             if (!frameLinkEncrypted(ifaceId, linkId, key, RustWire::PT_DATA,
                                     RustWire::CTX_RESOURCE_RCL, resHash, 32, true, receipt)) {
@@ -219,9 +227,14 @@ void RustResourceEngine::onLinkFrame(const uint8_t peerDest[16], const uint8_t l
                 Serial.println("[RUST-RES] rejection backpressured");
             }
             Serial.printf("[RUST-RES] receiver declined ADV (%d)\n", (int)st);
+            if (response) _d.links->failResponse(ifaceId, linkId, expectedId,
+                st == RS_HANDHELD_ERR_CAPACITY || st == RS_HANDHELD_ERR_UNSUPPORTED
+                    ? RustLinkManager::RequestError::Unsupported : RustLinkManager::RequestError::Invalid);
             return;
         }
         _in.active = true; _in.receipt = receipt;
+        _in.response = response;
+        if (response) memcpy(_in.requestId, expectedId, 16);
         _d.lxmf->incoming().setResourceDeadline(receipt, waitMs(ifaceId, 2 * numParts + 8,
             RECEIVER_BASE_TIMEOUT_MS + RECEIVER_PER_PART_TIMEOUT_MS * numParts));
         memcpy(_in.peerDest, peerDest, 16);
@@ -330,6 +343,23 @@ void RustResourceEngine::acceptAssembled() {
         if (rs_handheld_rns_resource_proof_build(_d.ctx, proof, sizeof(proof), &proofLen) == RS_HANDHELD_OK &&
             buildRawProof(_in.linkId, proof, proofLen, raw, rawLen) &&
             _d.lxmf->incoming().resourceSeed(_in.receipt, seed, raw, rawLen)) {
+            if (_in.response) {
+                uint8_t expected[16]; size_t offset = 0, length = 0;
+                if (!_d.links || !_d.links->responseId(_in.iface, _in.linkId, expected) ||
+                    memcmp(expected, _in.requestId, 16) ||
+                    rs_handheld_lxmf_response_view(_codec, outLen, expected, &offset, &length) != RS_HANDHELD_OK) {
+                    closeInbound(true); return;
+                }
+                // This proves authenticated RPC transport only. The consumer
+                // must separately await durable message storage before purge.
+                if (!_d.lxmf->incoming().retainControl(_in.iface, _in.linkId, raw, rawLen, _in.receipt)) {
+                    _in.awaitingSource = true; _in.sourcePollMs = millis(); return;
+                }
+                const auto iface = _in.iface; uint8_t linkId[16]; memcpy(linkId, _in.linkId, 16);
+                closeInbound(false, true);
+                _d.links->completeResponse(iface, linkId, _codec, outLen);
+                return;
+            }
             const auto received = _d.lxmf->onDirectPayload(_codec, outLen, seed);
             if (received.error == RustIncomingDelivery::ReceiveError::SourceUnknown) {
                 // Discovery is transient. Keep the original Resource reservation
@@ -374,6 +404,12 @@ void RustResourceEngine::loop() {
         }
     }
     if (_in.active) {
+        if (_in.response) {
+            uint8_t expected[16];
+            if (!_d.links || !_d.links->responseId(_in.iface, _in.linkId, expected) || memcmp(expected, _in.requestId, 16)) {
+                closeInbound(true); return;
+            }
+        }
         if (!_d.lxmf || !_d.lxmf->incoming().resourceLive(_in.receipt)) { closeInbound(false); return; }
         if (_in.cancelPending) { closeInbound(true); return; }
         if (_in.requestPending) sendRequest();

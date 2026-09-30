@@ -129,6 +129,7 @@ bool ProtocolRuntime::startEngines(FlashStore* flash, SDStore* sd, MessageStore*
     _links.begin(ld);
 
     RustResourceEngine::Deps rd;
+    rd.links = &_links;
     rd.ctx = _ctx;
     rd.clock = &_clock;
     rd.pump = &_pump;

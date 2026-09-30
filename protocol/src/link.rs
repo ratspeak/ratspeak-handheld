@@ -21,6 +21,33 @@ const _: () = {
     assert!(RS_HANDHELD_LINK_KEY_LEN == 64);
 };
 
+/// Build the 128-byte LINKIDENTIFY plaintext for an ACTIVE initiator Link.
+/// The owner encrypts this under that Link and sends context LINKIDENTIFY.
+///
+/// # Safety
+/// `ctx` is live; `link_id` reads 16 bytes, `out` writes 128 bytes. Regions
+/// must not overlap. No output is changed if the identity is unavailable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rs_handheld_rns_link_identify(
+    ctx: *const RsHandheldRns,
+    link_id: *const [u8; 16],
+    out: *mut [u8; 128],
+) -> RsHandheldStatus {
+    guard(|| {
+        if ctx.is_null() || link_id.is_null() || out.is_null() {
+            return RsHandheldStatus::ErrInvalidArg;
+        }
+        // SAFETY: checked pointers, caller owns disjoint correctly sized regions.
+        let Some(identity) = &unsafe { &*ctx }.identity else {
+            return RsHandheldStatus::ErrNotReady;
+        };
+        match rns_link::build_identification(identity, unsafe { &*link_id }, unsafe { &mut *out }) {
+            Ok(_) => RsHandheldStatus::Ok,
+            Err(_) => RsHandheldStatus::ErrInternal,
+        }
+    })
+}
+
 /// Build a LINKREQUEST payload (initiator → destination) into `out`, `*out_len` its length (67).
 /// `x25519_priv` (32) + `ed25519_seed` (32) are the initiator's per-link EPHEMERAL key material
 /// (caller entropy; `no_std`: no RNG). The initiator MUST retain `x25519_priv` to derive the session

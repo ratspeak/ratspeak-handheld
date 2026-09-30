@@ -155,6 +155,13 @@ typedef struct rs_handheld_propagation_node {
 
 rs_handheld_status_t rs_handheld_lxmf_propagation_node(const uint8_t *data, size_t length,
                                                      rs_handheld_propagation_node_t *out);
+/* Request operations: 0 list, 1 one-message fetch, 2 durable-only purge.
+ * ID may be NULL only for list. limit_bytes is converted to decimal KB. */
+rs_handheld_status_t rs_handheld_lxmf_get_request(double timestamp, uint8_t operation,
+    const uint8_t transient_id[32], uint16_t limit_bytes, uint8_t *out, size_t capacity, size_t *length);
+/* Exact request-bound RESPONSE envelope; returns an encoded-value span into input. */
+rs_handheld_status_t rs_handheld_lxmf_response_view(const uint8_t *data, size_t length,
+    const uint8_t request_id[16], size_t *offset, size_t *value_length);
 /* known=0 means unknown; known=1,cost=0 means explicitly free recipient delivery. */
 rs_handheld_status_t rs_handheld_lxmf_delivery_cost(const uint8_t *data, size_t length,
                                                 uint8_t *known, uint8_t *cost);
@@ -764,6 +771,9 @@ rs_handheld_status_t rs_handheld_rns_seed_seen_message(rs_handheld_rns_t *ctx, c
  * material (caller entropy; no RNG here) — retain x25519_priv for rs_handheld_rns_link_derive. mode MUST be
  * 1 (AES-256); any other value -> RS_HANDHELD_ERR_UNSUPPORTED. mtu is masked to 21 bits (use 500). Writes
  * the payload to out[out_cap] and *out_len (67). RS_HANDHELD_ERR_CAPACITY if out is too small. */
+/* ACTIVE initiator only: build LINKIDENTIFY plaintext, then encrypt on that Link. */
+rs_handheld_status_t rs_handheld_rns_link_identify(const rs_handheld_rns_t *ctx,
+                                                const uint8_t link_id[16], uint8_t out[128]);
 rs_handheld_status_t rs_handheld_rns_link_request_build(const uint8_t x25519_priv[32],
                                               const uint8_t ed25519_seed[32], uint8_t mode,
                                               uint32_t mtu, uint8_t *out, size_t out_cap,
@@ -928,6 +938,16 @@ rs_handheld_status_t rs_handheld_rns_resource_outbound_close(rs_handheld_rns_t *
 rs_handheld_status_t rs_handheld_rns_resource_advertisement_hash(const uint8_t *adv,
     size_t adv_len, uint8_t out_resource_hash[32]);
 
+/* Same bounds as ordinary Resource admission; accepts only is_response with the
+ * exact pending request ID. Caller binds live Link/interface/deadline and must
+ * also check the assembled RESPONSE envelope. */
+rs_handheld_status_t rs_handheld_rns_resource_response_accept(rs_handheld_rns_t *ctx,
+    const uint8_t *adv, size_t adv_len, uint32_t *out_num_parts,
+    uint32_t *out_transfer_size, uint32_t *out_data_size, uint8_t out_resource_hash[32],
+    const uint8_t expected_request_id[16]);
+/* Parse only a response ADV's exact 16-byte request ID, before support checks. */
+rs_handheld_status_t rs_handheld_rns_resource_response_id(const uint8_t *adv, size_t length,
+                                                        uint8_t out_id[16]);
 rs_handheld_status_t rs_handheld_rns_resource_advertise_accept(rs_handheld_rns_t *ctx,
                                                                const uint8_t *adv, size_t adv_len,
                                                                uint32_t *out_num_parts,

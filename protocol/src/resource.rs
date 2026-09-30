@@ -326,6 +326,37 @@ pub unsafe extern "C" fn rs_handheld_rns_resource_advertisement_hash(
     })
 }
 
+/// Inspect the request ID of a response advertisement before admission. This
+/// validates its grammar and purpose, but not size/compression support.
+///
+/// # Safety
+/// `adv` reads `length` bytes; `out_id` writes 16 bytes, non-null/disjoint.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rs_handheld_rns_resource_response_id(
+    adv: *const u8,
+    length: usize,
+    out_id: *mut [u8; 16],
+) -> RsHandheldStatus {
+    guard(|| {
+        if adv.is_null() || out_id.is_null() || length > rns_resource::ADV_PACKED_MAX {
+            return RsHandheldStatus::ErrInvalidArg;
+        }
+        // SAFETY: bounded readable caller input.
+        let data = unsafe { core::slice::from_raw_parts(adv, length) };
+        let Ok(parsed) = ResourceAdv::parse(data) else {
+            return RsHandheldStatus::ErrInvalidArg;
+        };
+        if !parsed.flags.is_response || parsed.flags.is_request || parsed.request_id_len != 16 {
+            return RsHandheldStatus::ErrInvalidArg;
+        }
+        // SAFETY: checked writable 16-byte output.
+        unsafe {
+            (*out_id).copy_from_slice(&parsed.request_id[..16]);
+        }
+        RsHandheldStatus::Ok
+    })
+}
+
 /// RECEIVER: parse an advertisement payload (link-decrypted RESOURCE_ADV) and accept the
 /// transfer, replacing any previous inbound transfer on this context. Enforces the lite
 /// honest-subset rules fail-closed: `ErrUnsupported` for compressed / multi-segment / metadata /
@@ -347,6 +378,70 @@ pub unsafe extern "C" fn rs_handheld_rns_resource_advertise_accept(
     out_transfer_size: *mut u32,
     out_data_size: *mut u32,
     out_resource_hash: *mut [u8; 32],
+) -> RsHandheldStatus {
+    // SAFETY: preserves the public caller contract; ordinary Resources have no request ID.
+    unsafe {
+        accept_resource(
+            ctx,
+            adv,
+            adv_len,
+            out_num_parts,
+            out_transfer_size,
+            out_data_size,
+            out_resource_hash,
+            None,
+        )
+    }
+}
+
+/// Accept only a response Resource bound to a live request on the same Link.
+/// The host must check Link/interface incarnation and deadline before calling;
+/// the assembled response envelope must independently match this request ID.
+/// All ordinary size/compression/crypto restrictions remain in force.
+///
+/// # Safety
+/// Same contract as advertise_accept; `expected_request_id` reads 16 bytes,
+/// disjoint from all output regions. All required pointers must be non-null.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn rs_handheld_rns_resource_response_accept(
+    ctx: *mut RsHandheldRns,
+    adv: *const u8,
+    adv_len: usize,
+    out_num_parts: *mut u32,
+    out_transfer_size: *mut u32,
+    out_data_size: *mut u32,
+    out_resource_hash: *mut [u8; 32],
+    expected_request_id: *const [u8; 16],
+) -> RsHandheldStatus {
+    if expected_request_id.is_null() {
+        return RsHandheldStatus::ErrInvalidArg;
+    }
+    // SAFETY: caller's readable ID and original Resource contract.
+    unsafe {
+        accept_resource(
+            ctx,
+            adv,
+            adv_len,
+            out_num_parts,
+            out_transfer_size,
+            out_data_size,
+            out_resource_hash,
+            Some(&*expected_request_id),
+        )
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn accept_resource(
+    ctx: *mut RsHandheldRns,
+    adv: *const u8,
+    adv_len: usize,
+    out_num_parts: *mut u32,
+    out_transfer_size: *mut u32,
+    out_data_size: *mut u32,
+    out_resource_hash: *mut [u8; 32],
+    expected_request_id: Option<&[u8; 16]>,
 ) -> RsHandheldStatus {
     guard(|| {
         if ctx.is_null()
@@ -376,7 +471,11 @@ pub unsafe extern "C" fn rs_handheld_rns_resource_advertise_accept(
             Some(b) => b,
             None => return RsHandheldStatus::ErrInternal,
         };
-        if let Err(e) = inbound.from_advertisement_into(&parsed) {
+        let accepted = match expected_request_id {
+            Some(id) => inbound.from_response_into(&parsed, id),
+            None => inbound.from_advertisement_into(&parsed),
+        };
+        if let Err(e) = accepted {
             return resource_status(e);
         }
         // SAFETY: out pointers non-null + writable per the contract.

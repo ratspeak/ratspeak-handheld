@@ -18,8 +18,11 @@ enum Ctx : uint8_t {
     CTX_RESOURCE_PRF = 0x05,
     CTX_RESOURCE_ICL = 0x06,
     CTX_RESOURCE_RCL = 0x07,
+    CTX_REQUEST = 0x09,
+    CTX_RESPONSE = 0x0A,
     CTX_PATH_RESPONSE = 0x0B,  // Packet.PATH_RESPONSE: announce answering a path request (rate-exempt)
     CTX_KEEPALIVE = 0xFA,
+    CTX_LINKIDENTIFY = 0xFB,
     CTX_LINKCLOSE = 0xFC,
     CTX_LRRTT = 0xFE,
     CTX_LRPROOF = 0xFF,
