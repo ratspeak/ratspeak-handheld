@@ -5,11 +5,11 @@
   "archive_toolchain": "rustc 1.95.0-nightly (95e5bda86 2026-04-15) (1.95.0.0)",
   "sources": {
     "rsReticulumLite": {
-      "commit": "c298ac58c5304805bab8418da3f7daf9b00fffea",
+      "commit": "f9e26ddc512fa8f79b3cb9ef8f3a2ba64410fd8d",
       "role": "firmware"
     },
     "rsLXMFLite": {
-      "commit": "ed11aae9b380f7ba5f80fd7bf9521ac24f4d7be7",
+      "commit": "186209d682b26f9046de782c41a289bd7171f6c5",
       "role": "firmware"
     },
     "rsReticulum": {

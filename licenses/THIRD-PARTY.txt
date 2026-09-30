@@ -17140,8 +17140,8 @@ Licensed under the MIT license.
 The same license text is reproduced above under Arduino: Adafruit ST7735 and ST7789 Library / MIT permission and disclaimer.
 
 ========================================================================
-rsLXMFLite e8c19f18338263be9bb801f563509759d91482f3
-https://github.com/ratspeak/rsLXMFLite/tree/e8c19f18338263be9bb801f563509759d91482f3
+rsLXMFLite 186209d682b26f9046de782c41a289bd7171f6c5
+https://github.com/ratspeak/rsLXMFLite/tree/186209d682b26f9046de782c41a289bd7171f6c5
 Boards: tdeck, tpager, cardputer, m9
 Modes: standalone
 
@@ -17810,8 +17810,8 @@ For more information on this, and how to apply and follow the GNU AGPL, see
 
 
 ========================================================================
-rsReticulumLite fe9144945fa9cddb3aa6ae967bf8e0d0e5fa4227
-https://github.com/ratspeak/rsReticulumLite/tree/fe9144945fa9cddb3aa6ae967bf8e0d0e5fa4227
+rsReticulumLite f9e26ddc512fa8f79b3cb9ef8f3a2ba64410fd8d
+https://github.com/ratspeak/rsReticulumLite/tree/f9e26ddc512fa8f79b3cb9ef8f3a2ba64410fd8d
 Boards: tdeck, tpager, cardputer, m9
 Modes: standalone
 

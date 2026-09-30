@@ -226,8 +226,13 @@ void RustPropagationInbox::poll() {
         _status = sending == Stage::List ? Status::Listing : sending == Stage::Fetch ? Status::Receiving : Status::Purging;
         const uint32_t timeout = 60000 + d.pump->interfaceTxWaitMs(_interface, 16);
         const Stage waiting = _stage;
+        // Trusted GetServePlan counts the stored 32-byte stamp, a 24-byte base
+        // and 16 bytes per entry; the returned entry has no node stamp. Reserve
+        // 24 wire bytes for the one-entry response, then add that store-side
+        // accounting back. Resource admission still enforces DATA_MAX exactly.
+        constexpr uint16_t transferLimit = RS_HANDHELD_RESOURCE_DATA_MAX - 24 + 24 + 16 + 32;
         if (!d.links->startGet(_node, operation, operation ? _journal.transientId() : nullptr,
-                              RS_HANDHELD_RESOURCE_DATA_MAX - 24, *this, timeout) && _stage == waiting) {
+                              transferLimit, *this, timeout) && _stage == waiting) {
             // A synchronous dropped receipt may already have finished us.
             _stage = sending; _requestAt = now + 250;
         }

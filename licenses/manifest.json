@@ -46,11 +46,11 @@
       "M5Unified@0.2.13",
       "XPowersLib@0.3.3"
     ],
-    "cargo_lock_sha256": "68d439638be3b15f5a72fc20426b4e433d1a4a78a45cad34277be6025b736a75",
+    "cargo_lock_sha256": "6f54dbc7a43dd598c3dc739e1e476fda6f61d8760d917b0ed3a0c39fc47a4140",
     "rust_toolchain": "rustc 1.95.0-nightly (95e5bda86 2026-04-15) (1.95.0.0)",
     "lite_commits": {
-      "rsReticulumLite": "fe9144945fa9cddb3aa6ae967bf8e0d0e5fa4227",
-      "rsLXMFLite": "e8c19f18338263be9bb801f563509759d91482f3"
+      "rsReticulumLite": "f9e26ddc512fa8f79b3cb9ef8f3a2ba64410fd8d",
+      "rsLXMFLite": "186209d682b26f9046de782c41a289bd7171f6c5"
     },
     "source_notices": {
       "vendor/esp_idf_compat/mbedtls/ssl_tls.c": {
@@ -148,7 +148,7 @@
     "collector_sha256": "373ebd6e229407a21cfcada414c40b60d1a27d9b425c5b408f4b21d07b8450f3"
   },
   "bundle": "THIRD-PARTY.txt",
-  "bundle_sha256": "7123451e7b4af216bb1b9dc3268f502eeaa43a2488a8eac8af4867fe361df1e2",
+  "bundle_sha256": "abe3f734dbf71f1c519041fedbe1133083c02b7de6b8de7eafa258e1f0c1bb1d",
   "components": [
     {
       "name": "aes",
@@ -9587,8 +9587,8 @@
     },
     {
       "name": "rsLXMFLite",
-      "version": "e8c19f18338263be9bb801f563509759d91482f3",
-      "source": "https://github.com/ratspeak/rsLXMFLite/tree/e8c19f18338263be9bb801f563509759d91482f3",
+      "version": "186209d682b26f9046de782c41a289bd7171f6c5",
+      "source": "https://github.com/ratspeak/rsLXMFLite/tree/186209d682b26f9046de782c41a289bd7171f6c5",
       "boards": [
         "tdeck",
         "tpager",
@@ -9601,7 +9601,7 @@
       "notices": [
         {
           "path": "LICENSE",
-          "source": "https://github.com/ratspeak/rsLXMFLite/blob/e8c19f18338263be9bb801f563509759d91482f3/LICENSE",
+          "source": "https://github.com/ratspeak/rsLXMFLite/blob/186209d682b26f9046de782c41a289bd7171f6c5/LICENSE",
           "length": 34523,
           "sha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
           "offset": 847677
@@ -9610,8 +9610,8 @@
     },
     {
       "name": "rsReticulumLite",
-      "version": "fe9144945fa9cddb3aa6ae967bf8e0d0e5fa4227",
-      "source": "https://github.com/ratspeak/rsReticulumLite/tree/fe9144945fa9cddb3aa6ae967bf8e0d0e5fa4227",
+      "version": "f9e26ddc512fa8f79b3cb9ef8f3a2ba64410fd8d",
+      "source": "https://github.com/ratspeak/rsReticulumLite/tree/f9e26ddc512fa8f79b3cb9ef8f3a2ba64410fd8d",
       "boards": [
         "tdeck",
         "tpager",
@@ -9624,7 +9624,7 @@
       "notices": [
         {
           "path": "LICENSE",
-          "source": "https://github.com/ratspeak/rsReticulumLite/blob/fe9144945fa9cddb3aa6ae967bf8e0d0e5fa4227/LICENSE",
+          "source": "https://github.com/ratspeak/rsReticulumLite/blob/f9e26ddc512fa8f79b3cb9ef8f3a2ba64410fd8d/LICENSE",
           "length": 34523,
           "sha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
           "offset": 847677

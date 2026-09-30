@@ -338,20 +338,17 @@ pub unsafe extern "C" fn rs_handheld_rns_resource_response_id(
     out_id: *mut [u8; 16],
 ) -> RsHandheldStatus {
     guard(|| {
-        if adv.is_null() || out_id.is_null() || length > rns_resource::ADV_PACKED_MAX {
+        if adv.is_null() || out_id.is_null() || length > LINK_MDU {
             return RsHandheldStatus::ErrInvalidArg;
         }
         // SAFETY: bounded readable caller input.
         let data = unsafe { core::slice::from_raw_parts(adv, length) };
-        let Ok(parsed) = ResourceAdv::parse(data) else {
+        let Ok(id) = ResourceAdv::response_id(data) else {
             return RsHandheldStatus::ErrInvalidArg;
         };
-        if !parsed.flags.is_response || parsed.flags.is_request || parsed.request_id_len != 16 {
-            return RsHandheldStatus::ErrInvalidArg;
-        }
         // SAFETY: checked writable 16-byte output.
         unsafe {
-            (*out_id).copy_from_slice(&parsed.request_id[..16]);
+            *out_id = id;
         }
         RsHandheldStatus::Ok
     })
