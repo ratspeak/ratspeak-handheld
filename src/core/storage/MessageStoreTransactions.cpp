@@ -104,7 +104,7 @@ MessageStore::Submission MessageStore::requestPending(const RecordKey& after) {
 
 MessageStore::Submission MessageStore::requestPrepared(const RecordKey& key, const uint8_t source[16]) {
     if (!key.counter || key.incoming || !source) return {{}, Rejection::Invalid};
-    Request request; request.operation = Operation::ReadPrepared; request.key = key;
+    Request request; request.operation = Operation::LoadPrepared; request.key = key;
     memcpy(request.source, source, 16);
     return submit(request, nullptr, 0, prepared::Max);
 }
@@ -194,7 +194,7 @@ void MessageStore::settle(const Request& request, const Result& result) noexcept
     if (result.outcome != Outcome::Committed) return;
     if (request.operation == Operation::ReadRecord || request.operation == Operation::ReadHistoryPage ||
         request.operation == Operation::ReadConversationPage || request.operation == Operation::ReadConversation ||
-        request.operation == Operation::ReadPending || request.operation == Operation::ReadPrepared) return;
+        request.operation == Operation::ReadPending) return;
     if (result.duplicate) return;
     // Only committed aggregate deltas and invalidation live here. There is no
     // presentation cache or allocation between persistence and result visibility.

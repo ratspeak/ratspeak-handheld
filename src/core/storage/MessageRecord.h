@@ -52,6 +52,7 @@ inline bool recordHeader(JsonVariantConst document, StoredRecordHeader& header) 
         (!document["delivery_policy"].is<uint8_t>() || document["delivery_policy"].as<uint8_t>() > 2)) return false;
     if (!document["incoming"].isNull() && !document["incoming"].is<bool>()) return false;
     if (!document["read"].isNull() && !document["read"].is<bool>()) return false;
+    if (!document["prop_prepared"].isNull() && !document["prop_prepared"].is<bool>()) return false;
     header.revision = document["store_revision"] | uint32_t(0);
     header.status = document["status"] | uint8_t(0);
     header.timestamp = document["ts"] | 0.0;
@@ -63,6 +64,9 @@ inline bool recordHeader(JsonVariantConst document, StoredRecordHeader& header) 
     header.titleLength = document["title"].as<JsonString>().size();
     header.contentLength = document["content"].as<JsonString>().size();
     header.hasMessageId = !document["msgid"].isNull();
+    header.prepared = document["prop_prepared"] | false;
+    if (header.prepared && (header.incoming || !header.hasMessageId ||
+                            header.deliveryPolicy == messaging::DeliveryPolicy::DirectOnly)) return false;
     if (header.hasMessageId) {
         const auto id = document["msgid"].as<JsonString>();
         if (!decodeHex(id.c_str(), id.size(), header.messageId, 32)) return false;

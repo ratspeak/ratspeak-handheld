@@ -41,7 +41,8 @@ public:
     Submission requestRecord(const RecordKey&, uint32_t offset = 0, uint16_t capacity = 4096);
     Submission requestPending(const RecordKey& after = {});
     // Immutable recipient-encrypted entry bound to this original outgoing record.
-    // Read: committed length zero means absent; any read/corruption error fails closed.
+    // Load: committed length zero means never prepared; a missing committed file
+    // fails closed. Completes an interrupted ready-marker write before returning.
     // Write: an existing valid entry wins. Always consume the returned owned bytes.
     Submission requestPrepared(const RecordKey&, const uint8_t source[16]);
     Submission requestPrepare(const RecordKey&, const uint8_t source[16], const uint8_t messageId[32],

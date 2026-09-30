@@ -24,7 +24,7 @@ constexpr bool operator!=(Ticket a, Ticket b) { return !(a == b); }
 enum class Operation : uint8_t {
     CreateIncoming, CreateOutgoing, UpdateStatus, MarkRead, DeleteConversation,
     ReadRecord, ReadHistoryPage, ReadPending, ReadConversationPage, ReadConversation, Trim,
-    ReadPrepared, WritePrepared
+    LoadPrepared, WritePrepared
 };
 enum class Rejection : uint8_t {
     None, Busy, Invalid, TooLarge, NoMemory, Unavailable, Fenced, Exhausted
@@ -133,6 +133,7 @@ struct StoredRecordHeader {
     uint8_t status = 0;
     messaging::DeliveryPolicy deliveryPolicy = messaging::DeliveryPolicy::DirectOnly;
     bool incoming = false, read = false, hasMessageId = false;
+    bool prepared = false; // A committed encrypted envelope may never be regenerated if missing.
 };
 static_assert(sizeof(StoredRecordHeader) <= 104, "Stored record response metadata grew");
 

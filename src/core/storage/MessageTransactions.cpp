@@ -831,12 +831,43 @@ void MessageTransactions::prepared(const Request& request, uint8_t* bytes, size_
     result.revision = header.revision;
     char primary[128], backup[128];
     path(request.key, 0, primary, ".prop"); path(request.key, 0, backup, ".prop.bak");
+    auto markReady = [&]() {
+        if (header.prepared) return true;
+        // The binding write may have promoted a newer backup. Reload before a
+        // second commit so its medium-selection flags cannot describe the old
+        // primary/backup topology.
+        result.error = load(request.key, document, header);
+        if (result.error != Error::None) return false;
+        if (!header.hasMessageId || memcmp(header.messageId, bytes + 40, 32) ||
+            memcmp(header.source, request.source, 16) || (header.status != 7 && header.status != 8)) {
+            result.error = Error::Stale; return false;
+        }
+        if (header.prepared) return true;
+        if (header.revision == UINT32_MAX) { result.error = Error::RevisionExhausted; return false; }
+        document.document()["prop_prepared"] = true;
+        document.document()["store_revision"] = header.revision + 1;
+        result.error = commit(request.key, document, false, result);
+        result.sd = {};
+        if (result.error != Error::None || !result.flash.committed) {
+            if (result.error == Error::None) result.error = Error::Write;
+            return false;
+        }
+        result.revision = ++header.revision; header.prepared = true;
+        return true;
+    };
     // Never replace an existing encrypted entry, even when a writer retried
     // after losing its completion. A corrupt primary cannot roll back to a
     // different backup or silently regenerate ciphertext.
     const char* existing = flash.exists(primary) ? primary : flash.exists(backup) ? backup : nullptr;
     if (existing) {
-        if (!retainedCopy(request.key, 0, document)) { result.error = Error::Read; return; }
+        if (!retainedCopy(request.key, 0, document)) {
+            result.error = commit(request.key, document, false, result);
+            result.sd = {};
+            if (result.error != Error::None || !result.flash.committed) {
+                if (result.error == Error::None) result.error = Error::Write;
+                return;
+            }
+        }
         File file = flash.open(existing);
         if (!file) { result.error = Error::Read; return; }
         const size_t size = file.size();
@@ -850,10 +881,13 @@ void MessageTransactions::prepared(const Request& request, uint8_t* bytes, size_
         if (!header.hasMessageId || !prep::valid(bytes, size, request.key, request.source, header.messageId)) {
             result.error = Error::InvalidRecord; return;
         }
-        result.length = uint16_t(size); result.duplicate = writing;
+        const bool alreadyReady = header.prepared;
+        if (!markReady()) return;
+        result.length = uint16_t(size); result.duplicate = alreadyReady;
         result.outcome = Outcome::Committed; return;
     }
-    if (!writing) { result.outcome = Outcome::Committed; return; }
+    if (header.prepared) { result.error = Error::InvalidRecord; return; }
+    if (!writing) { result.duplicate = true; result.outcome = Outcome::Committed; return; }
     if (!header.hasMessageId) {
         if (header.revision == UINT32_MAX) { result.error = Error::RevisionExhausted; return; }
         char id[65]; encodeHex(request.messageId, 32, id);
@@ -876,6 +910,7 @@ void MessageTransactions::prepared(const Request& request, uint8_t* bytes, size_
     result.flash.error = result.error = flash.write(primary, source);
     if (result.error != Error::None) return;
     result.flash.committed = true;
+    if (!markReady()) return;
     result.length = uint16_t(length); result.outcome = Outcome::Committed;
 }
 
@@ -1005,7 +1040,7 @@ void MessageTransactions::execute(const Request& request, uint8_t* bytes, size_t
     checkSummaryMedia();
     if (request.operation != Operation::ReadRecord && request.operation != Operation::ReadPending &&
         request.operation != Operation::ReadHistoryPage && request.operation != Operation::ReadConversationPage &&
-        request.operation != Operation::ReadConversation && request.operation != Operation::ReadPrepared) {
+        request.operation != Operation::ReadConversation) {
         if (_mutationEpoch == UINT64_MAX) { result.error = Error::RevisionExhausted; return; }
         ++_mutationEpoch;
         // Invalidate before attempting a write: partial mirrors, failed cleanup
@@ -1034,7 +1069,7 @@ void MessageTransactions::execute(const Request& request, uint8_t* bytes, size_t
     case Operation::ReadConversationPage: conversationPage(request, bytes, capacity, result); break;
     case Operation::ReadConversation: conversation(request, bytes, capacity, result); break;
     case Operation::Trim: trim(request, result); break;
-    case Operation::ReadPrepared: case Operation::WritePrepared:
+    case Operation::LoadPrepared: case Operation::WritePrepared:
         prepared(request, bytes, length, capacity, result); break;
     default: result.error = Error::InvalidRecord;
     }
