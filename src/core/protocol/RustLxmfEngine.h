@@ -133,7 +133,7 @@ private:
         enum class Stage : uint8_t { Select, Load, Read, RecipientStamp, Encrypt, NodeStamp, Link, Reload, Await };
         RustStampWork work;
         Ticket ticket;
-        uint64_t born = 0, requestAt = 0, sentAt = 0;
+        uint64_t born = 0, requestAt = 0, sentAt = 0, linkSince = 0;
         uint8_t node[16]{}, nodeKey[64]{}, transient[32]{}, preparedId[32]{};
         uint8_t recipientStamp[32]{}, nodeStamp[32]{}, packetHash[32]{};
         uint32_t waitMs = 0;

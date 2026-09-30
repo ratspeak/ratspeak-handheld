@@ -66,6 +66,7 @@ public:
     // A false ensureLink may be local backpressure. Only an admitted handshake
     // owns a network timeout; callers must not age a full pool as peer failure.
     bool linkEstablishing(const uint8_t dest[16]) const;
+    bool linkOnRoute(const uint8_t dest[16], const rs_handheld_route_t&) const;
 
     enum class RequestError : uint8_t { Timeout, LinkClosed, Unsupported, Invalid };
     struct RequestSink {

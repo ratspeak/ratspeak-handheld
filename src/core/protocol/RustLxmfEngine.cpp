@@ -966,7 +966,7 @@ void RustLxmfEngine::requestUnknownSource(const uint8_t source[16]) {
 // Resource pools. Only hashes, public keys and one incremental stamp are retained.
 void RustLxmfEngine::resetRelay() {
     _relay.work.reset(); _relay.ticket = {};
-    _relay.born = _relay.requestAt = _relay.sentAt = 0;
+    _relay.born = _relay.requestAt = _relay.sentAt = _relay.linkSince = 0;
     _relay.stage = RelayWork::Stage::Select;
     _relay.recipientCost = _relay.nodeCost = _relay.stampedCost = 0;
     _relay.direct = _relay.haveRecipientStamp = false;
@@ -1117,11 +1117,20 @@ void RustLxmfEngine::advanceRelay(Ticket ticket) {
         if (node->cost > _relay.nodeCost) {
             _relay.nodeCost = node->cost; _relay.stage = Stage::NodeStamp; return;
         }
+        _relay.born = now; // Local contention cannot age a future path-discovery window.
         // ensureLink owns the admitted-handshake deadline. Local pool or driver
         // refusal has no peer-failure deadline and consumes no stamp retry.
         const bool active = _d.links->ensureLink(_relay.node, _relay.nodeKey, route);
         if (_relay.ticket != ticket) return; // Failed setup may synchronously retire us.
+        if (!active && _d.links->linkEstablishing(_relay.node)) {
+            if (!_relay.linkSince) _relay.linkSince = now + 1;
+            else if (now >= _relay.linkSince && now - _relay.linkSince > LINK_WAIT_TIMEOUT_MS +
+                     _d.pump->interfaceTxWaitMs(route.interface_id, 4)) {
+                finishRelay(ticket, LXMFStatus::PROP_UNAVAILABLE, true); return;
+            }
+        }
         if (!active || _d.resources->sending()) { value->nextAttempt = now + TX_RETRY_MS; return; }
+        _relay.linkSince = 0;
         _relay.stage = Stage::Reload;
         return;
     }
@@ -1222,11 +1231,13 @@ void RustLxmfEngine::sendRelay(Ticket ticket, size_t entryLength) {
     if (!value || _relay.ticket != ticket || !relayAllowed()) return;
     const uint64_t now = _d.clock->nowMs();
     const auto* node = _d.propagation->find(_relay.node);
+    rs_handheld_route_t route{};
     uint8_t recipientCost = 0;
     if (!_d.keymap->recallCost(value->peer, RustClock::synchronizedEpochSecs(), now, recipientCost) ||
         recipientCost > _relay.recipientCost) { finishRelay(ticket, LXMFStatus::STAMP_FAILED); return; }
     if (!node || !handheld::propagation::Nodes::usable(*node, now) || node->cost > _relay.nodeCost ||
-        !_d.links->linkActive(_relay.node) || _d.resources->sending()) {
+        rs_handheld_rns_route(_d.ctx, _relay.node, now, &route) != RS_HANDHELD_OK ||
+        !_d.links->linkOnRoute(_relay.node, route) || _d.resources->sending()) {
         _relay.stage = RelayWork::Stage::Link; return;
     }
     auto& packed = _d.resources->_codec; size_t length = 0;

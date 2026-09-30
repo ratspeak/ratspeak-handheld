@@ -179,10 +179,28 @@ bool RustLinkManager::linkEstablishing(const uint8_t dest[16]) const {
     return false;
 }
 
+bool RustLinkManager::linkOnRoute(const uint8_t dest[16], const rs_handheld_route_t& route) const {
+    if (route.kind != RS_HANDHELD_ROUTE_DIRECT) return false;
+    for (const auto& link : _links)
+        if (link.initiator && link.state == State::Active && link.haveKey && !memcmp(link.peerDest, dest, 16))
+            return link.iface == route.interface_id && link.hasNextHop == (route.header_type == 1) &&
+                (!link.hasNextHop || !memcmp(link.nextHop, route.next_hop, 16));
+    return false;
+}
+
 bool RustLinkManager::ensureLink(const uint8_t dest[16], const uint8_t pubkey[64],
                                  const rs_handheld_route_t& route) {
     if (route.kind != RS_HANDHELD_ROUTE_DIRECT) return false;
     Link* l = findByDest(dest);
+    if (l && l->initiator && (l->iface != route.interface_id ||
+            l->hasNextHop != (route.header_type == 1) ||
+            (l->hasNextHop && memcmp(l->nextHop, route.next_hop, 16)))) {
+        // An established Link is bound to its original first hop. Let any
+        // current transfer finish before replacing it on Rust's selected path.
+        // Neither a busy transfer nor this retirement is a peer setup failure.
+        if (_request.sink || (_d.resources && _d.resources->activeTransfers())) return false;
+        closeLink(*l); l = nullptr;
+    }
     if (l && l->state == State::Active) return true;
     if (l && l->state == State::InitRequested) {
         if (millis() - l->requestMs < l->establishmentTimeoutMs)
