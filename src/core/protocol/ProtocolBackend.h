@@ -9,6 +9,8 @@
 #include "reticulum/LXMFManager.h"
 #include "protocol/OutgoingContract.h"
 #include "config/PropagationSettings.h"
+#include "protocol/RrcTypes.h"
+#include "storage/RrcRecord.h"
 
 class ProtocolBackend {
 public:
@@ -49,6 +51,15 @@ public:
     virtual size_t propagationNodes(handheld::propagation::NodeView*, size_t) const { return 0; }
     virtual handheld::propagation::SyncView propagationStatus() const { return {}; }
     virtual bool propagationSync() { return false; }
+
+    virtual handheld::rrc::Status rrcStatus() const { return {}; }
+    virtual void rrcStopAdmissions() {}
+    virtual bool rrcDrained() const { return true; }
+    virtual size_t rrcHubs(handheld::rrc::HubView*, size_t) const { return 0; }
+    virtual size_t rrcRooms(handheld::rrc::RoomView*, size_t) const { return 0; }
+    virtual size_t rrcPeople(const char*, handheld::rrc::PersonView*, size_t) const { return 0; }
+    virtual handheld::rrc::Code rrcCommand(const handheld::rrc::Command&, const uint8_t*, size_t) { return handheld::rrc::Code::Offline; }
+    virtual bool rrcContext(const uint8_t[16], const char*, const uint8_t*, handheld::storage::rrc::Context&) const { return false; }
 
     // Admission copies spans and reserves a terminal persistence result. Only a
     // Ready/Committed result means saved; each accepted ticket must be acknowledged.

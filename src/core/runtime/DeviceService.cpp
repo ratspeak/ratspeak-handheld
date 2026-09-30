@@ -227,7 +227,7 @@ void DeviceService::pollMaintenance() {
     if (_maintenance.accepting()) return;
     MaintenanceBarrier::Snapshot snapshot;
     snapshot.normalPending = _mailbox.normalWorkPending() || _config.settingsPending();
-    snapshot.applicationPending = !_backend.lxmfDrained();
+    snapshot.applicationPending = !_backend.lxmfDrained() || !_backend.rrcDrained();
     snapshot.helpersPending = !_maintenance.helpersStarted() || (quiescent && !quiescent());
     snapshot.storageStopped = _maintenance.storageStopStarted() && _messages.finishStop();
     snapshot.error = _backend.lxmfDrainError();
@@ -437,6 +437,7 @@ void DeviceService::execute(uint8_t slot) {
         _lifecycleSlot = slot;
         _outgoingPaused = true;
         _backend.lxmfStopAdmissions();
+        _backend.rrcStopAdmissions();
         if (closeAdmissions) closeAdmissions();
         notice("Finishing pending work");
         refreshStatus();

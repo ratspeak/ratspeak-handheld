@@ -226,6 +226,7 @@ dependencies = [
  "lxmf-lite-core",
  "rns-lite-core",
  "sha2",
+ "zeroize",
 ]
 
 [[package]]

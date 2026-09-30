@@ -799,9 +799,26 @@ rs_handheld_status_t rs_handheld_rrc_announce_name(const uint8_t *data, size_t l
 rs_handheld_status_t rs_handheld_rrc_normalize(const uint8_t *data, size_t length,
     uint8_t nickname, uint8_t *out, size_t capacity, size_t *out_length);
 /* Domain-separated local conversation key; never a Reticulum destination.
- * kind=0 normalized room, kind=1 full participant identity. */
+ * kind=0 normalized room, kind=1 full participant identity,
+ * kind=2 source identity[16] followed by RRC message ID[8]. */
 rs_handheld_status_t rs_handheld_rrc_storage_key(uint8_t kind, const uint8_t *data,
     size_t length, uint8_t out[16]);
+/* Verify the rrc.hub name binding and derive the authenticated control source.
+ * The caller must already have authenticated the announced public key. */
+rs_handheld_status_t rs_handheld_rrc_hub_identity(const uint8_t destination[16],
+    const uint8_t public_key[64], uint8_t out_identity[16]);
+/* Desktop RSCHKEY v1 identity seal, bounded to 160 UTF-8 key bytes. The room
+ * must be canonical (1..64 bytes). All pointers disjoint; output/capacity <=431.
+ * Entropy is 32 fresh ephemeral bytes plus a fresh 16-byte IV. Output length is
+ * zero on failure; an unsuccessful seal may have modified the output buffer. */
+rs_handheld_status_t rs_handheld_rrc_seal_key(const rs_handheld_rns_t *ctx,
+    const uint8_t hub[16], const uint8_t *room, size_t room_length,
+    const uint8_t *key, size_t key_length, const uint8_t entropy[48],
+    uint8_t *out, size_t capacity, size_t *out_length);
+rs_handheld_status_t rs_handheld_rrc_unseal_key(const rs_handheld_rns_t *ctx,
+    const uint8_t hub[16], const uint8_t *room, size_t room_length,
+    const uint8_t *sealed, size_t sealed_length,
+    uint8_t *out, size_t capacity, size_t *out_length);
 
 rs_handheld_status_t rs_handheld_rns_proof_build(const rs_handheld_rns_t *ctx, const uint8_t packet_hash[32],
                                        int32_t implicit, uint8_t *out, size_t out_cap,

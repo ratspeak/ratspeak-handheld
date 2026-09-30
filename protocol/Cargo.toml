@@ -34,6 +34,7 @@ profile-micro = []
 rns-lite-core = { path = "../../rsReticulumLite" }
 lxmf-lite-core = { path = "../../rsLXMFLite" }
 sha2 = { version = "0.10", default-features = false }
+zeroize = { version = "1", default-features = false }
 
 [lints.rust]
 unsafe_op_in_unsafe_fn = "warn"

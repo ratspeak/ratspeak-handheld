@@ -331,7 +331,7 @@ static void pollMaintenance() {
     network.pollSettlements();
     handheld::MaintenanceBarrier::Snapshot snapshot;
     snapshot.normalPending = wifiConnection.scanning() || userConfig.settingsPending() || settingsScreen.radioApplyPending();
-    snapshot.applicationPending = !backend->lxmfDrained() || !diagnostics.resultsDrained() ||
+    snapshot.applicationPending = !backend->lxmfDrained() || !backend->rrcDrained() || !diagnostics.resultsDrained() ||
         messageStore.writeQueue().drainCount() != 0;
     snapshot.helpersPending = snapshot.normalPending || !protocolRuntime.maintenanceDrained() ||
         !network.quiescent();

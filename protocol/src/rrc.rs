@@ -12,7 +12,8 @@ const MDU: usize = 431;
 const MAX_DEPTH: usize = 4;
 
 /// Domain-separated local RRC conversation key. kind 0 names a normalized UTF-8
-/// room (1..64 bytes); kind 1 names a participant identity (exactly 16 bytes).
+/// room (1..64 bytes); kind 1 names a participant identity (exactly 16 bytes);
+/// kind 2 names a message by its full source identity followed by its 8-byte ID.
 /// This private storage key is never used as an LXMF/Reticulum destination.
 /// # Safety
 /// Input readable for length; output writable for 16 bytes, non-aliasing.
@@ -26,10 +27,11 @@ pub unsafe extern "C" fn rs_handheld_rrc_storage_key(
     guard(|| {
         if data.is_null()
             || out.is_null()
-            || kind > 1
+            || kind > 2
             || length == 0
             || length > 64
             || (kind == 1 && length != 16)
+            || (kind == 2 && length != 24)
         {
             return RsHandheldStatus::ErrInvalidArg;
         }

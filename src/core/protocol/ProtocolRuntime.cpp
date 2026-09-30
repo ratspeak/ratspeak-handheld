@@ -153,6 +153,7 @@ bool ProtocolRuntime::startEngines(FlashStore* flash, SDStore* sd, MessageStore*
     ed.ourDestHash = _destHash;
     ed.propagation = &_propagationNodes;
     if (!_lxmf.begin(ed)) return false;
+    _rrc.begin({_ctx, &_clock, &_pump, &_links, store, _identityHash});
     _enginesUp = true;
     return true;
 }
@@ -282,10 +283,12 @@ void ProtocolRuntime::stopReceive() {
     handheld::assertDeviceOwner();
     _lxmf.incoming().stopAdmissions();
     _lxmf.stopAdmissions();
+    _rrc.stop();
 }
 void ProtocolRuntime::pollReceive() {
     handheld::assertDeviceOwner();
     _lxmf.loop();
+    _rrc.loop();
 }
 
 void ProtocolRuntime::beginMaintenance(LoRaInterface& radio) {
@@ -341,6 +344,7 @@ void ProtocolRuntime::end() {
     _lxmf.incoming().detach();
     _enginesUp = false;
     _resources.endAll();
+    _rrc.end();
     _links.endAll();
     _propagationNodes.reset();
     _nextPropagationPoll = 0;
@@ -390,6 +394,7 @@ void ProtocolRuntime::loop() {
         pollPropagation();
         _lxmf.loop();
         _links.loop();
+        _rrc.loop();
         _resources.loop();
     }
     // TX is asynchronous. Do not hold the owner in flash while the modem
@@ -507,6 +512,11 @@ void ProtocolRuntime::onPropagationAnnounce(const rs_handheld_announce_event_t& 
     const auto generation = _pump.interfaceOnline(route.interface_id) ? _pump.interfaceGeneration(route.interface_id) : 0;
     _propagationNodes.learn(event.destination_hash, event.public_key, metadata, route, generation, now);
     _nextPropagationPoll = 0;
+}
+
+void ProtocolRuntime::onRrcAnnounce(const rs_handheld_announce_event_t& event, uint8_t) {
+    handheld::assertDeviceOwner();
+    if (_enginesUp && !_maintenanceRadio) _rrc.learn(event);
 }
 
 void ProtocolRuntime::pollPropagation() {

@@ -11,6 +11,7 @@
 #include "protocol/RustLinkManager.h"
 #include "protocol/RustResourceEngine.h"
 #include "protocol/PropagationNodes.h"
+#include "protocol/RustRrcEngine.h"
 #include "ratspeak_protocol.h"
 
 class FlashStore;
@@ -40,7 +41,7 @@ public:
     // requires both incoming and outgoing ownership drained.
     void stopReceive();
     void pollReceive();
-    bool receiveDrained() const { return _lxmf.incoming().drained() && _lxmf.drained(); }
+    bool receiveDrained() const { return _lxmf.incoming().drained() && _lxmf.drained() && _rrc.drained(); }
 
     // Retains the context and the caller-owned radio until both message owners
     // and the already-started radio burst settle. No RX, scheduler or metadata
@@ -90,6 +91,14 @@ public:
     size_t propagationNodes(handheld::propagation::NodeView*, size_t) const override;
     handheld::propagation::SyncView propagationStatus() const override;
     bool propagationSync() override;
+    handheld::rrc::Status rrcStatus() const override { return _rrc.status(); }
+    void rrcStopAdmissions() override { _rrc.stop(); }
+    bool rrcDrained() const override { return _rrc.drained(); }
+    size_t rrcHubs(handheld::rrc::HubView* out, size_t capacity) const override { return _rrc.hubs(out, capacity); }
+    size_t rrcRooms(handheld::rrc::RoomView* out, size_t capacity) const override { return _rrc.rooms(out, capacity); }
+    size_t rrcPeople(const char* room, handheld::rrc::PersonView* out, size_t capacity) const override { return _rrc.people(room, out, capacity); }
+    handheld::rrc::Code rrcCommand(const handheld::rrc::Command& command, const uint8_t* text, size_t length) override { return _rrc.command(command, text, length); }
+    bool rrcContext(const uint8_t hub[16], const char* room, const uint8_t* participant, handheld::storage::rrc::Context& out) const override { return _rrc.context(hub, room, participant, out); }
 
     handheld::outgoing::Submission lxmfSubmit(const uint8_t dest[16],
         const uint8_t* title, size_t titleLength, const uint8_t* content,
@@ -126,6 +135,7 @@ public:
     // RustPumpSink
     void onAnnounceEvent(const rs_handheld_announce_event_t& ev, uint8_t ifaceId) override;
     void onPropagationAnnounce(const rs_handheld_announce_event_t&, uint8_t) override;
+    void onRrcAnnounce(const rs_handheld_announce_event_t&, uint8_t) override;
     void onLocalFrame(const rs_handheld_local_frame_t& f, uint8_t ifaceId) override;
     void onOwnPathRequest(uint8_t ifaceId, const uint8_t tag[16], size_t tagLen) override;
 
@@ -211,6 +221,7 @@ private:
     RustLinkManager _links;
     RustResourceEngine _resources;
     RustLxmfEngine _lxmf;
+    RustRrcEngine _rrc;
     handheld::propagation::Nodes _propagationNodes;
     uint64_t _nextPropagationPoll = 0;
     static_assert(sizeof(handheld::propagation::Nodes) <= handheld::ResourceBudget::PropagationNodes,
