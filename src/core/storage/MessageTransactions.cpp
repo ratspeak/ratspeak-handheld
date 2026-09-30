@@ -1,5 +1,6 @@
 #include "MessageTransactions.h"
 #include "PreparedEnvelope.h"
+#include "PurgeJournal.h"
 #include "config/Config.h"
 #include <Preferences.h>
 #include <limits>
@@ -1029,6 +1030,96 @@ void MessageTransactions::trim(const Request& request, Result& result) {
     if (result.error == Error::None || result.total) result.outcome = Outcome::Committed;
 }
 
+void MessageTransactions::purgeJournal(const Request& request, uint8_t* bytes, size_t length,
+                                       size_t capacity, Result& result) {
+    const bool loading = request.operation == Operation::LoadPurge;
+    const bool clearing = request.operation == Operation::ClearPurge;
+    purge::Journal supplied;
+    if (!bytes || std::min(capacity, size_t(request.readCapacity)) < purge::Size ||
+        (!loading && length != purge::Size)) { result.error = Error::InvalidRecord; return; }
+    if (!loading) {
+        memcpy(supplied.bytes, bytes, purge::Size);
+        if (!supplied.valid() || memcmp(supplied.local(), request.destination, 16) ||
+            !request.key.incoming || supplied.key().counter != request.key.counter ||
+            memcmp(supplied.key().peer, request.key.peer, 16)) {
+            result.error = Error::InvalidRecord; return;
+        }
+    }
+    auto flash = medium(0);
+    if (!flash.isReady()) { result.error = Error::Unavailable; return; }
+    char identity[33], primary[96], backup[100], temporary[100];
+    encodeHex(request.destination, 16, identity);
+    snprintf(primary, sizeof(primary), "/transport/propagation/%s.purge", identity);
+    snprintf(backup, sizeof(backup), "%s.bak", primary);
+    snprintf(temporary, sizeof(temporary), "%s.tmp", primary);
+    purge::Journal journal;
+    const char* existing = flash.exists(primary) ? primary : flash.exists(backup) ? backup : nullptr;
+    if (existing) {
+        File file = flash.open(existing);
+        if (!file) { result.error = Error::Read; return; }
+        if (file.size() != purge::Size) { result.error = Error::InvalidRecord; return; }
+        size_t received = 0;
+        while (received < purge::Size) {
+            const size_t part = file.read(journal.bytes + received, purge::Size - received);
+            if (!part || part > purge::Size - received) { result.error = Error::Read; return; }
+            received += part;
+        }
+        file.close();
+        if (!journal.valid() || memcmp(journal.local(), request.destination, 16)) {
+            result.error = Error::InvalidRecord; return;
+        }
+        // A lost completion may replay the same journal. It cannot replace an
+        // outstanding item or clear a later item after the owner has moved on.
+        if (!loading && memcmp(supplied.bytes, journal.bytes, purge::Size)) {
+            result.error = Error::Stale; return;
+        }
+    } else if (loading || clearing) {
+        result.outcome = Outcome::Committed; result.duplicate = true; return;
+    } else journal = supplied;
+
+    if (clearing) {
+        // Delete possible resurrecting copies before the selected primary.
+        // A partial cleanup can only leave the same item for an idempotent retry.
+        result.flash.attempted = true;
+        if ((flash.exists(temporary) && !flash.remove(temporary)) ||
+            (flash.exists(backup) && !flash.remove(backup)) ||
+            (flash.exists(primary) && !flash.remove(primary))) {
+            result.flash.error = result.error = Error::Write; return;
+        }
+        result.flash.committed = true; result.outcome = Outcome::Committed; return;
+    }
+    // Return a structurally valid journal even when its local message is gone;
+    // callers may abandon it locally, but a failed result never permits purge.
+    memcpy(bytes, journal.bytes, purge::Size); result.length = purge::Size;
+    result.key = journal.key();
+    MessageDocument document; StoredRecordHeader header;
+    result.error = load(result.key, document, header);
+    if (result.error != Error::None) return;
+    if (!header.incoming || !header.hasMessageId || header.revision < journal.revision() ||
+        memcmp(header.source, result.key.peer, 16) || memcmp(header.destination, journal.local(), 16) ||
+        memcmp(header.messageId, journal.messageId(), 32)) { result.error = Error::Stale; return; }
+    // Purge permission survives SD removal: require the matching message on
+    // authoritative flash before publishing or replaying the flash journal.
+    result.error = commit(result.key, document, false, result);
+    result.sd = {};
+    if (result.error != Error::None || !result.flash.committed) {
+        if (result.error == Error::None) result.error = Error::Write;
+        return;
+    }
+    result.revision = header.revision;
+    if (!existing) {
+        result.flash.committed = false;
+        if (!flash.ensureDir("/transport/propagation")) {
+            result.flash.error = result.error = Error::Write; return;
+        }
+        const MemorySource source(bytes, purge::Size);
+        result.flash.error = result.error = flash.write(primary, source);
+        if (result.error != Error::None) return;
+        result.flash.committed = true;
+    } else result.duplicate = true;
+    result.outcome = Outcome::Committed;
+}
+
 void MessageTransactions::execute(const Request& request, uint8_t* bytes, size_t length, size_t capacity, Result& result) {
     if (_deferred && !bindWorker()) {
         result.key = request.key; result.error = Error::Unavailable; return;
@@ -1039,7 +1130,8 @@ void MessageTransactions::execute(const Request& request, uint8_t* bytes, size_t
     checkSummaryMedia();
     if (request.operation != Operation::ReadRecord && request.operation != Operation::ReadPending &&
         request.operation != Operation::ReadHistoryPage && request.operation != Operation::ReadConversationPage &&
-        request.operation != Operation::ReadConversation) {
+        request.operation != Operation::ReadConversation && request.operation != Operation::LoadPurge &&
+        request.operation != Operation::WritePurge && request.operation != Operation::ClearPurge) {
         if (_mutationEpoch == UINT64_MAX) { result.error = Error::RevisionExhausted; return; }
         ++_mutationEpoch;
         // Invalidate before attempting a write: partial mirrors, failed cleanup
@@ -1070,6 +1162,8 @@ void MessageTransactions::execute(const Request& request, uint8_t* bytes, size_t
     case Operation::Trim: trim(request, result); break;
     case Operation::LoadPrepared: case Operation::WritePrepared:
         prepared(request, bytes, length, capacity, result); break;
+    case Operation::LoadPurge: case Operation::WritePurge: case Operation::ClearPurge:
+        purgeJournal(request, bytes, length, capacity, result); break;
     default: result.error = Error::InvalidRecord;
     }
 }

@@ -120,6 +120,29 @@ MessageStore::Submission MessageStore::requestPrepare(const RecordKey& key, cons
     return submit(request, parts, 2, prepared::Max);
 }
 
+MessageStore::Submission MessageStore::requestPurgeJournal(const uint8_t local[16]) {
+    if (!local) return {{}, Rejection::Invalid};
+    Request request; request.operation = Operation::LoadPurge;
+    memcpy(request.destination, local, 16);
+    return submit(request, nullptr, 0, purge::Size);
+}
+
+MessageStore::Submission MessageStore::requestWritePurge(const purge::Journal& journal) {
+    if (!journal.valid()) return {{}, Rejection::Invalid};
+    Request request; request.operation = Operation::WritePurge; request.key = journal.key();
+    memcpy(request.destination, journal.local(), 16);
+    const WriteQueue::PayloadPart part{journal.bytes, sizeof(journal.bytes)};
+    return submit(request, &part, 1, purge::Size);
+}
+
+MessageStore::Submission MessageStore::requestClearPurge(const purge::Journal& journal) {
+    if (!journal.valid()) return {{}, Rejection::Invalid};
+    Request request; request.operation = Operation::ClearPurge; request.key = journal.key();
+    memcpy(request.destination, journal.local(), 16);
+    const WriteQueue::PayloadPart part{journal.bytes, sizeof(journal.bytes)};
+    return submit(request, &part, 1, purge::Size);
+}
+
 MessageStore::Submission MessageStore::requestHistoryPage(const std::string& peer, HistoryEntry cursor, uint8_t limit,
                                                          HistoryDirection direction) {
     Request request; request.operation = Operation::ReadHistoryPage;
@@ -195,7 +218,8 @@ void MessageStore::settle(const Request& request, const Result& result) noexcept
     if (result.outcome != Outcome::Committed) return;
     if (request.operation == Operation::ReadRecord || request.operation == Operation::ReadHistoryPage ||
         request.operation == Operation::ReadConversationPage || request.operation == Operation::ReadConversation ||
-        request.operation == Operation::ReadPending) return;
+        request.operation == Operation::ReadPending || request.operation == Operation::LoadPurge ||
+        request.operation == Operation::WritePurge || request.operation == Operation::ClearPurge) return;
     if (result.duplicate) return;
     // Only committed aggregate deltas and invalidation live here. There is no
     // presentation cache or allocation between persistence and result visibility.

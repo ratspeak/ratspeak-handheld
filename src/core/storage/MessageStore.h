@@ -12,6 +12,7 @@
 #include <array>
 #include "storage/WriteQueue.h"
 #include "storage/ConversationView.h"
+#include "storage/PurgeJournal.h"
 namespace handheld::storage { class MessageTransactions; }
 
 class MessageStore {
@@ -48,6 +49,11 @@ public:
     Submission requestPrepare(const RecordKey&, const uint8_t source[16], const uint8_t messageId[32],
                               const uint8_t transientId[32], const uint8_t* entry, size_t length,
                               uint8_t recipientCost = 0);
+    // Load rechecks the durable message. Failed/Stale may still return a valid
+    // journal for exact-match local abandonment, never remote purge permission.
+    Submission requestPurgeJournal(const uint8_t local[16]);
+    Submission requestWritePurge(const handheld::storage::purge::Journal&);
+    Submission requestClearPurge(const handheld::storage::purge::Journal&);
     Submission requestHistoryPage(const std::string& peer, HistoryEntry cursor = {}, uint8_t limit = 48,
                                   HistoryDirection direction = HistoryDirection::Before);
     Submission requestConversationPage(handheld::storage::ConversationCursor cursor = {}, bool hasCursor = false,
