@@ -734,7 +734,8 @@ void SettingsScreen::render(M5Canvas& canvas) {
         canvas.drawString("Enter=save", 4, y0 + headerH + 36);
     } else {
         _list.render(canvas, 0, y0 + headerH + 2, Theme::CONTENT_W,
-                     Theme::CONTENT_H - headerH - 3);
+                     Theme::CONTENT_H - headerH - 3, true,
+                     _subMenu == MENU_PROPAGATION || _subMenu == MENU_PROPAGATION_NODES);
         if (_subMenu == MENU_WIFI) _drawnWiFiAction = _wifiAction;
     }
 

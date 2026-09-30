@@ -13,7 +13,7 @@ public:
     void clear();
     void updateItem(size_t index, const std::string& item, uint16_t color);
 
-    void render(M5Canvas& canvas, int x, int y, int w, int h, bool showSelection = true);
+    void render(M5Canvas& canvas, int x, int y, int w, int h, bool showSelection = true, bool compact = false);
     // Render an externally owned row without copying it into an items vector.
     static void renderRow(M5Canvas&, const std::string&, int x, int y, int width,
                           bool selected, uint16_t color = 0);

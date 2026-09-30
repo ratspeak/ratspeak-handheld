@@ -64,6 +64,34 @@ must be written to the correct slot for your installed layout. See the
 for backups and updates, and the [handheld guide](https://docs.ratspeak.org/docs/hardware/handheld-guide)
 for controls and setup.
 
+## Propagation (source builds)
+
+In **Settings → Propagation**, turn propagation ON to use an LXMF propagation
+node for store-and-forward messaging. It is OFF by default.
+
+- **Node mode AUTO** selects a usable discovered node, preferring WiFi/TCP when
+  available. The device keeps up to five candidates for each connection family.
+- **Node mode MANUAL** offers address entry or a discovered-node list. The chosen
+  address stays pinned while offline and survives AUTO, OFF and restarts. Use
+  **Choose / replace node** or **Clear manual node** to change it.
+- **Delivery AUTO** tries direct delivery first and falls back after a network
+  failure. **ALWAYS** sends through the selected node on every connection. If
+  that node is unreachable, the message reports **PROP UNAVAILABLE**.
+- **Sync now** retrieves your inbox. Automatic checks run about every five
+  minutes on WiFi/TCP or thirty minutes on LoRa, with a small random delay.
+
+**PROPAGATED** means the relay accepted the transfer; it does not mean the
+recipient has received the message. Messages created with ALWAYS retain that
+policy even if settings change. Turning propagation OFF pauses pending relay
+work. Downloaded messages are saved locally before the node is asked to delete
+them.
+
+Handheld memory and work limits apply. Stamp costs above 20 are refused, and a
+stamp job stops after 30 seconds. An inbox reply that exceeds the supported
+Resource size or uses compression reports **REPLY UNSUPPORTED** and leaves
+messages on the node. These source changes have not yet been published in a
+firmware release; physical-device stamp performance is still being qualified.
+
 ## Build From Source
 
 On Linux or macOS, install Git, Make, Python 3.12 and Arduino CLI 1.4.1, then:

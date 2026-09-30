@@ -53,7 +53,7 @@ void SettingsScreen::showPropagationNodes() {
     for (size_t i = 0; i < _propCount; ++i) {
         char label[64], address[33]; Settings pin; pin.hasManual = true;
         memcpy(pin.manual, _propNodes[i].address, 16); pin.manualHex(address);
-        snprintf(label, sizeof label, "%s %.20s%s", _propNodes[i].interface ? "WiFi" : "LoRa",
+        snprintf(label, sizeof label, "%s %s%s", _propNodes[i].interface ? "WiFi" : "LoRa",
                  _propNodes[i].name[0] ? _propNodes[i].name : "Node", _propNodes[i].usable ? "" : " offline");
         _list.addItem(label); _list.addItem(address);
     }

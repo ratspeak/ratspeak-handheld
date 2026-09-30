@@ -168,6 +168,7 @@ void LvSettingsScreen::rebuildPropagationDialog() {
         } else lv_obj_clear_flag(object, LV_OBJ_FLAG_CLICKABLE);
         auto label = [&](const char* text, int y, const lv_font_t* font) {
             auto* value = lv_label_create(object); lv_obj_set_width(value, Theme::CONTENT_W - 16);
+            lv_obj_set_height(value, lv_font_get_line_height(font));
             lv_label_set_long_mode(value, LV_LABEL_LONG_DOT); lv_obj_set_style_text_font(value, font, 0);
             lv_obj_set_style_text_color(value, lv_color_hex(Theme::TEXT_PRIMARY), 0);
             lv_label_set_text(value, text); lv_obj_align(value, LV_ALIGN_TOP_LEFT, 8, y); return value;
@@ -193,7 +194,7 @@ void LvSettingsScreen::rebuildPropagationDialog() {
         for (size_t i = 0; i < _propCount; ++i) {
             const auto& node = _propNodes[i]; Settings hash; hash.hasManual = true; memcpy(hash.manual, node.address, 16);
             char address[33], title[80]; hash.manualHex(address);
-            snprintf(title, sizeof title, "%s %.24s  %s", node.interface ? "WiFi" : "LoRa",
+            snprintf(title, sizeof title, "%s %s  %s", node.interface ? "WiFi" : "LoRa",
                      node.name[0] ? node.name : "Node", node.usable ? "" : "(unavailable)");
             row(title, address, int(i + 2));
         }

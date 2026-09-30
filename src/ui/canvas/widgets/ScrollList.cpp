@@ -115,12 +115,13 @@ void ScrollList::renderRow(M5Canvas& canvas, const std::string& label, int x, in
     drawFitted(canvas, label, x + (selected ? 16 : 9), y + 1, width - (selected ? 23 : 16));
 }
 
-void ScrollList::render(M5Canvas& canvas, int x, int y, int w, int h, bool showSelection) {
+void ScrollList::render(M5Canvas& canvas, int x, int y, int w, int h, bool showSelection, bool compact) {
     int rowH = Theme::LIST_ROW_H;
     _visibleRows = h / rowH;
     if (_visibleRows < 1) _visibleRows = 1;
 
-    Theme::useUiFont(canvas);
+    if (compact) Theme::useSmallFont(canvas);
+    else Theme::useUiFont(canvas);
 
     for (int i = 0; i < _visibleRows && (i + _scrollOffset) < (int)_items.size(); i++) {
         int idx = i + _scrollOffset;
