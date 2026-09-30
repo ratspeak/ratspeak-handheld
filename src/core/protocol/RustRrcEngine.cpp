@@ -42,7 +42,10 @@ void RustRrcEngine::notice(const char* value) {
     text(_status.notice, sizeof _status.notice, reinterpret_cast<const uint8_t*>(value), strlen(value)); changed();
 }
 uint32_t RustRrcEngine::wait(uint32_t packets) const {
-    const uint32_t radio = _d.pump && _interface <= 6 ? _d.pump->interfaceTxWaitMs(_interface, packets) : 0;
+    uint32_t radio = 0;
+    if (_d.pump && _interface <= 6) radio = _d.pump->interfaceTxWaitMs(_interface, packets);
+    else if (_d.pump) for (uint8_t i = 0; i <= 6; ++i) if (_d.pump->interfaceOnline(i))
+        radio = std::max(radio, _d.pump->interfaceTxWaitMs(i, packets));
     return std::max(uint32_t(30000), radio > UINT32_MAX - 30000 ? UINT32_MAX : radio + 30000);
 }
 bool RustRrcEngine::live(Handle handle) const {
@@ -55,6 +58,8 @@ void RustRrcEngine::begin(const Deps& deps) {
     if (!deps.ctx || !deps.clock || !deps.pump || !deps.links || !deps.store || !deps.identity || generation == UINT32_MAX) return;
     _status.generation = generation + 1; _stopped = false;
     memcpy(_status.nickname, "Handheld", 9); _d.links->setRrcSink(this); changed();
+    disk::Context root; memcpy(root.local, _d.identity, 16);
+    loadPreferences(PreferenceStep::ReadRoot, root);
 }
 void RustRrcEngine::stop() {
     if (_stopped) return;
@@ -62,6 +67,7 @@ void RustRrcEngine::stop() {
 }
 bool RustRrcEngine::drained() const {
     if (_send.ticket.valid() || _send.statusDirty) return false;
+    if (_preferences.step != PreferenceStep::Idle || _joinConfirmed || _invalidKeyRoom < RoomCapacity) return false;
     for (const auto& item : _receive) if (item.ticket.valid() || item.statusPending) return false;
     return true;
 }
@@ -78,6 +84,7 @@ void RustRrcEngine::disconnect() {
     if (_d.links && old.valid()) _d.links->closeRrc(old);
     wipeControl(); _pong = {}; _status.phase = Phase::Disconnected;
     _status.directoryPending = false; _directoryDeadline = 0;
+    if (!_joinConfirmed) { _joinRoom = UINT8_MAX; _joinPreferenceLength = 0; }
     for (auto& room : _rooms) if (room.used) { room.wanted = false; room.view.phase = RoomPhase::Saved; }
     for (auto& person : _people) person = {};
     if (_send.length && !_send.confirmed) {
@@ -98,7 +105,7 @@ void RustRrcEngine::recover(const char* reason) {
     const int32_t jitter = int32_t((uint32_t(random[0]) << 8 | random[1]) % (backoff / 5 + 1)) - int32_t(backoff / 10);
     _retryAt = now() + backoff + jitter; _pathRequested = false;
     for (auto& room : _rooms) if (room.used && room.wanted) {
-        room.view.phase = room.view.needsKey ? RoomPhase::NeedsKey : RoomPhase::Recovering;
+        room.view.phase = room.view.needsKey && !room.view.keyRemembered ? RoomPhase::NeedsKey : RoomPhase::Recovering;
         room.view.membersComplete = false;
     }
     for (auto& person : _people) person = {};
@@ -130,12 +137,12 @@ void RustRrcEngine::learn(const rs_handheld_announce_event_t& event) {
     if (hub && memcmp(hub->publicKey, event.public_key, 64)) return;
     if (!hub) for (auto& candidate : _hubs) if (!candidate.used) { hub = &candidate; break; }
     if (!hub) for (auto& candidate : _hubs) {
-        if (candidate.view.saved || !memcmp(candidate.view.address, _status.hub, 16)) continue;
+        if (!memcmp(candidate.view.address, _status.hub, 16)) continue;
         if (!hub || candidate.seen < hub->seen) hub = &candidate;
     }
     if (!hub) return;
     const bool same = hub->used && !memcmp(hub->view.address, event.destination_hash, 16);
-    const bool saved = same && hub->view.saved;
+    const bool saved = (same && hub->view.saved) || _bookmarks.find(event.destination_hash) >= 0;
     *hub = {}; hub->used = true; hub->seen = now(); hub->view.saved = saved;
     memcpy(hub->publicKey, event.public_key, 64); memcpy(hub->view.address, event.destination_hash, 16);
     rs_handheld_rrc_span_t name{};
@@ -146,7 +153,8 @@ void RustRrcEngine::learn(const rs_handheld_announce_event_t& event) {
 }
 Status RustRrcEngine::status() const {
     auto value = _status;
-    value.busy = _control.length || _send.ticket.valid() || _send.statusDirty || _send.length;
+    value.busy = _control.length || _send.ticket.valid() || _send.statusDirty || _send.length ||
+        _preferences.step != PreferenceStep::Idle || _joinConfirmed || _invalidKeyRoom < RoomCapacity;
     return value;
 }
 size_t RustRrcEngine::hubs(HubView* output, size_t capacity) const {
@@ -162,6 +170,13 @@ size_t RustRrcEngine::hubs(HubView* output, size_t capacity) const {
             row.reachable = _d.pump->interfaceOnline(route.interface_id);
         }
     }
+    for (size_t i = 0; i < _bookmarks.count && used < capacity; ++i) {
+        bool listed = false; for (size_t j = 0; j < used; ++j) listed |= !memcmp(output[j].address, _bookmarks.keys[i], 16);
+        if (listed) continue;
+        auto& row = output[used++]; row = {}; memcpy(row.address, _bookmarks.keys[i], 16); row.saved = true;
+        row.active = _status.phase != Phase::Disconnected && !memcmp(row.address, _status.hub, 16);
+        snprintf(row.name, sizeof row.name, "Saved hub %02x%02x%02x", row.address[0], row.address[1], row.address[2]);
+    }
     return used;
 }
 size_t RustRrcEngine::rooms(RoomView* output, size_t capacity) const {
@@ -172,6 +187,11 @@ size_t RustRrcEngine::people(const char* name, PersonView* output, size_t capaci
     const auto* room = name ? findRoom(name) : nullptr; const uint8_t mask = room ? uint8_t(1u << (room - _rooms)) : 0xff;
     size_t used = 0; if (output) for (const auto& person : _people) if ((person.rooms & mask) && used < capacity) output[used++] = person;
     return used;
+}
+size_t RustRrcEngine::directory(DirectoryView* output, size_t capacity, size_t offset) const {
+    size_t count = 0;
+    if (output) while (count < capacity && _directory.at(offset + count, output[count])) ++count;
+    return count;
 }
 bool RustRrcEngine::context(const uint8_t hub[16], const char* room, const uint8_t* participant, disk::Context& out) const {
     if (!_d.identity || !nonzero(hub)) return false;
@@ -207,7 +227,7 @@ bool RustRrcEngine::encode(uint64_t kind, const char* room, const uint8_t* body,
     if (messageId) memcpy(meta.id, messageId, 8); else RustEntropy::fill(meta.id, 8);
     if (destination) { meta.has_destination = 1; memcpy(meta.destination, destination, 16); }
     return rs_handheld_rrc_encode(&meta, reinterpret_cast<const uint8_t*>(room), room ? strlen(room) : 0,
-        reinterpret_cast<const uint8_t*>(_status.nickname), strlen(_status.nickname), body, length, bodyKind,
+        reinterpret_cast<const uint8_t*>(_status.nickname), strlen(_status.nickname) <= _status.nicknameLimit ? strlen(_status.nickname) : 0, body, length, bodyKind,
         packet, PacketCapacity, &size) == RS_HANDHELD_OK;
 }
 RustRrcEngine::Code RustRrcEngine::control(uint8_t kind, const char* room, const uint8_t* body, size_t length, uint8_t bodyKind) {
@@ -215,6 +235,7 @@ RustRrcEngine::Code RustRrcEngine::control(uint8_t kind, const char* room, const
     size_t count = 0;
     if (!encode(kind, room, body, length, bodyKind, nullptr, _control.packet, count)) return Code::TooLong;
     _control.length = count; _control.kind = kind; _control.born = now(); _control.token = ++_sequence;
+    _control.waitMs = wait(8);
     auto* item = room ? findRoom(room) : nullptr; _control.room = item ? uint8_t(item - _rooms) : UINT8_MAX;
     changed(); return Code::Ok;
 }
@@ -223,14 +244,26 @@ RustRrcEngine::Code RustRrcEngine::command(const Command& command, const uint8_t
     if (_stopped) return Code::Offline;
     if (command.generation != _status.generation) return Code::Stale;
     if (length && !body) return Code::Invalid;
+    auto preference = [&] {
+        const auto result = preferenceCommand(command, body, length);
+        if (result != Code::Ok && _preferences.step == PreferenceStep::Idle) _preferences.revision = 0;
+        return result;
+    };
+    if (command.action == Action::SaveHub || command.action == Action::ForgetHub || command.action == Action::Nickname || command.action == Action::Draft ||
+        command.action == Action::MarkRead || command.action == Action::ClearHistory)
+        return preference();
     if (command.action == Action::Connect) {
         if (!nonzero(command.hub)) return Code::Invalid;
-        if (!drained() || _send.length) return Code::Busy;
+        if (!drained() || _send.length || !_preferences.ready) return Code::Busy;
         disconnect();
         if (_status.generation == UINT32_MAX) return Code::Full;
         ++_status.generation; memcpy(_status.hub, command.hub, 16); memset(_status.identity, 0, 16);
         memset(_rooms, 0, sizeof _rooms); memset(_people, 0, sizeof _people);
         _recentCount = _recentNext = 0; _status.phase = Phase::Finding; _status.notice[0] = 0;
+        _directory = {}; _status.directoryPartial = false;
+        _savedRooms = {};
+        disk::Context scope; context(_status.hub, nullptr, nullptr, scope);
+        loadPreferences(PreferenceStep::ReadHub, scope);
         _status.capabilities = 0; _status.bodyLimit = 350; _status.roomLimit = 64; _status.nicknameLimit = 32; _status.roomsLimit = RoomCapacity;
         _failures = 0; _interface = UINT8_MAX; _pathRequested = false; _deadline = now() + wait();
         if (const auto* hub = findHub(command.hub)) memcpy(_status.name, hub->view.name, sizeof _status.name);
@@ -240,6 +273,7 @@ RustRrcEngine::Code RustRrcEngine::command(const Command& command, const uint8_t
     if (memcmp(command.hub, _status.hub, 16)) return Code::Stale;
     if (command.action == Action::Disconnect) { disconnect(); return Code::Ok; }
     if (command.action == Action::Retry) { if (_status.phase == Phase::Recovering) _retryAt = now(); return Code::Ok; }
+    if (_preferences.step != PreferenceStep::Idle) return Code::Busy;
     if (_status.phase != Phase::Online) return Code::Offline;
     char room[65]{};
     if (command.room[0] && !normalized(reinterpret_cast<const uint8_t*>(command.room), strnlen(command.room, 65), room, sizeof room)) return Code::Invalid;
@@ -253,11 +287,14 @@ RustRrcEngine::Code RustRrcEngine::command(const Command& command, const uint8_t
         if ((!item || !item->wanted) && joined >= _status.roomsLimit) return Code::Full;
         if (!item) for (auto& row : _rooms) if (!row.used || !row.wanted) { item = &row; break; }
         if (!item) return Code::Full;
-        const auto result = control(10, room, body, length, length ? 1 : 0); if (result != Code::Ok) return result;
+        if (_control.length || _joinRoom < RoomCapacity) return Code::Busy;
         if (!item->used || strcmp(item->view.name, room)) { *item = {}; item->used = true; strcpy(item->view.name, room);
             rs_handheld_rrc_storage_key(0, reinterpret_cast<const uint8_t*>(room), strlen(room), item->view.key); }
-        item->wanted = true; item->view.needsKey = length != 0; item->view.phase = RoomPhase::Joining;
-        item->deadline = now() + wait(8); _control.room = uint8_t(item - _rooms); changed(); return Code::Ok;
+        if (length) return startJoin(*item, body, length, command.flags & 1);
+        disk::Context scope; context(_status.hub, room, nullptr, scope);
+        loadPreferences(PreferenceStep::ReadJoin, scope); _preferences.room = uint8_t(item - _rooms);
+        _preferences.revision = command.revision; _preferences.action = Action::Join;
+        item->view.phase = RoomPhase::Joining; item->deadline = now() + wait(8); changed(); return Code::Ok;
     }
     case Action::Leave: {
         if (!item) return Code::NotJoined;
@@ -279,8 +316,7 @@ RustRrcEngine::Code RustRrcEngine::command(const Command& command, const uint8_t
         if (!length || body[0] != '/' || length > _status.bodyLimit) return Code::Invalid;
         return control(20, room[0] ? room : nullptr, body, length);
     case Action::Mute:
-        if (!item) return Code::NotJoined;
-        item->view.muted = command.flags != 0; changed(); return Code::Ok;
+        return preference();
     default: return Code::Unsupported;
     }
 }
@@ -307,6 +343,7 @@ RustRrcEngine::Code RustRrcEngine::send(const Command& command, const uint8_t* b
     if (!submitted.accepted()) { wipe(&_send, sizeof _send); _send = {}; return Code::Storage; }
     _send.ticket = submitted.ticket; _send.length = count; _send.token = ++_sequence;
     _send.born = now(); _send.deadline = now() + wait(8); memcpy(_send.conversation, scope.conversation, 16);
+    _send.waitMs = wait(8);
     _status.sending = SendPhase::Saving; _status.sendRevision = command.revision; ++_rateCount; changed(); return Code::Ok;
 }
 
@@ -325,7 +362,7 @@ void RustRrcEngine::onRrcTransmit(Handle handle, uint32_t token, bool started) {
         const auto kind = _control.kind, room = _control.room;
         wipeControl();
         if (!started) { notice("Command was not transmitted"); if (room < RoomCapacity) _rooms[room].view.phase = RoomPhase::Error; }
-        else if (kind == 1) { _status.phase = Phase::Greeting; _deadline = now() + wait(6); changed(); }
+        else if (kind == 1) { _nicknameDirty = false; _status.phase = Phase::Greeting; _deadline = now() + wait(6); changed(); }
     }
 }
 
@@ -370,7 +407,7 @@ void RustRrcEngine::pollSend() {
     if (_status.sending == SendPhase::Sending && !_send.admitted && !_stopped && _status.phase == Phase::Online) {
         const auto token = _send.token;
         // The receipt hook may run inline. Install all ownership before offer.
-        if (_d.links->sendRrc(_link, _send.packet, _send.length, token, _send.born, wait(8)) && _send.token == token) _send.admitted = true;
+        if (_d.links->sendRrc(_link, _send.packet, _send.length, token, _send.born, _send.waitMs) && _send.token == token) _send.admitted = true;
     }
     if (now() >= _send.deadline && (_status.sending == SendPhase::Sending || _status.sending == SendPhase::Awaiting)) {
         _status.sending = _send.started ? SendPhase::Unconfirmed : SendPhase::NotSent;
@@ -393,10 +430,13 @@ void RustRrcEngine::applyRoomControl(const uint8_t* data, size_t length, const r
         if (room.view.phase == RoomPhase::Error && !confirming) return;
         const bool replace = confirming || (includesSelf && !(room.view.phase == RoomPhase::Joined && count == 1));
         if (replace) for (auto& person : _people) person.rooms &= uint8_t(~(1u << slot));
-        room.view.membersComplete = replace && includesSelf;
+        if (replace) room.view.membersComplete = includesSelf;
+        else if (count > 1) room.view.membersComplete = false;
         room.view.phase = RoomPhase::Joined;
+        joined(room);
         for (size_t n = 0; n < count; ++n) { uint8_t identity[16]; rs_handheld_rrc_member(data, length, n, identity, &count);
             participant(identity, count == 1 ? data + view.nickname.offset : nullptr, count == 1 ? view.nickname.length : 0, slot); }
+        if (confirming) participant(_d.identity, reinterpret_cast<const uint8_t*>(_status.nickname), strlen(_status.nickname), slot);
     } else {
         for (size_t n = 0; n < count; ++n) { uint8_t identity[16]; rs_handheld_rrc_member(data, length, n, identity, &count); participant(identity, nullptr, 0, slot, true); }
         if (includesSelf || (room.view.phase == RoomPhase::Leaving && !count)) {
@@ -405,6 +445,30 @@ void RustRrcEngine::applyRoomControl(const uint8_t* data, size_t length, const r
         }
     }
     ++room.view.revision; changed();
+}
+
+bool RustRrcEngine::roomStatus(Room& room, const uint8_t* bytes, size_t length) {
+    // Exact rrcd status grammar, and only called after hub-source validation and
+    // durable admission. A peer quoting this text cannot confirm a JOIN.
+    char prefix[73]; snprintf(prefix, sizeof prefix, "room %s: ", room.view.name);
+    std::string_view value(reinterpret_cast<const char*>(bytes), length);
+    if (value.substr(0, strlen(prefix)) != prefix) return false;
+    value.remove_prefix(strlen(prefix)); const auto mode = value.find("; mode=");
+    if (mode == value.npos) return false;
+    const auto registration = Directory::trim(value.substr(0, mode));
+    if (registration != "registered" && registration != "unregistered") return false;
+    value.remove_prefix(mode + 7); const auto topic = value.find("; topic=");
+    if (topic == value.npos) return false;
+    const auto modes = Directory::trim(value.substr(0, topic)); const auto description = Directory::trim(value.substr(topic + 8));
+    text(room.view.modes, sizeof room.view.modes, reinterpret_cast<const uint8_t*>(modes.data()), modes.size());
+    text(room.view.topic, sizeof room.view.topic, reinterpret_cast<const uint8_t*>(description.data()), description == "(none)" ? 0 : description.size());
+    room.view.registered = registration == "registered" ? 1 : 2;
+    if (room.wanted && (room.view.phase == RoomPhase::Joining || room.view.phase == RoomPhase::Error)) {
+        room.view.phase = RoomPhase::Joined; room.view.membersComplete = false;
+        participant(_d.identity, reinterpret_cast<const uint8_t*>(_status.nickname), strlen(_status.nickname), uint8_t(&room - _rooms));
+        joined(room);
+    }
+    ++room.view.revision; changed(); return true;
 }
 
 void RustRrcEngine::onRrcPacket(Handle handle, const uint8_t* data, size_t length, const uint8_t packetHash[32]) {
@@ -432,11 +496,12 @@ void RustRrcEngine::onRrcPacket(Handle handle, const uint8_t* data, size_t lengt
         if (!encode(31, nullptr, data + view.body.offset, view.body.length, view.body.length ? 2 : 0,
                     nullptr, _pong.packet, _pong.length)) return;
         _pong.born = now(); _pong.token = ++_sequence; _pong.kind = 31;
+        _pong.waitMs = wait(4);
     } else if (kind == 11 || kind == 13) {
         char name[65]; if (!normalized(data + view.room.offset, view.room.length, name, sizeof name)) return;
         auto* room = findRoom(name); if (!room) return; applyRoomControl(data, length, view, *room);
     } else if (kind == 20 || kind == 21 || kind == 22 || kind == 40) {
-        if (_status.phase != Phase::Online || view.body_kind != 1) return;
+        if ((_status.phase != Phase::Online && kind != 40) || view.body_kind != 1) return;
         char name[65]{}; Room* room = nullptr;
         if (view.room.length) {
             if (!normalized(data + view.room.offset, view.room.length, name, sizeof name)) return;
@@ -483,9 +548,36 @@ void RustRrcEngine::pollReceive() {
                     ++room.view.revision;
                 }
                 rs_handheld_rrc_view_t view{};
-                if (rs_handheld_rrc_decode(record.payload(), record.payloadLength(), &view) == RS_HANDHELD_OK &&
+                if (!result.duplicate && rs_handheld_rrc_decode(record.payload(), record.payloadLength(), &view) == RS_HANDHELD_OK &&
                     !memcmp(view.meta.source, _status.identity, 16) && view.body_kind == 1) {
                     text(_status.notice, sizeof _status.notice, record.payload() + view.text.offset, view.text.length);
+                    if (view.meta.kind == 21 && !view.room.length && !view.meta.has_destination) {
+                        const auto result = _directory.apply(record.payload() + view.text.offset, view.text.length, _status.roomLimit);
+                        if (result == Directory::Result::Applied) {
+                            _status.directoryPending = false; _status.directoryPartial = _directory.omitted() != 0;
+                            notice(_status.directoryPartial ? "Partial channel list; join by name is available" : "Channel list updated");
+                        } else if (result == Directory::Result::Invalid && _status.directoryPending) {
+                            _status.directoryPending = false; notice("Hub channel list was invalid");
+                        }
+                    }
+                    if (view.meta.kind == 21 && item.room < RoomCapacity && roomStatus(_rooms[item.room], record.payload() + view.text.offset, view.text.length))
+                        notice("Channel details updated");
+                    if (view.meta.kind == 40) {
+                        if (item.room < RoomCapacity) {
+                            auto& room = _rooms[item.room];
+                            if (room.view.phase == RoomPhase::Joining) {
+                                const bool badKey = !strcmp(_status.notice, "bad key (+k)");
+                                room.view.phase = badKey ? RoomPhase::NeedsKey : RoomPhase::Error;
+                                room.wanted = false;
+                                if (_joinRoom == item.room && !_joinConfirmed) {
+                                    if (badKey && _joinFromStored) { room.view.keyRemembered = false; _invalidKeyRoom = item.room; }
+                                    _joinRoom = UINT8_MAX; _joinPreferenceLength = 0;
+                                }
+                            }
+                        } else if (!strcmp(_status.notice, "banned")) disconnect();
+                        else if (_status.phase == Phase::Greeting) recover("Hub rejected the greeting");
+                        _status.directoryPending = false;
+                    }
                 }
                 changed();
             }
@@ -501,13 +593,13 @@ void RustRrcEngine::pollReceive() {
 }
 
 void RustRrcEngine::loop() {
-    pollReceive(); pollSend();
+    pollReceive(); pollSend(); pollPreferences();
     if (_stopped || !_d.links || _status.phase == Phase::Disconnected) return;
     const auto time = now();
     if (_status.phase == Phase::Recovering && time >= _retryAt) {
         _status.phase = Phase::Finding; _deadline = time + wait(); _pathRequested = false; changed();
     }
-    if (_status.phase == Phase::Finding) {
+    if (_status.phase == Phase::Finding && _preferences.step != PreferenceStep::ReadHub) {
         rs_handheld_route_t route{}; uint8_t key[64], hop = 0, next[16]; int32_t has = 0, hasNext = 0;
         if (rs_handheld_rns_route(_d.ctx, _status.hub, time, &route) == RS_HANDHELD_OK && route.kind == RS_HANDHELD_ROUTE_DIRECT &&
             _d.pump->interfaceOnline(route.interface_id) && rs_handheld_rns_path_info(_d.ctx, _status.hub, time, &has, &hop, next, &hasNext, key) == RS_HANDHELD_OK && has &&
@@ -522,35 +614,45 @@ void RustRrcEngine::loop() {
     }
     if (_status.phase == Phase::Connecting && _d.links->rrcActive(_link)) {
         _status.phase = Phase::Identifying; _deadline = time + wait(4); changed();
+        _identifyBorn = time;
     }
     if (_status.phase == Phase::Identifying) {
         if (_d.links->rrcIdentified(_link)) {
             static constexpr uint8_t Version[] = "2.2.4";
             if (!_control.length) control(1, nullptr, Version, sizeof Version - 1, 3);
-        } else _d.links->identifyRrc(_link, _deadline - wait(4), wait(4));
+        } else _d.links->identifyRrc(_link, _identifyBorn, uint32_t(_deadline - _identifyBorn));
     }
     auto offer = [&](Control& item) {
-        if (item.length && time - item.born >= wait(8)) {
+        if (item.length && time - item.born >= item.waitMs) {
             if (&item == &_control) { wipeControl(); notice("Command transmission timed out"); }
             else item = {};
             return;
         }
         if (!item.length || item.admitted) return;
         const auto token = item.token;
-        if (_d.links->sendRrc(_link, item.packet, item.length, token, item.born, wait(8)) && item.token == token) item.admitted = true;
+        if (_d.links->sendRrc(_link, item.packet, item.length, token, item.born, item.waitMs) && item.token == token) item.admitted = true;
     };
     if (_d.links->rrcIdentified(_link)) { offer(_pong); if (!_pong.length) offer(_control); }
     if (_status.phase != Phase::Online && _status.phase != Phase::Recovering && time >= _deadline) { recover("Hub unavailable; reconnecting"); return; }
     if (_status.phase != Phase::Online) return;
+    if (_nicknameDirty && !_control.length) {
+        static constexpr uint8_t Version[] = "2.2.4";
+        control(1, nullptr, Version, sizeof Version - 1, 3);
+    }
     if (_failures && time - _onlineAt >= 120000) _failures = 0;
     if (_status.directoryPending && time >= _directoryDeadline) { _status.directoryPending = false; notice("Channel list timed out; join by name is available"); }
     for (auto& room : _rooms) {
         if (!room.used) continue;
-        if (room.view.phase == RoomPhase::Recovering && !_control.length) {
-            if (control(10, room.view.name, nullptr, 0, 0) == Code::Ok) { room.view.phase = RoomPhase::Joining; room.deadline = time + wait(8); changed(); }
+        if (room.view.phase == RoomPhase::Recovering && !_control.length && _preferences.step == PreferenceStep::Idle && _joinRoom == UINT8_MAX) {
+            disk::Context scope; context(_status.hub, room.view.name, nullptr, scope);
+            loadPreferences(PreferenceStep::ReadJoin, scope); _preferences.room = uint8_t(&room - _rooms);
+            room.view.phase = RoomPhase::Joining; room.deadline = time + wait(8); changed();
         }
         if ((room.view.phase == RoomPhase::Joining || room.view.phase == RoomPhase::Leaving) && time >= room.deadline) {
             room.view.phase = RoomPhase::Error; notice("Channel request timed out");
+            if (_joinRoom == size_t(&room - _rooms) && !_joinConfirmed) { _joinRoom = UINT8_MAX; _joinPreferenceLength = 0; }
         }
     }
 }
+
+#include "RrcPreferences.inc"

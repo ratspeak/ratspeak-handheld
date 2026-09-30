@@ -58,6 +58,7 @@ public:
     virtual size_t rrcHubs(handheld::rrc::HubView*, size_t) const { return 0; }
     virtual size_t rrcRooms(handheld::rrc::RoomView*, size_t) const { return 0; }
     virtual size_t rrcPeople(const char*, handheld::rrc::PersonView*, size_t) const { return 0; }
+    virtual size_t rrcDirectory(handheld::rrc::DirectoryView*, size_t, size_t = 0) const { return 0; }
     virtual handheld::rrc::Code rrcCommand(const handheld::rrc::Command&, const uint8_t*, size_t) { return handheld::rrc::Code::Offline; }
     virtual bool rrcContext(const uint8_t[16], const char*, const uint8_t*, handheld::storage::rrc::Context&) const { return false; }
 

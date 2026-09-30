@@ -1,5 +1,7 @@
 #pragma once
 #include "protocol/RrcTypes.h"
+#include "protocol/RrcPreferences.h"
+#include "protocol/RrcDirectory.h"
 #include "protocol/RustLinkManager.h"
 #include "storage/RrcRecord.h"
 
@@ -30,6 +32,7 @@ public:
     size_t hubs(handheld::rrc::HubView*, size_t capacity) const;
     size_t rooms(handheld::rrc::RoomView*, size_t capacity) const;
     size_t people(const char* room, handheld::rrc::PersonView*, size_t capacity) const;
+    size_t directory(handheld::rrc::DirectoryView*, size_t capacity, size_t offset = 0) const;
     handheld::rrc::Code command(const handheld::rrc::Command&, const uint8_t* text, size_t length);
     bool context(const uint8_t hub[16], const char* room, const uint8_t* participant,
                  handheld::storage::rrc::Context&) const;
@@ -67,7 +70,7 @@ private:
         uint8_t packet[handheld::rrc::PacketCapacity]{}, file[16]{}, conversation[16]{};
         size_t length = 0;
         uint64_t born = 0, deadline = 0;
-        uint32_t token = 0, counter = 0, revision = 0;
+        uint32_t token = 0, counter = 0, revision = 0, waitMs = 0;
         handheld::storage::rrc::Status status = handheld::storage::rrc::Status::Pending;
         bool admitted = false, started = false, statusDirty = false, statusWrite = false, statusRead = false, confirmed = false;
     };
@@ -75,7 +78,7 @@ private:
         uint8_t packet[handheld::rrc::PacketCapacity]{};
         size_t length = 0;
         uint64_t born = 0;
-        uint32_t token = 0;
+        uint32_t token = 0, waitMs = 0;
         uint8_t kind = 0, room = UINT8_MAX;
         bool admitted = false;
     };
@@ -100,7 +103,26 @@ private:
     void pollSend();
     void pollReceive();
     void applyRoomControl(const uint8_t*, size_t, const rs_handheld_rrc_view_t&, Room&);
+    bool roomStatus(Room&, const uint8_t*, size_t);
     void wipeControl();
+    enum class PreferenceStep : uint8_t { Idle, ReadRoot, WriteRoot, ReadHub, WriteHub, ReadJoin, WriteRoom, ReadMute, ReadForgetKey, WriteDraft, ReadUnread, MarkRead, ClearHistory };
+    struct Preferences {
+        Record record;
+        Ticket ticket;
+        PreferenceStep step = PreferenceStep::Idle;
+        handheld::rrc::Action action = handheld::rrc::Action::SaveHub;
+        uint32_t revision = 0, roomRevision = 0;
+        uint8_t room = UINT8_MAX;
+        bool write = false, ready = false, corrupt = false;
+    };
+    void pollPreferences();
+    void preferenceDone(handheld::rrc::Code);
+    void loadPreferences(PreferenceStep, const handheld::storage::rrc::Context&);
+    void saveRoot(const handheld::rrc::SavedIndex&, const char* nickname = nullptr);
+    void saveHubRooms();
+    void joined(Room&);
+    Code preferenceCommand(const handheld::rrc::Command&, const uint8_t*, size_t);
+    Code startJoin(Room&, const uint8_t*, size_t, bool remember);
 
     Deps _d;
     handheld::rrc::Status _status;
@@ -112,8 +134,16 @@ private:
     Receive _receive[2];
     Send _send;
     Control _control, _pong;
+    Preferences _preferences;
+    handheld::rrc::SavedIndex _bookmarks, _savedRooms;
+    uint8_t _joinPreference[handheld::rrc::RoomPreferenceHeader + handheld::rrc::SealedKeyCapacity]{};
+    uint16_t _joinPreferenceLength = 0;
+    uint8_t _joinRoom = UINT8_MAX;
+    uint8_t _invalidKeyRoom = UINT8_MAX;
+    bool _joinConfirmed = false, _nicknameDirty = false, _joinFromStored = false;
+    handheld::rrc::Directory _directory;
     Handle _link;
-    uint64_t _deadline = 0, _retryAt = 0, _onlineAt = 0, _directoryDeadline = 0;
+    uint64_t _deadline = 0, _retryAt = 0, _onlineAt = 0, _directoryDeadline = 0, _identifyBorn = 0;
     uint32_t _sequence = 0, _rateCount = 0, _rateLimit = 0;
     uint64_t _rateWindow = 0;
     uint8_t _interface = UINT8_MAX, _failures = 0;
