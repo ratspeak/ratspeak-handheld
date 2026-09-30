@@ -25,7 +25,10 @@ enum class SettingType : uint8_t {
 enum class SettingsView : uint8_t {
     CATEGORY_LIST,
     ITEM_LIST,
-    WIFI_PICKER
+    WIFI_PICKER,
+    PROPAGATION_CHOICE,
+    PROPAGATION_NODES,
+    PROPAGATION_ENTRY
 };
 
 struct SettingItem {
@@ -57,6 +60,7 @@ public:
     void setService(handheld::ServiceClient* service) { _service = service; }
     void createUI(lv_obj_t* parent) override;
     void onEnter() override;
+    void onExit() override;
     void refreshUI() override;
     bool handleKey(const KeyEvent& event) override;
     bool handleLongPress() override;
@@ -83,6 +87,20 @@ public:
 private:
     handheld::ServiceClient* _service = nullptr;
     void buildItems();
+    void buildPropagationItems(int&);
+    void showPropagationDialog(SettingsView);
+    void rebuildPropagationDialog();
+    void activatePropagationRow(int);
+    bool handlePropagationKey(const KeyEvent&);
+    void pollPropagationUI();
+    void savePropagationAddress(const uint8_t address[16]);
+    handheld::propagation::NodeView _propNodes[handheld::propagation::NodeViewCapacity]{};
+    char _propInput[33]{};
+    uint32_t _propGeneration = 0;
+    int _propCategory = -1, _propSelected = 0;
+    size_t _propCount = 0;
+    bool _propLoading = false, _propFailed = false, _propChoicePending = false;
+    handheld::propagation::SyncStatus _propStatus = handheld::propagation::SyncStatus::Off;
     void applyAndSave();
     void applyPreset(int presetIdx);
     int detectPreset() const;

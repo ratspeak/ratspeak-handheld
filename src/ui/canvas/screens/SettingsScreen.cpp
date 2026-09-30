@@ -104,6 +104,7 @@ void SettingsScreen::onEnter() {
     _subMenu = MENU_MAIN;
     _editing = false;
     _editField = -1;
+    _propChoicePending = false; _propCount = 0;
     buildMainMenu();
 }
 
@@ -116,6 +117,7 @@ void SettingsScreen::buildMainMenu() {
     _list.addItem("Audio");
     _list.addItem("About");
     _list.addItem("Factory Reset", Theme::ERROR);
+    _list.addItem("Propagation");
 }
 
 void SettingsScreen::buildRadioMenu() {
@@ -517,7 +519,13 @@ void SettingsScreen::commitEdit(const std::string& value) {
     };
     try {
 
-    if (_subMenu == MENU_RADIO) {
+    if (_subMenu == MENU_PROPAGATION_CHOICE) {
+        handheld::propagation::Settings parsed;
+        if (value.size() != 32 || !parsed.setManual(value.data(), value.size())) {
+            showToast("Enter 32 hexadecimal characters", 2500); return;
+        }
+        if (!savePropagationAddress(parsed.manual)) return;
+    } else if (_subMenu == MENU_RADIO) {
         int32_t v;
         if (!handheld::settings::parseInteger(value, -9, LORA_MAX_FREQUENCY, v)) {
             showToast("Enter a valid whole number");
@@ -685,6 +693,7 @@ std::string SettingsScreen::getCurrentValue(SubMenu menu, int field) {
 }
 
 void SettingsScreen::render(M5Canvas& canvas) {
+    pollPropagationUI();
     if (!_candidateReady) {
         Theme::useSmallFont(canvas); canvas.setTextColor(Theme::MUTED);
         canvas.drawString("Settings memory unavailable", 4, Theme::CONTENT_Y + 8);
@@ -700,7 +709,8 @@ void SettingsScreen::render(M5Canvas& canvas) {
 
     // Header with accent bar
     const char* headers[] = {"SETTINGS", "RADIO", "WIFI", "TCP CONNECTIONS",
-                             "SD CARD", "DISPLAY", "AUDIO", "ABOUT", "WIFI SCAN"};
+                             "SD CARD", "DISPLAY", "AUDIO", "ABOUT", "WIFI SCAN",
+                             "PROPAGATION", "MANUAL NODE", "PROPAGATION NODES"};
     const int headerH = Theme::SECTION_HEADER_H;
     canvas.fillRect(0, y0, Theme::CONTENT_W, headerH, Theme::BG_SURFACE);
     canvas.fillRect(0, y0 + 2, 3, headerH - 4, Theme::ACCENT);
@@ -827,6 +837,10 @@ bool SettingsScreen::handleKey(const KeyEvent& event) {
             _editLabel.clear();
             return true;
         }
+        if (_subMenu == MENU_PROPAGATION_NODES) { showPropagationChoice(); return true; }
+        if (_subMenu == MENU_PROPAGATION_CHOICE) {
+            _subMenu = MENU_PROPAGATION; buildPropagationMenu(); return true;
+        }
         if (_subMenu == MENU_TCP) {
             _subMenu = MENU_WIFI;
             buildWiFiMenu();
@@ -882,9 +896,13 @@ bool SettingsScreen::handleKey(const KeyEvent& event) {
                 case 4: _subMenu = MENU_AUDIO; buildAudioMenu(); break;
                 case 5: _subMenu = MENU_ABOUT; break;
                 case 6: _confirmPending = true; _confirmAction = 0; break;
+                case 7: _subMenu = MENU_PROPAGATION; buildPropagationMenu(); break;
             }
             return true;
         }
+
+        if (_subMenu == MENU_PROPAGATION || _subMenu == MENU_PROPAGATION_CHOICE ||
+            _subMenu == MENU_PROPAGATION_NODES) { activatePropagationRow(sel); return true; }
 
         // WiFi scan results handling
         if (_subMenu == MENU_WIFI_SCAN) {

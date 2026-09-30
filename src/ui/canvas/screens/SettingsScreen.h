@@ -56,7 +56,19 @@ public:
 
 private:
     enum SubMenu { MENU_MAIN, MENU_RADIO, MENU_WIFI, MENU_TCP, MENU_SDCARD,
-                   MENU_DISPLAY, MENU_AUDIO, MENU_ABOUT, MENU_WIFI_SCAN };
+                   MENU_DISPLAY, MENU_AUDIO, MENU_ABOUT, MENU_WIFI_SCAN,
+                   MENU_PROPAGATION, MENU_PROPAGATION_CHOICE, MENU_PROPAGATION_NODES };
+
+    void buildPropagationMenu();
+    void showPropagationChoice();
+    void showPropagationNodes();
+    void activatePropagationRow(int row);
+    void pollPropagationUI();
+    bool savePropagationAddress(const uint8_t address[16]);
+    handheld::propagation::NodeView _propNodes[handheld::propagation::NodeViewCapacity]{};
+    size_t _propCount = 0;
+    bool _propChoicePending = false;
+    handheld::propagation::SyncStatus _propStatus = handheld::propagation::SyncStatus::Off;
 
     void buildMainMenu();
     void buildRadioMenu();
