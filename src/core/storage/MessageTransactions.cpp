@@ -402,13 +402,19 @@ void MessageTransactions::update(const Request& request, Result& result) {
     result.error = load(request.key, document, header);
     if (result.error != Error::None) return;
     result.oldStatus = header.status; result.newStatus = request.status;
+    if (!messaging::validDelivery(request.status, header.deliveryPolicy, header.incoming) ||
+        (messaging::relayStatus(header.status) && request.status < 7 && request.status != 4 && request.status != 5)) {
+        result.error = Error::Stale; return;
+    }
     if (header.status == request.status) {
         result.revision = header.revision; result.error = commit(request.key, document, false, result);
         if (result.error == Error::None) result.outcome = Outcome::Committed;
         return;
     }
     // A proof-confirmed record cannot regress; resend creates another record.
-    if (header.status == 4) { result.error = Error::Stale; return; }
+    if (header.status == 4 || (header.status == 9 && request.status != 4)) {
+        result.error = Error::Stale; return;
+    }
     if (header.revision == UINT32_MAX) { result.error = Error::RevisionExhausted; return; }
     document.document()["status"] = request.status;
     document.document()["store_revision"] = header.revision + 1;
@@ -593,8 +599,8 @@ Error MessageTransactions::summarize(const uint8_t peer[16], ConversationView& r
                 row.lastOutgoingCounter = key.counter; row.outgoingRevision = header.revision;
                 row.status = row.durableStatus = header.status;
             }
-            if ((header.status == 1 || header.status == 2) && row.pendingCount < UINT16_MAX) ++row.pendingCount;
-            if (header.status == 5 && row.failedCount < UINT16_MAX) ++row.failedCount;
+            if (messaging::pendingStatus(header.status) && row.pendingCount < UINT16_MAX) ++row.pendingCount;
+            if (messaging::failedStatus(header.status) && row.failedCount < UINT16_MAX) ++row.failedCount;
         }
         // Retain the existing bounded counter-only boot hint policy exactly.
         if (recent && recentCapacity && header.hasMessageId) {
@@ -785,7 +791,7 @@ void MessageTransactions::pending(const Request& request, uint8_t* bytes, size_t
             if (key.incoming || (request.key.counter && !less(request.key, key))) continue;
             StoredRecordHeader header; const auto error = load(key, document, header);
             if (error != Error::None) { result.error = error; return; }
-            if (header.status != 1 && header.status != 2) continue;
+            if (!messaging::pendingStatus(header.status)) continue;
             if (found) result.more = true;
             if (found && !less(key, result.key)) continue;
             found = true; selected = header; result.key = key;
@@ -852,7 +858,8 @@ void MessageTransactions::trim(const Request& request, Result& result) {
                 if (after.counter && !historyLess(after, entry)) continue;
                 StoredRecordHeader header; const auto error = load(key, document, header);
                 if (error != Error::None) { result.error = error; continue; }
-                if (!header.incoming && header.status != 4 && header.status != 5) continue;
+                if (!header.incoming && header.status != 4 && header.status != 5 &&
+                    header.status != 9 && header.status != 10) continue;
                 size_t at = 0;
                 while (at < selected && historyLess({oldest[at].counter, oldest[at].incoming}, entry)) ++at;
                 if (at == 8) continue;
@@ -927,7 +934,8 @@ void MessageTransactions::execute(const Request& request, uint8_t* bytes, size_t
     switch (request.operation) {
     case Operation::CreateIncoming: case Operation::CreateOutgoing:
         if (!Budget::validBody(request.titleLength, request.contentLength) ||
-            length != size_t(request.titleLength) + request.contentLength || request.status > 6 ||
+            length != size_t(request.titleLength) + request.contentLength ||
+            !messaging::validDelivery(request.status, request.deliveryPolicy, request.key.incoming) ||
             !std::isfinite(request.timestamp) ||
             request.key.incoming != (request.operation == Operation::CreateIncoming) ||
             memcmp(request.key.peer, request.key.incoming ? request.source : request.destination, 16)) {
@@ -935,7 +943,7 @@ void MessageTransactions::execute(const Request& request, uint8_t* bytes, size_t
         }
         create(request, bytes, result); break;
     case Operation::UpdateStatus:
-        if (request.status > 6) { result.error = Error::InvalidRecord; return; }
+        if (request.status > messaging::LastStatus) { result.error = Error::InvalidRecord; return; }
         update(request, result); break;
     case Operation::MarkRead: markRead(request, result); break;
     case Operation::DeleteConversation: erase(request, result); break;

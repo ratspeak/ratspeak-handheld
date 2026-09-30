@@ -301,7 +301,7 @@ template<size_t N> bool ConversationWindow<N>::detailResult(const storage::Resul
         result.key.incoming != bool(selected.incoming) || !samePeer(value.peer, selected.cursor.peer) ||
         value.timestamp != selected.cursor.timestamp || value.previewLength >= sizeof(value.preview) ||
         value.preview[value.previewLength] || std::memchr(value.preview, 0, value.previewLength) ||
-        value.error != storage::Error::None || value.status > uint8_t(LXMFStatus::UNCONFIRMED) ||
+        value.error != storage::Error::None || value.status > handheld::messaging::LastStatus ||
         value.durableStatus != value.status || value.unreadCount > value.totalCount ||
         (value.flags & ~(Row::LastIncoming | Row::HasOutgoing | Row::PreviewTruncated)) ||
         bool(value.flags & Row::LastIncoming) != bool(selected.incoming) ||
@@ -332,8 +332,8 @@ template<size_t N> bool ConversationWindow<N>::statusResult(const storage::Resul
         result.key.counter != current.lastOutgoingCounter || result.revision != c.sampledStatusRevision ||
         result.revision != c.observedStatusRevision) return false;
     StatusProjection projection; std::memcpy(&projection, bytes, sizeof(projection));
-    if (projection.counter != result.key.counter || projection.desired > uint8_t(LXMFStatus::UNCONFIRMED) ||
-        projection.durable > uint8_t(LXMFStatus::UNCONFIRMED) || projection.error > storage::Error::Internal ||
+    if (projection.counter != result.key.counter || projection.desired > handheld::messaging::LastStatus ||
+        projection.durable > handheld::messaging::LastStatus || projection.error > storage::Error::Internal ||
         (projection.flags & ~(StatusProjection::Available | StatusProjection::Pending | StatusProjection::TxSuppressed))) return false;
     if (!(projection.flags & StatusProjection::Available)) {
         unavailableStatus(projection.error == storage::Error::None ? storage::Error::Unavailable : projection.error);

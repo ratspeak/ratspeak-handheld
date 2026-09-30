@@ -11,6 +11,11 @@ inline const char* messageStatusLabel(LXMFStatus status) {
         case LXMFStatus::DELIVERED: return "delivered";
         case LXMFStatus::FAILED: return "failed";
         case LXMFStatus::UNCONFIRMED: return "unconfirmed";
+        case LXMFStatus::PROP_QUEUED: return "prop queued";
+        case LXMFStatus::PROP_SENDING: return "prop sending";
+        case LXMFStatus::PROPAGATED: return "propagated";
+        case LXMFStatus::PROP_UNAVAILABLE: return "prop unavailable";
+        case LXMFStatus::PROP_UNCONFIRMED: return "prop unconfirmed";
         default: return "draft";
     }
 }

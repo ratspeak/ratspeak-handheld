@@ -47,7 +47,9 @@ inline bool recordHeader(JsonVariantConst document, StoredRecordHeader& header) 
         !decodeHex(dst.c_str(), dst.size(), header.destination, 16)) return false;
     if (!document["store_revision"].isNull() && !document["store_revision"].is<uint32_t>()) return false;
     if (!document["status"].isNull() && (!document["status"].is<uint8_t>() ||
-        document["status"].as<uint8_t>() > 6)) return false;
+        document["status"].as<uint8_t>() > messaging::LastStatus)) return false;
+    if (!document["delivery_policy"].isNull() &&
+        (!document["delivery_policy"].is<uint8_t>() || document["delivery_policy"].as<uint8_t>() > 2)) return false;
     if (!document["incoming"].isNull() && !document["incoming"].is<bool>()) return false;
     if (!document["read"].isNull() && !document["read"].is<bool>()) return false;
     header.revision = document["store_revision"] | uint32_t(0);
@@ -55,6 +57,8 @@ inline bool recordHeader(JsonVariantConst document, StoredRecordHeader& header) 
     header.timestamp = document["ts"] | 0.0;
     if (!std::isfinite(header.timestamp)) return false;
     header.incoming = document["incoming"] | false;
+    header.deliveryPolicy = messaging::DeliveryPolicy(document["delivery_policy"] | uint8_t(0));
+    if (!messaging::validDelivery(header.status, header.deliveryPolicy, header.incoming)) return false;
     header.read = document["read"] | false;
     header.titleLength = document["title"].as<JsonString>().size();
     header.contentLength = document["content"].as<JsonString>().size();
@@ -353,6 +357,7 @@ inline bool createRecord(JsonDocument& document, const Request& request, const u
     document["incoming"] = request.operation == Operation::CreateIncoming;
     document["read"] = request.operation == Operation::CreateOutgoing || request.read;
     document["status"] = request.status;
+    document["delivery_policy"] = uint8_t(request.deliveryPolicy);
     document["store_revision"] = uint32_t(1);
     if (request.hasMessageId) {
         encodeHex(request.messageId, 32, hash);

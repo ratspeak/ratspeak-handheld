@@ -656,7 +656,7 @@ void DeviceService::finishHistory(const storage::Result& stored) {
         if (stored.outcome == storage::Outcome::Committed && stored.error == storage::Error::None &&
             stored.length == sizeof(header) && _messages.readPayload(_queryTicket, &header, sizeof(header)) &&
             header.counter == request.argument && !header.incoming &&
-            !memcmp(header.destination, stored.key.peer, 16) && header.status <= uint8_t(LXMFStatus::UNCONFIRMED)) {
+            !memcmp(header.destination, stored.key.peer, 16) && header.status <= handheld::messaging::LastStatus) {
             row.desired = row.durable = header.status;
             row.flags = handheld::history::HistoryWindow::StatusProjection::Available;
         } else if (row.error == storage::Error::None) row.error = storage::Error::InvalidRecord;

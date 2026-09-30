@@ -32,7 +32,7 @@ void pollStorageWindow(Window& window, LXMFManager& manager, ProtocolBackend* ba
                 } else {
                     StoredRecordHeader header; memcpy(&header, bytes, sizeof(header));
                     if (header.counter != result.key.counter || memcmp(header.destination, result.key.peer, 16) ||
-                        header.revision != result.revision || header.status > uint8_t(LXMFStatus::UNCONFIRMED)) {
+                        header.revision != result.revision || header.status > handheld::messaging::LastStatus) {
                         result.outcome = Outcome::Failed; result.error = Error::InvalidRecord; result.length = 0;
                     } else {
                         projection.counter = header.counter; projection.desired = projection.durable = header.status;

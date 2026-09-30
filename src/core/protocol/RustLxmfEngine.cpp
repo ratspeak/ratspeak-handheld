@@ -335,6 +335,14 @@ void RustLxmfEngine::settleStorage(Ticket ticket) {
                     value->counter = result.key.counter; value->revision = result.revision;
                     value->timestamp = header.timestamp; value->durable = LXMFStatus(header.status);
                     value->desired = LXMFStatus::QUEUED; value->phase = Phase::Ready; value->error = Error::None;
+                    // Relay records require their dedicated preparation owner.
+                    // Never feed them to direct recovery, including AUTO after fallback.
+                    if (header.deliveryPolicy == handheld::messaging::DeliveryPolicy::Always ||
+                        handheld::messaging::relayStatus(header.status)) {
+                        value->desired = value->durable;
+                        value->flags |= Suppressed; value->phase = Phase::Settled;
+                        ++_statusRevision; return;
+                    }
                     if (!sendableBody(header.titleLength, header.contentLength)) {
                         value->error = Error::InvalidRecord; value->phase = Phase::Settled;
                         value->flags |= Suppressed | BlockedRecord;
@@ -349,6 +357,10 @@ void RustLxmfEngine::settleStorage(Ticket ticket) {
         } else if (result.outcome != Outcome::Committed) {
             releaseBody(ticket); value->error = result.error;
             value->phase = Phase::Ready; value->nextAttempt = _d.clock->nowMs() + TX_RETRY_MS;
+        } else if (validHeader && (header.deliveryPolicy == handheld::messaging::DeliveryPolicy::Always ||
+                                  handheld::messaging::relayStatus(header.status))) {
+            releaseBody(ticket); value->flags |= Suppressed; value->phase = Phase::Settled;
+            value->desired = value->durable = LXMFStatus(header.status); value->revision = header.revision;
         } else if (foreignIdentity) {
             // A record replaced/restored from another identity is preserved.
             // It cannot be transmitted or rewritten as this active author.

@@ -36,7 +36,9 @@ MessageStore::Submission MessageStore::requestSave(const LXMFMessage& message,
     if (!Budget::validBody(message.title.size(), message.content.size())) return {{}, Rejection::TooLarge};
     if (message.sourceHash.size() != 16 || message.destHash.size() != 16 ||
         (message.messageId.size() != 0 && message.messageId.size() != 32) ||
-        !std::isfinite(message.timestamp) || uint8_t(message.status) > 6) return {{}, Rejection::Invalid};
+        !std::isfinite(message.timestamp) ||
+        !handheld::messaging::validDelivery(uint8_t(message.status), message.deliveryPolicy, message.incoming))
+        return {{}, Rejection::Invalid};
     Request request;
     request.operation = message.incoming ? Operation::CreateIncoming : Operation::CreateOutgoing;
     request.key.incoming = message.incoming;
@@ -45,6 +47,7 @@ MessageStore::Submission MessageStore::requestSave(const LXMFMessage& message,
     request.hasMessageId = message.messageId.size() == 32;
     if (request.hasMessageId) memcpy(request.messageId, message.messageId.data(), 32);
     request.timestamp = message.timestamp; request.status = uint8_t(message.status); request.read = message.read;
+    request.deliveryPolicy = message.deliveryPolicy;
     request.titleLength = uint16_t(message.title.size()); request.contentLength = uint16_t(message.content.size());
     request.identityGeneration = identityGeneration; request.peerGeneration = peerGeneration;
     return requestSave(request, message.title.data(), message.content.data());
@@ -55,7 +58,8 @@ MessageStore::Submission MessageStore::requestSave(const Request& request, const
     if ((request.operation != Operation::CreateIncoming && request.operation != Operation::CreateOutgoing) ||
         request.key.counter || request.key.incoming != (request.operation == Operation::CreateIncoming) ||
         memcmp(request.key.peer, request.key.incoming ? request.source : request.destination, 16) ||
-        !std::isfinite(request.timestamp) || request.status > 6 ||
+        !std::isfinite(request.timestamp) ||
+        !handheld::messaging::validDelivery(request.status, request.deliveryPolicy, request.key.incoming) ||
         (request.titleLength && !title) || (request.contentLength && !content)) return {{}, Rejection::Invalid};
     const WriteQueue::PayloadPart parts[] = {{title, request.titleLength}, {content, request.contentLength}};
     return submit(request, parts, 2);
@@ -63,7 +67,7 @@ MessageStore::Submission MessageStore::requestSave(const Request& request, const
 
 MessageStore::Submission MessageStore::requestStatus(const RecordKey& key, LXMFStatus status,
                                                      uint32_t identityGeneration, uint32_t peerGeneration) {
-    if (!key.counter || uint8_t(status) > 6) return {{}, Rejection::Invalid};
+    if (!key.counter || uint8_t(status) > handheld::messaging::LastStatus) return {{}, Rejection::Invalid};
     Request request; request.operation = Operation::UpdateStatus; request.key = key; request.status = uint8_t(status);
     request.identityGeneration = identityGeneration; request.peerGeneration = peerGeneration;
     return submit(request);

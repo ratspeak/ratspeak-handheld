@@ -335,8 +335,8 @@ bool HistoryWindow::statusResult(const storage::Result& result, const uint8_t* b
         result.key.incoming || result.key.counter != span(c.buildIndex)->counter ||
         result.revision != c.sampledStatusRevision || result.revision != c.observedStatusRevision) return false;
     StatusProjection projection; memcpy(&projection, bytes, sizeof(projection));
-    if (projection.counter != result.key.counter || projection.desired > uint8_t(LXMFStatus::UNCONFIRMED) ||
-        projection.durable > uint8_t(LXMFStatus::UNCONFIRMED) || projection.error > storage::Error::Internal ||
+    if (projection.counter != result.key.counter || projection.desired > handheld::messaging::LastStatus ||
+        projection.durable > handheld::messaging::LastStatus || projection.error > storage::Error::Internal ||
         (projection.flags & ~(StatusProjection::Available | StatusProjection::Pending | StatusProjection::TxSuppressed))) return false;
     if (!(projection.flags & StatusProjection::Available)) {
         statusUnavailable({projection.counter, false}, projection.error == storage::Error::None ? storage::Error::Unavailable : projection.error);
@@ -411,7 +411,7 @@ bool HistoryWindow::recordResult(const storage::Result& result, const uint8_t* b
     const auto offset = c.phase == Phase::Full ? c.fullOffset : 0;
     const uint64_t total = uint64_t(header.titleLength) + header.contentLength;
     const size_t payload = length - sizeof(header);
-    if (total > storage::Budget::MaxStoredFile || header.status > uint8_t(LXMFStatus::UNCONFIRMED) ||
+    if (total > storage::Budget::MaxStoredFile || header.status > handheld::messaging::LastStatus ||
         !std::isfinite(header.timestamp) || header.counter != key.counter || header.incoming != key.incoming ||
         memcmp(header.incoming ? header.source : header.destination, c.peer, 16) ||
         memcmp(result.key.peer, c.peer, 16) || !equal({result.key.counter, result.key.incoming}, key) ||
@@ -478,7 +478,7 @@ void HistoryWindow::unavailableRecord(storage::Error error) {
 }
 bool HistoryWindow::status(storage::HistoryEntry key, uint8_t desired, uint8_t durable,
                            bool pending, storage::Error error, bool suppressed) {
-    if (desired > uint8_t(LXMFStatus::UNCONFIRMED) || durable > uint8_t(LXMFStatus::UNCONFIRMED)) return false;
+    if (desired > handheld::messaging::LastStatus || durable > handheld::messaging::LastStatus) return false;
     bool changed = false;
     for (size_t i = 0; i < spanCount(); ++i) {
         auto& row = _frames[control().active].spans[i];

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <type_traits>
 #include "AlignedStorageMemory.h"
+#include "reticulum/LXMFStatus.h"
 
 namespace handheld::storage {
 
@@ -70,6 +71,7 @@ struct Request {
     uint16_t readCapacity = 0;
     Operation operation = Operation::CreateIncoming;
     uint8_t status = 0; // persisted LXMFStatus numeric value
+    messaging::DeliveryPolicy deliveryPolicy = messaging::DeliveryPolicy::DirectOnly;
     bool read = false;
     bool hasMessageId = false;
     HistoryDirection historyDirection = HistoryDirection::Before;
@@ -128,6 +130,7 @@ struct StoredRecordHeader {
     double timestamp = 0;
     uint32_t counter = 0, revision = 0, titleLength = 0, contentLength = 0;
     uint8_t status = 0;
+    messaging::DeliveryPolicy deliveryPolicy = messaging::DeliveryPolicy::DirectOnly;
     bool incoming = false, read = false, hasMessageId = false;
 };
 static_assert(sizeof(StoredRecordHeader) <= 104, "Stored record response metadata grew");

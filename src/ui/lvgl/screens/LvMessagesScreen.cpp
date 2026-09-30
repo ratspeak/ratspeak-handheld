@@ -32,6 +32,11 @@ const char* statusText(uint8_t status) {
         case LXMFStatus::DELIVERED: return "DELIVERED";
         case LXMFStatus::FAILED: return "FAILED";
         case LXMFStatus::UNCONFIRMED: return "UNCONFIRMED";
+        case LXMFStatus::PROP_QUEUED: return "PROP QUEUED";
+        case LXMFStatus::PROP_SENDING: return "PROP SENDING";
+        case LXMFStatus::PROPAGATED: return "PROPAGATED";
+        case LXMFStatus::PROP_UNAVAILABLE: return "PROP UNAVAILABLE";
+        case LXMFStatus::PROP_UNCONFIRMED: return "PROP UNCONFIRMED";
         default: return "";
     }
 }

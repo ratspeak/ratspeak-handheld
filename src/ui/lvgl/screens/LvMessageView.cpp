@@ -22,12 +22,12 @@ constexpr const char* kComposerPlaceholder = "Message...";
 #endif
 
 bool isPendingStatus(LXMFStatus status) {
-    return status == LXMFStatus::QUEUED || status == LXMFStatus::SENDING;
+    return handheld::messaging::pendingStatus(uint8_t(status));
 }
 
 uint32_t bubbleBorderColor(LXMFStatus status) {
-    if (status == LXMFStatus::FAILED) return Theme::ERROR_CLR;
-    if (status == LXMFStatus::UNCONFIRMED) return Theme::WARNING_CLR;
+    if (handheld::messaging::failedStatus(uint8_t(status))) return Theme::ERROR_CLR;
+    if (status == LXMFStatus::UNCONFIRMED || status == LXMFStatus::PROP_UNCONFIRMED) return Theme::WARNING_CLR;
     if (isPendingStatus(status)) return Theme::WARNING_CLR;
     if (status == LXMFStatus::DELIVERED) return Theme::PRIMARY_MUTED;
     return Theme::BORDER;
@@ -675,11 +675,14 @@ void LvMessageView::appendMessage(size_t index, const Span& span, const char* te
         switch (status) {
             case LXMFStatus::QUEUED:
             case LXMFStatus::SENDING:
+            case LXMFStatus::PROP_QUEUED:
+            case LXMFStatus::PROP_SENDING:
                 textColor = Theme::TEXT_SECONDARY; break;
             case LXMFStatus::SENT:
             case LXMFStatus::DELIVERED:
                 textColor = Theme::TEXT_PRIMARY; break;
             case LXMFStatus::FAILED:
+            case LXMFStatus::PROP_UNAVAILABLE:
                 textColor = Theme::ERROR_CLR; break;
             default:
                 textColor = Theme::TEXT_PRIMARY; break;
@@ -801,15 +804,19 @@ void LvMessageView::applyStatusGlyph(lv_obj_t* lbl, const Span& span) {
             color = Theme::TEXT_MUTED;
             break;
         case LXMFStatus::FAILED:
+        case LXMFStatus::PROP_UNAVAILABLE:
             color = Theme::ERROR_CLR;
             break;
         case LXMFStatus::UNCONFIRMED:
+        case LXMFStatus::PROP_UNCONFIRMED:
             color = Theme::WARNING_CLR;
             break;
         case LXMFStatus::SENDING:
+        case LXMFStatus::PROP_SENDING:
             color = Theme::WARNING_CLR;
             break;
         case LXMFStatus::QUEUED:
+        case LXMFStatus::PROP_QUEUED:
             color = Theme::WARNING_CLR;
             break;
         default:

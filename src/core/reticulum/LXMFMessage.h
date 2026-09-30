@@ -6,11 +6,11 @@
 
 #include "util/Bytes.h"
 #include "storage/StorageContract.h"
+#include "LXMFStatus.h"
 
 // Application and storage record; wire encoding lives in the Rust protocol library.
 // Preserve field meanings and the on-disk JSON schema when changing this type.
 // Append new values: existing numeric statuses are persisted on disk.
-enum class LXMFStatus : uint8_t { DRAFT = 0, QUEUED, SENDING, SENT, DELIVERED, FAILED, UNCONFIRMED };
 
 struct LXMFMessage {
     rs::Bytes sourceHash;
@@ -21,6 +21,7 @@ struct LXMFMessage {
     rs::Bytes signature;
 
     LXMFStatus status = LXMFStatus::DRAFT;
+    handheld::messaging::DeliveryPolicy deliveryPolicy = handheld::messaging::DeliveryPolicy::DirectOnly;
     bool incoming = false;
     bool read = false;
     int retries = 0;
@@ -45,6 +46,11 @@ struct LXMFMessage {
             case LXMFStatus::DELIVERED: return "DELIVERED";
             case LXMFStatus::FAILED: return "FAILED";
             case LXMFStatus::UNCONFIRMED: return "UNCONFIRMED";
+            case LXMFStatus::PROP_QUEUED: return "PROP QUEUED";
+            case LXMFStatus::PROP_SENDING: return "PROP SENDING";
+            case LXMFStatus::PROPAGATED: return "PROPAGATED";
+            case LXMFStatus::PROP_UNAVAILABLE: return "PROP UNAVAILABLE";
+            case LXMFStatus::PROP_UNCONFIRMED: return "PROP UNCONFIRMED";
         }
         return "?";
     }
