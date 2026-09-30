@@ -755,6 +755,11 @@ rs_handheld_status_t rs_handheld_rns_lxmf_parse_link_view(const rs_handheld_rns_
  * active identity. implicit != 0 -> signature(64); else packet_hash(32) || signature(64). Writes the
  * proof to out[out_cap] (>= 64, or >= 96 for explicit) and *out_len. RS_HANDHELD_ERR_NOT_READY if no
  * identity is loaded; RS_HANDHELD_ERR_CAPACITY if out is too small. */
+/* Explicit Link packet proof. seed is THIS initiator Link's retained Ed25519
+ * seed. Owner checks role/state and wipes the seed on teardown. */
+rs_handheld_status_t rs_handheld_rns_link_packet_proof(const uint8_t seed[32],
+    const uint8_t packet_hash[32], uint8_t *out, size_t out_cap, size_t *out_len);
+
 rs_handheld_status_t rs_handheld_rns_proof_build(const rs_handheld_rns_t *ctx, const uint8_t packet_hash[32],
                                        int32_t implicit, uint8_t *out, size_t out_cap,
                                        size_t *out_len);

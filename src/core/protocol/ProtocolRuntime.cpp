@@ -538,7 +538,8 @@ void ProtocolRuntime::onLocalFrame(const rs_handheld_local_frame_t& f, uint8_t i
         case RustWire::PT_PROOF:
             // LRPROOF (handshake) and RESOURCE_PRF (resource delivery proof, Packet.py:196)
             // ride PROOF packets addressed to the link; bare proofs are LXMF delivery receipts.
-            if (f.context == RustWire::CTX_LRPROOF || f.context == RustWire::CTX_RESOURCE_PRF)
+            if (f.context == RustWire::CTX_LRPROOF || f.context == RustWire::CTX_RESOURCE_PRF ||
+                f.context == RustWire::CTX_LINKPROOF)
                 _links.onLocalFrame(f, ifaceId);
             else
                 _lxmf.onProofFrame(f);

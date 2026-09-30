@@ -51,9 +51,9 @@ bool unpackF64(const uint8_t* data, size_t len, double* out) {
 
 void RustLinkManager::begin(const Deps& deps) { _d = deps; }
 
-RustLinkManager::Link* RustLinkManager::findByDest(const uint8_t dest[16]) {
+RustLinkManager::Link* RustLinkManager::findByDest(const uint8_t dest[16], Owner owner) {
     for (auto& l : _links) {
-        if (l.state != State::Free && l.state != State::Closed &&
+        if (l.owner == owner && l.state != State::Free && l.state != State::Closed &&
             memcmp(l.peerDest, dest, 16) == 0)
             return &l;
     }
@@ -95,17 +95,23 @@ RustLinkManager::Link* RustLinkManager::allocLink() {
 }
 
 void RustLinkManager::closeLink(Link& l) {
-    if (_d.lxmf) _d.lxmf->incoming().dropLink(uint8_t(&l - _links), _generations[&l - _links]);
+    const auto oldHandle = handle(l);
+    const bool notifyRrc = l.owner == Owner::Rrc && l.state != State::Free && l.state != State::Closed;
+    if (l.owner == Owner::Delivery && _d.lxmf) _d.lxmf->incoming().dropLink(uint8_t(&l - _links), _generations[&l - _links]);
     if (l.state != State::Free && l.state != State::Closed) {
         rs_handheld_rns_link_unregister(_d.ctx, l.linkId);
     }
     secureZero(l.sessionKey, sizeof(l.sessionKey));
     secureZero(l.ephPriv, sizeof(l.ephPriv));
+    secureZero(l.signingSeed, sizeof(l.signingSeed));
+    l.identified = false;
     l.haveKey = false;
     l.keepalivePending = false;
     l.keepaliveInterfaceGeneration = 0;
     l.state = State::Closed;
     if (_request.sink && _request.slot == size_t(&l - _links)) failRequest(RequestError::LinkClosed);
+    if (_rrcTx.link.slot == oldHandle.slot && _rrcTx.link.generation == oldHandle.generation) _rrcTx = {};
+    if (notifyRrc && _rrcSink) _rrcSink->onRrcClosed(oldHandle);
 }
 
 void RustLinkManager::failSetup(Link& l) {
@@ -119,12 +125,14 @@ void RustLinkManager::failSetup(Link& l) {
     failedRoute.hops = l.hops;
     if (l.hasNextHop) memcpy(failedRoute.next_hop, l.nextHop, 16);
     closeLink(l);
-    if (_d.lxmf) _d.lxmf->onLinkSetupFailure(l.peerDest, failedRoute);
+    if (l.owner == Owner::Delivery && _d.lxmf) _d.lxmf->onLinkSetupFailure(l.peerDest, failedRoute);
 }
 
 void RustLinkManager::endAll() {
     // Runtime teardown retires consumer ownership without a reentrant restart.
     _request = {};
+    _rrcTx = {};
+    _rrcSink = nullptr;
     for (auto& l : _links) closeLink(l);
 }
 
@@ -175,14 +183,14 @@ bool RustLinkManager::sendLinkFrame(Link& l, uint8_t context, const uint8_t* pay
 
 bool RustLinkManager::linkEstablishing(const uint8_t dest[16]) const {
     for (const auto& link : _links)
-        if (link.initiator && link.state == State::InitRequested && !memcmp(link.peerDest, dest, 16)) return true;
+        if (link.owner == Owner::Delivery && link.initiator && link.state == State::InitRequested && !memcmp(link.peerDest, dest, 16)) return true;
     return false;
 }
 
 bool RustLinkManager::linkOnRoute(const uint8_t dest[16], const rs_handheld_route_t& route) const {
     if (route.kind != RS_HANDHELD_ROUTE_DIRECT) return false;
     for (const auto& link : _links)
-        if (link.initiator && link.state == State::Active && link.haveKey && !memcmp(link.peerDest, dest, 16))
+        if (link.owner == Owner::Delivery && link.initiator && link.state == State::Active && link.haveKey && !memcmp(link.peerDest, dest, 16))
             return link.iface == route.interface_id && link.hasNextHop == (route.header_type == 1) &&
                 (!link.hasNextHop || !memcmp(link.nextHop, route.next_hop, 16));
     return false;
@@ -190,8 +198,13 @@ bool RustLinkManager::linkOnRoute(const uint8_t dest[16], const rs_handheld_rout
 
 bool RustLinkManager::ensureLink(const uint8_t dest[16], const uint8_t pubkey[64],
                                  const rs_handheld_route_t& route) {
+    return ensureOwnedLink(dest, pubkey, route, Owner::Delivery);
+}
+
+bool RustLinkManager::ensureOwnedLink(const uint8_t dest[16], const uint8_t pubkey[64],
+                                     const rs_handheld_route_t& route, Owner owner) {
     if (route.kind != RS_HANDHELD_ROUTE_DIRECT) return false;
-    Link* l = findByDest(dest);
+    Link* l = findByDest(dest, owner);
     if (l && l->initiator && (l->iface != route.interface_id ||
             l->hasNextHop != (route.header_type == 1) ||
             (l->hasNextHop && memcmp(l->nextHop, route.next_hop, 16)))) {
@@ -222,19 +235,28 @@ bool RustLinkManager::ensureLink(const uint8_t dest[16], const uint8_t pubkey[64
     size_t reqLen = 0;
     if (rs_handheld_rns_link_request_build(x25519, ed25519, 1, 500, req, sizeof(req), &reqLen) !=
         RS_HANDHELD_OK) {
+        secureZero(x25519, sizeof x25519);
+        secureZero(ed25519, sizeof ed25519);
         return false;
     }
     uint8_t linkId[16];
-    if (rs_handheld_rns_link_id(dest, req, reqLen, linkId) != RS_HANDHELD_OK) return false;
+    if (rs_handheld_rns_link_id(dest, req, reqLen, linkId) != RS_HANDHELD_OK) {
+        secureZero(x25519, sizeof x25519);
+        secureZero(ed25519, sizeof ed25519);
+        return false;
+    }
 
     *l = Link{};
+    l->owner = owner;
     l->state = State::InitRequested;
     l->initiator = true;
     memcpy(l->peerDest, dest, 16);
     memcpy(l->linkId, linkId, 16);
     memcpy(l->pubkey, pubkey, 64);
     memcpy(l->ephPriv, x25519, 32);
+    memcpy(l->signingSeed, ed25519, 32);
     l->iface = route.interface_id;
+    l->interfaceGeneration = _d.pump ? _d.pump->interfaceGeneration(l->iface) : 0;
     l->hops = route.hops;
     l->hasNextHop = route.header_type == 1;
     if (l->hasNextHop) memcpy(l->nextHop, route.next_hop, 16);
@@ -464,14 +486,36 @@ void RustLinkManager::onLinkData(Link& l, const rs_handheld_local_frame_t& f) {
     if (f.context == RustWire::CTX_RESOURCE_ADV || f.context == RustWire::CTX_RESOURCE_REQ ||
         f.context == RustWire::CTX_RESOURCE_ICL || f.context == RustWire::CTX_RESOURCE_RCL ||
         f.context == RustWire::CTX_RESOURCE_PRF || f.context == RustWire::CTX_RESOURCE) {
+        if (l.owner == Owner::Rrc) {
+            // Resource capability is false. Reject an authenticated ADV without
+            // borrowing or replacing the shared LXMF/PN Resource workspace.
+            if (f.context == RustWire::CTX_RESOURCE_ADV) {
+                uint8_t adv[RS_HANDHELD_LINK_MDU], hash[32], raw[128]; size_t n = 0, rn = 0;
+                if (rs_handheld_rns_link_decrypt(l.sessionKey, f.payload, f.payload_len,
+                    adv, sizeof adv, &n) == RS_HANDHELD_OK &&
+                    rs_handheld_rns_resource_advertisement_hash(adv, n, hash) == RS_HANDHELD_OK &&
+                    buildLinkPacket(l, RustWire::CTX_RESOURCE_RCL, hash, sizeof hash, raw, sizeof raw, rn) && _d.pump)
+                    _d.pump->sendTo(l.iface, raw, rn);
+            }
+            return;
+        }
         if (_d.resources) _d.resources->onLinkFrame(l.peerDest, l.linkId, l.sessionKey, l.iface, f);
         return;
     }
-    if (f.context == RustWire::CTX_RESPONSE && l.initiator && l.state == State::Active) {
+    if (l.owner == Owner::Delivery && f.context == RustWire::CTX_RESPONSE && l.initiator && l.state == State::Active) {
         uint8_t pt[RS_HANDHELD_LINK_MDU]; size_t length = 0;
         if (rs_handheld_rns_link_decrypt(l.sessionKey, f.payload, f.payload_len,
                 pt, sizeof pt, &length) == RS_HANDHELD_OK)
             completeResponse(l.iface, l.linkId, pt, length);
+        return;
+    }
+    if (l.owner == Owner::Rrc) {
+        if (f.context == RustWire::CTX_NONE && l.state == State::Active && l.identified && _rrcSink) {
+            uint8_t plaintext[RS_HANDHELD_LINK_MDU]; size_t length = 0;
+            if (rs_handheld_rns_link_decrypt(l.sessionKey, f.payload, f.payload_len,
+                plaintext, sizeof plaintext, &length) == RS_HANDHELD_OK)
+                _rrcSink->onRrcPacket(handle(l), plaintext, length, f.packet_hash);
+        }
         return;
     }
     if (f.context == RustWire::CTX_NONE) {
@@ -510,20 +554,23 @@ void RustLinkManager::onLocalFrame(const rs_handheld_local_frame_t& f, uint8_t i
     // LRPROOF (PROOF + Lrproof) matches an initiator link by link_id (the frame dest).
     if (f.packet_type == RustWire::PT_PROOF && f.context == RustWire::CTX_LRPROOF) {
         Link* l = findByLinkId(f.destination_hash);
-        if (l && l->iface == ifaceId && l->initiator && l->state == State::InitRequested)
+        if (l && l->iface == ifaceId && (l->owner != Owner::Rrc ||
+            (_d.pump && _d.pump->interfaceGeneration(ifaceId) == l->interfaceGeneration)) && l->initiator && l->state == State::InitRequested)
             onLrProof(*l, f);
         return;
     }
     // Resource delivery proof rides a PROOF packet (Python Packet.py:196) addressed to the link.
     if (f.packet_type == RustWire::PT_PROOF && f.context == RustWire::CTX_RESOURCE_PRF) {
         Link* l = findByLinkId(f.destination_hash);
-        if (l && l->iface == ifaceId) onLinkData(*l, f);
+        if (l && l->iface == ifaceId && (l->owner != Owner::Rrc ||
+            (_d.pump && _d.pump->interfaceGeneration(ifaceId) == l->interfaceGeneration))) onLinkData(*l, f);
         return;
     }
     // Link DATA (LRRTT / keepalive / resource / link-LXMF) routed by link_id.
     if (f.packet_type == RustWire::PT_DATA) {
         Link* l = findByLinkId(f.destination_hash);
-        if (l && l->iface == ifaceId) onLinkData(*l, f);
+        if (l && l->iface == ifaceId && (l->owner != Owner::Rrc ||
+            (_d.pump && _d.pump->interfaceGeneration(ifaceId) == l->interfaceGeneration))) onLinkData(*l, f);
     }
 }
 
@@ -544,7 +591,14 @@ bool RustLinkManager::buildLinkPacket(const uint8_t dest[16], uint8_t context,
     const uint8_t* plaintext, size_t len, uint8_t* raw, size_t capacity, size_t& rawLength) {
     rawLength = 0;
     Link* l = findByDest(dest);
-    if (!l || l->state != State::Active || !l->haveKey) return false;
+    return l && buildLinkPacket(*l, context, plaintext, len, raw, capacity, rawLength);
+}
+
+bool RustLinkManager::buildLinkPacket(Link& link, uint8_t context,
+    const uint8_t* plaintext, size_t len, uint8_t* raw, size_t capacity, size_t& rawLength) {
+    rawLength = 0;
+    Link* l = &link;
+    if (l->state != State::Active || !l->haveKey) return false;
     uint8_t iv[16];
     RustEntropy::fill(iv, sizeof(iv));
     uint8_t enc[RS_HANDHELD_LINK_MDU + 64];
@@ -660,7 +714,7 @@ void RustLinkManager::failResponse(uint8_t iface, const uint8_t linkId[16], cons
 
 const uint8_t* RustLinkManager::activeLinkKey(const uint8_t dest[16]) const {
     for (const auto& l : _links) {
-        if (l.state == State::Active && l.haveKey && memcmp(l.peerDest, dest, 16) == 0)
+        if (l.owner == Owner::Delivery && l.state == State::Active && l.haveKey && memcmp(l.peerDest, dest, 16) == 0)
             return l.sessionKey;
     }
     return nullptr;
@@ -668,14 +722,14 @@ const uint8_t* RustLinkManager::activeLinkKey(const uint8_t dest[16]) const {
 
 const uint8_t* RustLinkManager::activeLinkId(const uint8_t dest[16]) const {
     for (const auto& l : _links) {
-        if (l.state == State::Active && memcmp(l.peerDest, dest, 16) == 0) return l.linkId;
+        if (l.owner == Owner::Delivery && l.state == State::Active && memcmp(l.peerDest, dest, 16) == 0) return l.linkId;
     }
     return nullptr;
 }
 
 uint8_t RustLinkManager::activeLinkIface(const uint8_t dest[16]) const {
     for (const auto& l : _links) {
-        if (l.state == State::Active && memcmp(l.peerDest, dest, 16) == 0) return l.iface;
+        if (l.owner == Owner::Delivery && l.state == State::Active && memcmp(l.peerDest, dest, 16) == 0) return l.iface;
     }
     return UINT8_MAX;
 }
@@ -693,8 +747,13 @@ size_t RustLinkManager::activeCount() const {
 
 void RustLinkManager::loop() {
     if (_request.sink && !requestLive()) failRequest(RequestError::Timeout);
+    if (_rrcTx.sequence && !rrcTxLive()) rrcReceipt({_rrcTx.sequence, RrcReceiptSlot}, handheld::TxReceiptEvent::Dropped);
     unsigned long now = millis();
     for (auto& l : _links) {
+        if (l.owner == Owner::Rrc && l.state != State::Free && l.state != State::Closed &&
+            (!_d.pump || !l.interfaceGeneration || _d.pump->interfaceGeneration(l.iface) != l.interfaceGeneration)) {
+            closeLink(l); continue;
+        }
         if (l.state == State::Active || l.state == State::Stale || l.state == State::RespPending)
             retryKeepalive(l);
         if (l.state == State::Active) {
@@ -744,4 +803,112 @@ void RustLinkManager::loop() {
             }
         }
     }
+}
+
+const RustLinkManager::Link* RustLinkManager::rrcLink(Handle h) const {
+    if (!h.valid() || _generations[h.slot] != h.generation) return nullptr;
+    const auto& l = _links[h.slot];
+    if (l.owner != Owner::Rrc || !l.initiator || l.state == State::Closed || l.state == State::Free ||
+        !_d.pump || !l.interfaceGeneration || _d.pump->interfaceGeneration(l.iface) != l.interfaceGeneration)
+        return nullptr;
+    return &l;
+}
+
+RustLinkManager::Link* RustLinkManager::rrcLink(Handle h) {
+    return const_cast<Link*>(static_cast<const RustLinkManager*>(this)->rrcLink(h));
+}
+
+bool RustLinkManager::openRrc(const uint8_t dest[16], const uint8_t pubkey[64],
+                             const rs_handheld_route_t& route, Handle& out) {
+    out = {};
+    if (!_rrcSink) return false;
+    // One live hub on every device. Browsing does not call this operation.
+    for (const auto& l : _links)
+        if (l.owner == Owner::Rrc && l.state != State::Free && l.state != State::Closed &&
+            memcmp(l.peerDest, dest, 16)) return false;
+    ensureOwnedLink(dest, pubkey, route, Owner::Rrc);
+    auto* l = findByDest(dest, Owner::Rrc);
+    if (!l) return false;
+    out = handle(*l);
+    return rrcActive(out);
+}
+
+bool RustLinkManager::rrcActive(Handle h) const {
+    const auto* l = rrcLink(h);
+    return l && l->state == State::Active && l->haveKey;
+}
+
+bool RustLinkManager::rrcIdentified(Handle h) const {
+    const auto* l = rrcLink(h);
+    return rrcActive(h) && l->identified;
+}
+
+bool RustLinkManager::offerRrc(Handle h, bool identify, const uint8_t* plaintext, size_t length,
+                              uint32_t token, uint64_t born, uint32_t wait) {
+    auto* l = rrcLink(h);
+    if (!l || !rrcActive(h) || _rrcTx.sequence || _rrcSequence == UINT32_MAX || !wait ||
+        (!identify && !l->identified)) return false;
+    uint8_t raw[500]; size_t rawLength = 0;
+    if (!buildLinkPacket(*l, identify ? RustWire::CTX_LINKIDENTIFY : RustWire::CTX_NONE,
+        plaintext, length, raw, sizeof raw, rawLength)) return false;
+    handheld::TxLease lease;
+    if (!_d.pump->captureLeaseAt(l->iface, raw, rawLength, born, wait, lease)) return false;
+    const auto sequence = ++_rrcSequence;
+    _rrcTx = {h, born, wait, sequence, token, identify};
+    lease.setReceipt({sequence, RrcReceiptSlot});
+    const auto offered = _d.pump->offerReceipt(raw, rawLength, lease);
+    const bool accepted = offered == handheld::TxOffer::Started || offered == handheld::TxOffer::Queued;
+    if (!accepted && _rrcTx.sequence == sequence) _rrcTx = {};
+    return accepted;
+}
+
+bool RustLinkManager::identifyRrc(Handle h, uint64_t born, uint32_t wait) {
+    if (rrcIdentified(h)) return true;
+    auto* l = rrcLink(h);
+    if (!l || !rrcActive(h)) return false;
+    uint8_t plaintext[128];
+    if (rs_handheld_rns_link_identify(_d.ctx, l->linkId, plaintext) != RS_HANDHELD_OK) return false;
+    return offerRrc(h, true, plaintext, sizeof plaintext, 0, born, wait);
+}
+
+bool RustLinkManager::sendRrc(Handle h, const uint8_t* plaintext, size_t length,
+                             uint32_t token, uint64_t born, uint32_t wait) {
+    return offerRrc(h, false, plaintext, length, token, born, wait);
+}
+
+bool RustLinkManager::rrcTxLive() const {
+    if (!_rrcTx.sequence || !rrcActive(_rrcTx.link)) return false;
+    const uint64_t now = _d.clock ? _d.clock->nowMs() : uint64_t(millis());
+    return now >= _rrcTx.bornMs && now - _rrcTx.bornMs < _rrcTx.waitMs;
+}
+
+bool RustLinkManager::rrcReceipt(handheld::TxReceipt receipt, handheld::TxReceiptEvent event) {
+    if (receipt.slot != RrcReceiptSlot || !_rrcTx.sequence || receipt.generation != _rrcTx.sequence) return false;
+    if (event == handheld::TxReceiptEvent::Validate) return rrcTxLive();
+    const auto tx = _rrcTx;
+    const bool started = event == handheld::TxReceiptEvent::Started && rrcTxLive();
+    _rrcTx = {}; // retire before a callback can submit its next operation
+    if (tx.identify) {
+        if (started) _links[tx.link.slot].identified = true;
+    } else if (_rrcSink) _rrcSink->onRrcTransmit(tx.link, tx.token, started);
+    return true;
+}
+
+bool RustLinkManager::proveRrc(Handle h, const uint8_t packetHash[32]) {
+    auto* l = rrcLink(h);
+    if (!l || !rrcActive(h) || !l->identified) return false;
+    uint8_t proof[RS_HANDHELD_PROOF_MAX]; size_t length = 0;
+    if (rs_handheld_rns_link_packet_proof(l->signingSeed, packetHash, proof, sizeof proof, &length) != RS_HANDHELD_OK)
+        return false;
+    return frameToDest(l->iface, l->linkId, 0, nullptr, RustWire::PT_PROOF,
+                       RustWire::DT_LINK, RustWire::CTX_LINKPROOF, proof, length);
+}
+
+void RustLinkManager::closeRrc(Handle h) {
+    // A changed interface is already ineligible for TX, but still needs cleanup.
+    if (!h.valid() || _generations[h.slot] != h.generation) return;
+    auto& l = _links[h.slot];
+    if (l.owner != Owner::Rrc || l.state == State::Closed || l.state == State::Free) return;
+    if (rrcActive(h)) sendTeardown(l);
+    closeLink(l);
 }

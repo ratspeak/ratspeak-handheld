@@ -24,6 +24,7 @@ enum Ctx : uint8_t {
     CTX_KEEPALIVE = 0xFA,
     CTX_LINKIDENTIFY = 0xFB,
     CTX_LINKCLOSE = 0xFC,
+    CTX_LINKPROOF = 0xFD,
     CTX_LRRTT = 0xFE,
     CTX_LRPROOF = 0xFF,
 };

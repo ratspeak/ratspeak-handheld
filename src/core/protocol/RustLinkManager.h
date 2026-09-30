@@ -36,6 +36,34 @@ public:
 
     enum class State : uint8_t { Free, InitRequested, Active, RespPending, Stale, Closed };
 
+    // RRC is a separate Link consumer. Handles include the non-reused slot
+    // generation; neither a matching destination nor plaintext guesses confer
+    // ownership. All callbacks run on the serialized protocol owner.
+    struct Handle {
+        uint32_t generation = 0;
+        uint8_t slot = UINT8_MAX;
+        bool valid() const { return generation && slot < MAX_LINKS; }
+    };
+    struct RrcSink {
+        virtual ~RrcSink() = default;
+        virtual void onRrcPacket(Handle, const uint8_t* data, size_t length,
+                                 const uint8_t packetHash[32]) = 0;
+        virtual void onRrcClosed(Handle) = 0;
+        // Started means interface admission, never participant delivery.
+        virtual void onRrcTransmit(Handle, uint32_t token, bool started) = 0;
+    };
+    void setRrcSink(RrcSink* sink) { _rrcSink = sink; }
+    bool openRrc(const uint8_t dest[16], const uint8_t pubkey[64],
+                  const rs_handheld_route_t&, Handle&);
+    bool rrcActive(Handle) const;
+    bool rrcIdentified(Handle) const;
+    bool identifyRrc(Handle, uint64_t bornMs, uint32_t waitMs);
+    bool sendRrc(Handle, const uint8_t*, size_t, uint32_t token, uint64_t bornMs, uint32_t waitMs);
+    bool proveRrc(Handle, const uint8_t packetHash[32]);
+    void closeRrc(Handle);
+    static constexpr uint8_t RrcReceiptSlot = 66;
+    bool rrcReceipt(handheld::TxReceipt, handheld::TxReceiptEvent);
+
     ~RustLinkManager() { endAll(); }  // defense-in-depth: keys never outlive the manager
 
     void begin(const Deps& deps);
@@ -100,17 +128,21 @@ public:
     void endAll();  // zeroize + free all links (teardown)
 
 private:
+    enum class Owner : uint8_t { Delivery, Rrc };
     struct Link {
         State state = State::Free;
+        Owner owner = Owner::Delivery;
         uint8_t peerDest[16] = {};   // recipient dest (initiator); responder has no authenticated peer binding
         uint8_t linkId[16] = {};
         uint8_t pubkey[64] = {};     // peer identity public key (for proof validate)
         uint8_t ephPriv[32] = {};    // our ephemeral x25519 private
+        uint8_t signingSeed[32] = {}; // initiator packet proofs; wiped on close
         uint8_t sessionKey[64] = {};
         bool haveKey = false;
         bool initiator = false;
         bool identified = false;
         uint8_t iface = UINT8_MAX;
+        uint32_t interfaceGeneration = 0;
         uint8_t hops = 1;
         bool hasNextHop = false;
         uint8_t nextHop[16] = {};
@@ -132,7 +164,13 @@ private:
         double rttSecs = 0;
     };
 
-    Link* findByDest(const uint8_t dest[16]);
+    Link* findByDest(const uint8_t dest[16], Owner owner = Owner::Delivery);
+    bool ensureOwnedLink(const uint8_t[16], const uint8_t[64], const rs_handheld_route_t&, Owner);
+    Handle handle(const Link& l) const { return {_generations[&l - _links], uint8_t(&l - _links)}; }
+    Link* rrcLink(Handle);
+    const Link* rrcLink(Handle) const;
+    bool offerRrc(Handle, bool identify, const uint8_t*, size_t, uint32_t token, uint64_t, uint32_t);
+    bool rrcTxLive() const;
     Link* findByLinkId(const uint8_t linkId[16]);
     Link* allocLink();
     void closeLink(Link& l);
@@ -155,6 +193,18 @@ private:
     void failRequest(RequestError);
     bool buildLinkPacket(const uint8_t dest[16], uint8_t context, const uint8_t* plaintext,
                          size_t len, uint8_t* raw, size_t capacity, size_t& rawLength);
+    bool buildLinkPacket(Link&, uint8_t context, const uint8_t* plaintext,
+                         size_t len, uint8_t* raw, size_t capacity, size_t& rawLength);
+
+    struct RrcTx {
+        Handle link;
+        uint64_t bornMs = 0;
+        uint32_t waitMs = 0, sequence = 0, token = 0;
+        bool identify = false;
+    };
+    RrcTx _rrcTx;
+    uint32_t _rrcSequence = 0;
+    RrcSink* _rrcSink = nullptr;
 
     struct Request {
         RequestSink* sink = nullptr;

@@ -5,6 +5,43 @@ use super::*;
 /// Max proof bytes: explicit = packet_hash(32) + signature(64). Implicit is 64.
 pub const RS_HANDHELD_PROOF_MAX: usize = rns_lite_core::proof::PROOF_EXPLICIT_LEN;
 
+/// Explicit packet proof using the Link initiator's ephemeral Ed25519 seed.
+/// Caller owns role/state checks and wipes the retained seed on Link teardown.
+///
+/// # Safety
+/// `seed` and `packet_hash` each point to 32 readable bytes; `out` is writable
+/// for `out_cap` bytes and `out_len` points to a writable `usize`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rs_handheld_rns_link_packet_proof(
+    seed: *const [u8; 32],
+    packet_hash: *const [u8; 32],
+    out: *mut u8,
+    out_cap: usize,
+    out_len: *mut usize,
+) -> RsHandheldStatus {
+    guard(|| {
+        if seed.is_null() || packet_hash.is_null() || out.is_null() || out_len.is_null() {
+            return RsHandheldStatus::ErrInvalidArg;
+        }
+        // SAFETY: pointers checked above; lengths and exclusive output per contract.
+        let result = unsafe {
+            *out_len = 0;
+            rns_proof::build_initiator_proof(
+                &*seed,
+                &*packet_hash,
+                core::slice::from_raw_parts_mut(out, out_cap),
+            )
+        };
+        match result {
+            Ok(n) => {
+                unsafe { *out_len = n };
+                RsHandheldStatus::Ok
+            }
+            Err(ProofError::OutputTooSmall) => RsHandheldStatus::ErrCapacity,
+        }
+    })
+}
+
 /// Build a proof of receipt for a packet whose full 32-byte hash is `packet_hash`, signed by the
 /// active identity (the receiver). `implicit != 0` → `signature(64)`; else `packet_hash(32) ||
 /// signature(64)`. Writes the proof into `out` (`out_cap >= 64`, or `>= 96` for explicit) and its
