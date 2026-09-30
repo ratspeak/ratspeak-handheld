@@ -977,6 +977,7 @@ void loop() {
     if (maintenance.accepting() && now - lastRNS >= rnsInterval) {
         lastRNS = now;
         unsigned long rnsStart = millis();
+        backend->configurePropagation(userConfig.settings().propagation);
         backend->loop();
         rnsDuration = millis() - rnsStart;
     }

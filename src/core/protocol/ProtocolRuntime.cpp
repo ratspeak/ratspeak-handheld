@@ -340,6 +340,8 @@ void ProtocolRuntime::end() {
     _enginesUp = false;
     _resources.endAll();
     _links.endAll();
+    _propagationNodes.reset();
+    _nextPropagationPoll = 0;
     if (_ctx) {
         rs_handheld_rns_shutdown(_ctx);
         _ctx = nullptr;
@@ -383,6 +385,7 @@ void ProtocolRuntime::loop() {
         }
     }
     if (_enginesUp) {
+        pollPropagation();
         _lxmf.loop();
         _links.loop();
         _resources.loop();
@@ -455,6 +458,61 @@ void ProtocolRuntime::onAnnounceEvent(const rs_handheld_announce_event_t& ev, ui
         _announceMgr->receivedAnnounceEvent(ev.destination_hash, ev.identity_hash, ev.app_data,
                                             ev.app_data_len, rssi, snr, hops);
     }
+}
+
+void ProtocolRuntime::configurePropagation(const handheld::propagation::Settings& settings) {
+    handheld::assertDeviceOwner();
+    if (settings.valid()) _propagationNodes.configure(settings);
+}
+
+size_t ProtocolRuntime::propagationNodes(handheld::propagation::NodeView* out, size_t capacity) const {
+    handheld::assertDeviceOwner();
+    if (!out) return 0;
+    size_t count = 0;
+    const auto* active = _propagationNodes.active();
+    const auto now = const_cast<RustClock&>(_clock).nowMs();
+    for (size_t i = 0; i < handheld::propagation::Nodes::Capacity && count < capacity; ++i) {
+        const auto* node = _propagationNodes.at(i);
+        if (!node) continue;
+        auto& view = out[count++]; view = {};
+        std::memcpy(view.address, node->address, 16);
+        std::memcpy(view.name, node->name, sizeof view.name);
+        view.cost = node->cost; view.hops = node->hops; view.interface = node->interface;
+        view.active = active && !std::memcmp(active->address, node->address, 16);
+        view.usable = handheld::propagation::Nodes::usable(*node, now);
+    }
+    return count;
+}
+
+void ProtocolRuntime::onPropagationAnnounce(const rs_handheld_announce_event_t& event, uint8_t) {
+    handheld::assertDeviceOwner();
+    if (_maintenanceRadio || !_ctx) return;
+    rs_handheld_propagation_node_t metadata{};
+    if (rs_handheld_lxmf_propagation_node(event.app_data, event.app_data_len, &metadata) != RS_HANDHELD_OK) return;
+    rs_handheld_route_t route{};
+    const auto now = _clock.nowMs();
+    if (rs_handheld_rns_route(_ctx, event.destination_hash, now, &route) != RS_HANDHELD_OK) return;
+    const auto generation = _pump.interfaceOnline(route.interface_id) ? _pump.interfaceGeneration(route.interface_id) : 0;
+    _propagationNodes.learn(event.destination_hash, event.public_key, metadata, route, generation, now);
+    _nextPropagationPoll = 0;
+}
+
+void ProtocolRuntime::pollPropagation() {
+    const auto now = _clock.nowMs();
+    if (now < _nextPropagationPoll) return;
+    _nextPropagationPoll = now + 1000;
+    const auto refresh = [&](const uint8_t address[16]) {
+        uint8_t key[16]; std::memcpy(key, address, 16); // routeChanged may move the source row.
+        rs_handheld_route_t route{};
+        if (rs_handheld_rns_route(_ctx, key, now, &route) != RS_HANDHELD_OK) route = {};
+        const auto generation = _pump.interfaceOnline(route.interface_id) ? _pump.interfaceGeneration(route.interface_id) : 0;
+        _propagationNodes.routeChanged(key, route, generation, now);
+    };
+    for (size_t i = 0; i < handheld::propagation::Nodes::Capacity; ++i)
+        if (const auto* node = _propagationNodes.at(i)) refresh(node->address);
+    const auto& settings = _propagationNodes.settings();
+    if (settings.hasManual) refresh(settings.manual);
+    _propagationNodes.select(now, _resources.activeTransfers() == 0);
 }
 
 void ProtocolRuntime::onLocalFrame(const rs_handheld_local_frame_t& f, uint8_t ifaceId) {

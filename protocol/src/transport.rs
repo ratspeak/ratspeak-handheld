@@ -67,18 +67,24 @@ pub(super) const INGEST_LOCAL_FRAME: i32 = 9;
 /// dests stay `Dropped`. This is the trusted `local_destinations` branch (rns-transport
 /// outbound.rs::handle_inbound_path_request) expressed where the FFI already knows our own dest.
 pub(super) const INGEST_PATH_REQUEST_SELF: i32 = 10;
-/// A validated inbound announce for an aspect OTHER than `lxmf.delivery` (e.g. `lxst.telephony`,
-/// `lxmf.propagation`, NomadNet). Its path is still learned, but it is NOT surfaced as a contact —
+/// A validated inbound announce for an aspect OTHER than delivery/propagation (e.g. `lxst.telephony`,
+/// NomadNet). Its path is still learned, but it is NOT surfaced as a contact —
 /// this LXMF endpoint neither routes nor lists other aspects (the
 /// AnnounceManager filters to `lxmf.delivery`, else one identity shows as several phantom peers).
 pub(super) const INGEST_ANNOUNCE_OTHER: i32 = 11;
+/// An accepted `lxmf.propagation` announce, surfaced separately from contacts.
+pub(super) const INGEST_ANNOUNCE_PROPAGATION: i32 = 13;
 
 /// True iff the announce payload is for the `lxmf.delivery` aspect (name_hash match). Cheap parse;
 /// no signature check (the caller already validated for path-learning).
 pub(super) fn is_lxmf_delivery_announce(payload: &[u8], context_flag: bool) -> bool {
+    is_named_announce(payload, context_flag, LXMF_DELIVERY_NAME)
+}
+
+fn is_named_announce(payload: &[u8], context_flag: bool, name: &str) -> bool {
     matches!(
         AnnounceView::parse(payload, context_flag, RS_HANDHELD_ANNOUNCE_MAX_APP_DATA),
-        Ok(v) if v.name_hash == name_hash(LXMF_DELIVERY_NAME)
+        Ok(v) if v.name_hash == name_hash(name)
     )
 }
 
@@ -474,7 +480,17 @@ pub unsafe extern "C" fn rs_handheld_rns_packet_ingest_with_mode(
         {
             if let Ok(view) = PacketView::parse(raw) {
                 if view.header.flags.packet_type == PacketType::Announce {
-                    if is_lxmf_delivery_announce(view.payload, view.header.flags.context_flag) {
+                    let propagation = is_named_announce(
+                        view.payload,
+                        view.header.flags.context_flag,
+                        "lxmf.propagation",
+                    );
+                    if propagation
+                        || is_lxmf_delivery_announce(view.payload, view.header.flags.context_flag)
+                    {
+                        if propagation {
+                            action_code = INGEST_ANNOUNCE_PROPAGATION;
+                        }
                         if !out_event.is_null() {
                             let ev = unsafe { &mut *out_event };
                             let status = fill_announce_event(

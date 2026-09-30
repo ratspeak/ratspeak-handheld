@@ -9,6 +9,13 @@ namespace handheld::propagation {
 enum class Selection : uint8_t { Auto = 0, Manual = 1 };
 enum class Delivery : uint8_t { Auto = 0, Always = 1 };
 
+struct NodeView {
+    uint8_t address[16]{};
+    char name[32]{};
+    uint8_t cost = 0, hops = 0, interface = UINT8_MAX;
+    bool active = false, usable = false;
+};
+
 // A value record: copying settings never allocates another address String.
 // The manual pin survives AUTO/OFF and is cleared only by an explicit edit.
 struct Settings {

@@ -1059,6 +1059,7 @@ void SettingsScreen::applyCommitted(bool refreshCandidate) {
         if (_candidateReady) _candidateDirty = false;
     }
     auto& s = _config->settings();
+    if (_backend) _backend->configurePropagation(s.propagation);
     const auto radio = _radioApply ? _radioApply(s, true) : RadioApply::Unavailable;
 
     // Apply power settings

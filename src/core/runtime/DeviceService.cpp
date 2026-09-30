@@ -138,6 +138,7 @@ void DeviceService::poll() {
     _messages.poll();
     // Observe UI cancellation before the pump can start another queued frame.
     pollSends();
+    if (_status.state == ServiceState::Running) _backend.configurePropagation(_config.settings().propagation);
     if (_status.state == ServiceState::Running && pollNetwork) pollNetwork();
     else if (!_maintenance.accepting() && pollSettlements) pollSettlements();
     pollSends();
@@ -183,6 +184,7 @@ void DeviceService::finishSettings(uint8_t slot) {
     ++_status.configRevision;
     ++_status.identityRevision;
     if (_maintenance.accepting()) {
+        _backend.configurePropagation(_config.settings().propagation);
         if (_config.settings().timezoneIdx < TIMEZONE_COUNT) {
             setenv("TZ", TIMEZONE_TABLE[_config.settings().timezoneIdx].posixTZ, 1);
             tzset();

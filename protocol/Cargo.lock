@@ -190,7 +190,9 @@ name = "lxmf-lite-core"
 version = "0.1.0"
 dependencies = [
  "ed25519-dalek",
+ "hkdf",
  "rns-lite-core",
+ "sha2",
 ]
 
 [[package]]

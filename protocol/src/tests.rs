@@ -1147,6 +1147,139 @@ fn packet_ingest_suppresses_non_lxmf_delivery_aspect_contact() {
 }
 
 #[test]
+fn propagation_announce_has_separate_event_and_never_resurrects_a_replay() {
+    let ctx = loaded_ctx();
+    let _node = open_transport_into(ctx, 0);
+    let id = LocalIdentity::from_private_key(&[0x67; 64]);
+    let dest = id.destination_hash("lxmf.propagation");
+    let metadata = [0x97, 0xc2, 1, 0xc3, 0xcc, 255, 1, 0x93, 16, 3, 18, 0x80];
+    let mut data = [0; 600];
+    let rh = compose_random_hash(&RNG_SEED, UNIX_SECS);
+    let n = id
+        .create_announce_named("lxmf.propagation", &rh, None, &metadata, &mut data)
+        .unwrap();
+    let packet = frame_announce(&data[..n], &dest);
+    let mut action = -1;
+    let mut event: RsHandheldAnnounceEvent = unsafe { std::mem::zeroed() };
+    assert_eq!(
+        unsafe {
+            rs_handheld_rns_packet_ingest(
+                ctx,
+                packet.as_ptr(),
+                packet.len(),
+                1,
+                1000,
+                &mut action,
+                &mut event,
+                core::ptr::null_mut(),
+            )
+        },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!(action, INGEST_ANNOUNCE_PROPAGATION);
+    assert_eq!(event.destination_hash, dest);
+    assert_eq!(event.public_key, *id.public_key());
+    assert_eq!(&event.app_data[..event.app_data_len as usize], metadata);
+    let mut parsed: RsHandheldPropagationNode = unsafe { std::mem::zeroed() };
+    assert_eq!(
+        unsafe {
+            rs_handheld_lxmf_propagation_node(
+                event.app_data.as_ptr(),
+                event.app_data_len as usize,
+                &mut parsed,
+            )
+        },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!(
+        (parsed.enabled, parsed.stamp_cost, parsed.transfer_limit_kb),
+        (1, 16, 255)
+    );
+    event.destination_hash = [0; 16];
+    assert_eq!(
+        unsafe {
+            rs_handheld_rns_packet_ingest(
+                ctx,
+                packet.as_ptr(),
+                packet.len(),
+                1,
+                2000,
+                &mut action,
+                &mut event,
+                core::ptr::null_mut(),
+            )
+        },
+        RsHandheldStatus::Ok
+    );
+    assert_ne!(action, INGEST_ANNOUNCE_PROPAGATION);
+    assert_eq!(event.destination_hash, [0; 16]);
+    // New packet bytes with an older accepted ordering value remain suppressed.
+    let old_rh = compose_random_hash(&[9; 5], UNIX_SECS - 1);
+    let n = id
+        .create_announce_named("lxmf.propagation", &old_rh, None, &metadata, &mut data)
+        .unwrap();
+    let stale = frame_announce(&data[..n], &dest);
+    assert_eq!(
+        unsafe {
+            rs_handheld_rns_packet_ingest(
+                ctx,
+                stale.as_ptr(),
+                stale.len(),
+                1,
+                3000,
+                &mut action,
+                &mut event,
+                core::ptr::null_mut(),
+            )
+        },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!(action, 12);
+    assert_eq!(event.destination_hash, [0; 16]);
+    unsafe { rs_handheld_rns_shutdown(ctx) };
+}
+
+#[test]
+fn propagation_metadata_ffi_has_bounded_names_and_atomic_outputs() {
+    let bytes = [
+        0x97, 0xc2, 1, 0xc3, 1, 1, 0x93, 16, 3, 18, 0x81, 1, 0xc4, 4, b'a', 0, b'b', 0x1b,
+    ];
+    let mut node: RsHandheldPropagationNode = unsafe { std::mem::zeroed() };
+    assert_eq!(
+        unsafe { rs_handheld_lxmf_propagation_node(bytes.as_ptr(), bytes.len(), &mut node) },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!(&node.name[..3], b"ab\0");
+    node.timebase = 999;
+    assert_eq!(
+        unsafe { rs_handheld_lxmf_propagation_node(bytes.as_ptr(), 1, &mut node) },
+        RsHandheldStatus::ErrInvalidArg
+    );
+    assert_eq!(node.timebase, 999);
+    let mut known = 2;
+    let mut cost = 99;
+    assert_eq!(
+        unsafe { rs_handheld_lxmf_delivery_cost(core::ptr::null(), 0, &mut known, &mut cost) },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!((known, cost), (0, 0));
+    let nil = [0x92, 0xc0, 0xc0];
+    assert_eq!(
+        unsafe { rs_handheld_lxmf_delivery_cost(nil.as_ptr(), nil.len(), &mut known, &mut cost) },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!((known, cost), (1, 0));
+    let valid = [0x92, 0xc0, 16];
+    assert_eq!(
+        unsafe {
+            rs_handheld_lxmf_delivery_cost(valid.as_ptr(), valid.len(), &mut known, &mut cost)
+        },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!((known, cost), (1, 16));
+}
+
+#[test]
 fn transport_ingest_learns_path_and_rebroadcasts() {
     let ctx = loaded_ctx();
     let _node = open_transport_into(ctx, 1);

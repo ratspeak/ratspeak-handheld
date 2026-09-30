@@ -18,6 +18,7 @@ class RustPumpSink {
 public:
     virtual ~RustPumpSink() = default;
     virtual void onAnnounceEvent(const rs_handheld_announce_event_t& ev, uint8_t ifaceId) = 0;
+    virtual void onPropagationAnnounce(const rs_handheld_announce_event_t&, uint8_t) {}
     virtual void onLocalFrame(const rs_handheld_local_frame_t& f, uint8_t ifaceId) = 0;
     // An inbound path request for our own dest: re-announce as a PATH_RESPONSE (throttled).
     virtual void onOwnPathRequest(uint8_t ifaceId, const uint8_t tag[16], size_t tagLen) = 0;
@@ -67,6 +68,7 @@ public:
     void attachWifiAp(WiFiInterface* wifiAp);
 
     bool loraOnline() const;
+    bool interfaceOnline(uint8_t id) const { return id <= WIFI_AP_IFACE_ID && (liveTargets() & (1u << id)); }
     // Authoritative first-hop bitrate for a registered interface, or zero when unavailable.
     uint32_t interfaceBitrate(uint8_t ifaceId) const;
     uint32_t interfaceTxWaitMs(uint8_t ifaceId, uint32_t packets) const;

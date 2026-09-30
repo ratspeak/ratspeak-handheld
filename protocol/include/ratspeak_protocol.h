@@ -140,6 +140,25 @@ typedef struct rs_handheld_announce_event {
     uint8_t  app_data[RS_HANDHELD_ANNOUNCE_MAX_APP_DATA];
 } rs_handheld_announce_event_t;
 
+/* Parsed propagation announce metadata, after signature/binding acceptance.
+ * Decimal KB limits; name is sanitized UTF-8 with NUL termination. */
+typedef struct rs_handheld_propagation_node {
+    uint64_t timebase;
+    uint64_t transfer_limit_kb;
+    uint64_t sync_limit_kb;
+    uint8_t enabled;
+    uint8_t stamp_cost;
+    uint8_t stamp_flex;
+    uint8_t peering_cost;
+    uint8_t name[64];
+} rs_handheld_propagation_node_t;
+
+rs_handheld_status_t rs_handheld_lxmf_propagation_node(const uint8_t *data, size_t length,
+                                                     rs_handheld_propagation_node_t *out);
+/* known=0 means unknown; known=1,cost=0 means explicitly free recipient delivery. */
+rs_handheld_status_t rs_handheld_lxmf_delivery_cost(const uint8_t *data, size_t length,
+                                                uint8_t *known, uint8_t *cost);
+
 /* Build a signed lxmf.delivery announce_data for the active identity into `out` (capacity
  * out_cap); *out_len receives the byte length, out_dest_hash[16] the announce destination.
  * The announce random_hash is composed here as rng_seed(5) || announce_order_be(5). The latter
@@ -222,14 +241,16 @@ size_t rs_handheld_rns_transport_align(int32_t profile);
  * path requests for OTHER dests stay DROPPED. No out-param — the arrival interface is already in
  * scope at the C++ call site and the re-announce is a fresh signed announce, not tag-bound. */
 #define RS_HANDHELD_INGEST_PATH_REQUEST_SELF     10
-/* A validated inbound announce for an aspect OTHER than lxmf.delivery (e.g. lxst.telephony,
- * lxmf.propagation, NomadNet). Its path is learned like any announce, but out_event is NOT filled
+/* A validated inbound announce for an aspect OTHER than lxmf.delivery/lxmf.propagation
+ * (e.g. lxst.telephony, NomadNet). Its path is learned, but out_event is NOT filled
  * and the C++ must NOT surface it as a contact — this LXMF endpoint neither routes nor lists other
  * aspects (otherwise one identity can appear as several peers). */
 #define RS_HANDHELD_INGEST_ANNOUNCE_OTHER        11
 /* A signature-valid announce rejected by transport freshness/quality policy. out_event is NOT
  * touched; it must never reach KeyMap, contacts, or peer-ratchet persistence. */
 #define RS_HANDHELD_INGEST_ANNOUNCE_IGNORED      12
+// Accepted propagation announce: event filled; never project it as a contact.
+#define RS_HANDHELD_INGEST_ANNOUNCE_PROPAGATION  13
 
 /* rs_handheld_rns_poll_outbound *out_reason codes (OutboundReason in src/lib.rs). */
 #define RS_HANDHELD_TX_ANNOUNCE_REBROADCAST 0

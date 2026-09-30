@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include "reticulum/LXMFManager.h"
 #include "protocol/OutgoingContract.h"
+#include "config/PropagationSettings.h"
 
 class ProtocolBackend {
 public:
@@ -43,6 +44,9 @@ public:
     virtual AnnounceResult announce(const uint8_t* appData, size_t len) = 0;
     virtual unsigned long lastAnnounceTime() const = 0;
     virtual uint32_t announceFilterCount() const = 0;
+
+    virtual void configurePropagation(const handheld::propagation::Settings&) {}
+    virtual size_t propagationNodes(handheld::propagation::NodeView*, size_t) const { return 0; }
 
     // Admission copies spans and reserves a terminal persistence result. Only a
     // Ready/Committed result means saved; each accepted ticket must be acknowledged.

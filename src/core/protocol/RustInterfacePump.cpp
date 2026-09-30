@@ -253,10 +253,15 @@ void RustInterfacePump::ingest(const uint8_t* data, size_t len, uint8_t ifaceId)
             if (_sink) _sink->onAnnounceEvent(_event, ifaceId);
             break;
         case RS_HANDHELD_INGEST_ANNOUNCE_OTHER:
-            // Valid announce for a non-lxmf.delivery aspect (lxst.telephony, lxmf.propagation, …):
+            // Valid announce for another aspect (lxst.telephony, NomadNet, …):
             // path learned, but NOT surfaced as a contact. _event is not filled.
             _counters.rxAccepted++;
             _counters.rxAnnounces++;
+            break;
+        case RS_HANDHELD_INGEST_ANNOUNCE_PROPAGATION:
+            _counters.rxAccepted++;
+            _counters.rxAnnounces++;
+            if (_sink) _sink->onPropagationAnnounce(_event, ifaceId);
             break;
         case RS_HANDHELD_INGEST_ANNOUNCE_IGNORED:
             // Signature/binding may be valid, but freshness rejected it. Never surface the stale

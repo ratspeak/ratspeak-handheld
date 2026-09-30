@@ -10,6 +10,7 @@
 #include "protocol/RustRatchetStore.h"
 #include "protocol/RustLinkManager.h"
 #include "protocol/RustResourceEngine.h"
+#include "protocol/PropagationNodes.h"
 #include "ratspeak_protocol.h"
 
 class FlashStore;
@@ -85,6 +86,8 @@ public:
     AnnounceResult announce(const uint8_t* appData, size_t len) override;
     unsigned long lastAnnounceTime() const override { return _lastAnnounceMs; }
     uint32_t announceFilterCount() const override;
+    void configurePropagation(const handheld::propagation::Settings&) override;
+    size_t propagationNodes(handheld::propagation::NodeView*, size_t) const override;
 
     handheld::outgoing::Submission lxmfSubmit(const uint8_t dest[16],
         const uint8_t* title, size_t titleLength, const uint8_t* content,
@@ -120,6 +123,7 @@ public:
 
     // RustPumpSink
     void onAnnounceEvent(const rs_handheld_announce_event_t& ev, uint8_t ifaceId) override;
+    void onPropagationAnnounce(const rs_handheld_announce_event_t&, uint8_t) override;
     void onLocalFrame(const rs_handheld_local_frame_t& f, uint8_t ifaceId) override;
     void onOwnPathRequest(uint8_t ifaceId, const uint8_t tag[16], size_t tagLen) override;
 
@@ -136,6 +140,7 @@ private:
     AnnounceResult emitAnnounce(const uint8_t* appData, size_t len);
     void pollPathResponses();
     void promotePathResponse(uint8_t ifaceId, uint64_t now);
+    void pollPropagation();
 
     rs_handheld_rns_t* _ctx = nullptr;
     uint8_t* _nodeBuf = nullptr;
@@ -204,6 +209,10 @@ private:
     RustLinkManager _links;
     RustResourceEngine _resources;
     RustLxmfEngine _lxmf;
+    handheld::propagation::Nodes _propagationNodes;
+    uint64_t _nextPropagationPoll = 0;
+    static_assert(sizeof(handheld::propagation::Nodes) <= handheld::ResourceBudget::PropagationNodes,
+                  "Review propagation candidate retention");
     AnnounceManager* _announceMgr = nullptr;
     LXMFManager::MessageCallback _onMessage;
     LXMFManager::StatusCallback _statusCb;
