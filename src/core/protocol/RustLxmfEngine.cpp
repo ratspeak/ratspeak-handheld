@@ -965,6 +965,8 @@ void RustLxmfEngine::requestUnknownSource(const uint8_t source[16]) {
 // Propagation uses the existing row, storage executor, codec scratch and Link /
 // Resource pools. Only hashes, public keys and one incremental stamp are retained.
 void RustLxmfEngine::resetRelay() {
+    if (_d.propagation) _d.propagation->release(_relay.nodeOwner);
+    _relay.nodeOwner = 0;
     _relay.work.reset(); _relay.ticket = {};
     _relay.born = _relay.requestAt = _relay.sentAt = _relay.linkSince = 0;
     _relay.stage = RelayWork::Stage::Select;
@@ -1032,6 +1034,12 @@ void RustLxmfEngine::advanceRelay(Ticket ticket) {
     auto* value = row(ticket);
     if (!value || !_d.propagation || !_d.propagation->settings().enabled || !_d.links || !_d.resources) return;
     if (_relay.ticket.valid() && _relay.ticket != ticket) return;
+    if (!_relay.nodeOwner) {
+        if (_d.resources->sending() || _d.links->requestPending()) return;
+        _relay.nodeOwner = _d.propagation->claim();
+        if (!_relay.nodeOwner) return;
+        _relay.born = _d.clock->nowMs();
+    }
     if (!_relay.ticket.valid()) {
         if (_d.resources->sending() || _d.links->requestPending()) return;
         _relay.ticket = ticket; _relay.born = _d.clock->nowMs();
@@ -1043,7 +1051,13 @@ void RustLxmfEngine::advanceRelay(Ticket ticket) {
         rs_handheld_rns_request_path(_d.ctx, address, tag, 0, now);
     };
     if (_relay.stage == Stage::Select) {
-        const auto* node = _d.propagation->select(now);
+        const auto* node = _d.propagation->select(now, true, _relay.nodeOwner);
+        const auto& selected = _d.propagation->settings();
+        const auto* manual = selected.selection == handheld::propagation::Selection::Manual && selected.hasManual
+            ? _d.propagation->find(selected.manual) : nullptr;
+        if (!node && manual && manual->cost > RustStampWork::MaxCost) {
+            finishRelay(ticket, LXMFStatus::STAMP_COST_HIGH); return;
+        }
         uint8_t cost = 0;
         const bool haveKey = _d.keymap && _d.keymap->recall(value->peer, value->publicKey);
         const bool known = haveKey && _d.keymap->recallCost(value->peer, RustClock::synchronizedEpochSecs(), now, cost);

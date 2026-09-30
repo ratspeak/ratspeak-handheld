@@ -136,7 +136,7 @@ private:
         uint64_t born = 0, requestAt = 0, sentAt = 0, linkSince = 0;
         uint8_t node[16]{}, nodeKey[64]{}, transient[32]{}, preparedId[32]{};
         uint8_t recipientStamp[32]{}, nodeStamp[32]{}, packetHash[32]{};
-        uint32_t waitMs = 0;
+        uint32_t waitMs = 0, nodeOwner = 0;
         Stage stage = Stage::Select;
         uint8_t recipientCost = 0, nodeCost = 0, stampedCost = 0;
         bool prepared = false, verified = false, emitted = false, packet = false;

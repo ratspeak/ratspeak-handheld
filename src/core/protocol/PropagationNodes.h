@@ -23,7 +23,19 @@ public:
         bool used = false, enabled = false, routed = false;
     };
 
-    void reset() { *this = Nodes{}; }
+    void reset() { const auto sequence = _sequence; *this = Nodes{}; _sequence = sequence; }
+    // One upload or inbox transaction, including its storage gaps. Tokens never
+    // wrap or revive after identity reset; a stale owner cannot release another.
+    uint32_t claim() {
+        if (_owner || _sequence == UINT32_MAX) return 0;
+        return _owner = ++_sequence;
+    }
+    bool owns(uint32_t token) const { return token && token == _owner; }
+    bool release(uint32_t token) {
+        if (!owns(token)) return false;
+        _owner = 0; return true;
+    }
+    bool busy() const { return _owner != 0; }
     void configure(const Settings& settings) {
         if (settings.hasManual && (!_settings.hasManual ||
                 std::memcmp(settings.manual, _settings.manual, 16))) {
@@ -85,8 +97,8 @@ public:
 
     // Selection is stable within a family. A healthy WiFi/TCP route may replace
     // LoRa only at an idle boundary. MANUAL never substitutes another address.
-    const Node* select(uint64_t now, bool idle = true) {
-        if (!idle) return active();
+    const Node* select(uint64_t now, bool idle = true, uint32_t owner = 0) {
+        if (!idle || (_owner && !owns(owner))) return active();
         if (!_settings.enabled) { _hasActive = false; return nullptr; }
         if (_settings.selection == Selection::Manual) {
             _hasActive = _settings.hasManual;
@@ -159,6 +171,7 @@ private:
     Node _nodes[Capacity]{}, _manual;
     Settings _settings;
     uint8_t _active[16]{};
+    uint32_t _owner = 0, _sequence = 0;
     bool _hasActive = false;
 };
 static_assert(sizeof(Nodes) <= 2048, "Review propagation candidate retention budget");
