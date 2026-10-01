@@ -449,6 +449,9 @@ void RustRrcEngine::pollSend() {
         // The receipt hook may run inline. Install all ownership before offer.
         if (_d.links->sendRrc(_link, _send.packet, _send.length, token, _send.born, _send.waitMs) && _send.token == token) _send.admitted = true;
     }
+    // TCP can settle the receipt inline. Its new terminal status must reach
+    // storage before this owner retires or lets the editor clear its draft.
+    if(_send.statusDirty || _send.statusWrite || _send.ticket.valid()) return;
     if (now() >= _send.deadline && (_status.sending == SendPhase::Sending || _status.sending == SendPhase::Awaiting)) {
         _status.sending = _send.started ? SendPhase::Unconfirmed : SendPhase::NotSent;
         _send.status = _send.started ? disk::Status::Unconfirmed : disk::Status::Failed; _send.statusDirty = true; changed(); return;
