@@ -624,6 +624,16 @@ def refresh_lite(output: Path) -> None:
             component["notices"] = []
             data = subprocess.check_output(["git", "show", f"{ref}:LICENSE"], cwd=ROOT.parent / name)
             Collector.add(component, "LICENSE", data, f"https://github.com/ratspeak/{name}/blob/{ref}/LICENSE")
+        elif name == "rsLXST native Codec2":
+            ref = current["lite_commits"]["rsLXST"]
+            component["version"] = ref
+            component["source"] = f"https://github.com/ratspeak/rsLXST/tree/{ref}/crates/lxst-codec2"
+            component["notices"] = []
+            for path, expected in CODEC2_NOTICES.items():
+                data = subprocess.check_output(["git", "show", f"{ref}:{path}"], cwd=ROOT.parent / "rsLXST")
+                if digest(data) != expected:
+                    raise ValueError("native Codec2 notice differs from reviewed source: " + path)
+                Collector.add(component, path, data, f"https://github.com/ratspeak/rsLXST/blob/{ref}/{path}")
     write_bundle(components, output)
     check_bundle(output)
 

@@ -192,7 +192,7 @@
       "crates/lxst-codec2/licenses/upstream-Cargo.toml": "939e2818dcb2945f52eceb71b37b512bf1796da53a05e0a69276d5a2e55f9eed",
       "crates/lxst-codec2/licenses/upstream-README.md": "76fee2b7d3455903f4246e7412ac230a856f58b098861c4c4c9dbdecd371f94a"
     },
-    "collector_sha256": "a31bee46b835a330178b52118bc849fd4c211d651899cbe7fb96110d9b539f40"
+    "collector_sha256": "81ebd196a0a4c4afd4bbaa5af066a0af0b3e36fab842917f94a692916192abe3"
   },
   "bundle": "THIRD-PARTY.txt",
   "bundle_sha256": "d6fafbb09974086074cb345008fa176ebe71a509a6db2a387f686068136a2ccd",
