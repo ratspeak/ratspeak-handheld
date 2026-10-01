@@ -55,8 +55,8 @@ def main() -> int:
             key, value = line.split(": ", 1)
             provenance[key] = value
 
-    if len(expected) != 119:
-        raise SystemExit(f"C ABI declaration count drifted: expected 119, found {len(expected)}")
+    if len(expected) != 133:
+        raise SystemExit(f"C ABI declaration count drifted: expected 133, found {len(expected)}")
 
     source_roots = {
         "rsReticulumLite": ROOT.parent / "rsReticulumLite",
