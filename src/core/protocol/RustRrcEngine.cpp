@@ -148,7 +148,7 @@ void RustRrcEngine::learn(const rs_handheld_announce_event_t& event) {
     if (!hub) return;
     const bool same = hub->used && !memcmp(hub->view.address, event.destination_hash, 16);
     const bool saved = (same && hub->view.saved) || _bookmarks.find(event.destination_hash) >= 0;
-    *hub = {}; hub->used = true; hub->seen = now(); hub->view.saved = saved;
+    *hub = {}; hub->used = true; hub->seen = now(); hub->view.saved = saved;hub->view.heard=true;
     memcpy(hub->publicKey, event.public_key, 64); memcpy(hub->view.address, event.destination_hash, 16);
     rs_handheld_rrc_span_t name{};
     if (rs_handheld_rrc_announce_name(event.app_data, event.app_data_len, &name) == RS_HANDHELD_OK)
@@ -173,6 +173,10 @@ size_t RustRrcEngine::hubs(HubView* output, size_t capacity) const {
         if (rs_handheld_rns_route(_d.ctx, row.address, now(), &route) == RS_HANDHELD_OK && route.kind == RS_HANDHELD_ROUTE_DIRECT) {
             row.interface = route.interface_id; row.hops = route.hops;
             row.reachable = _d.pump->interfaceOnline(route.interface_id);
+            row.route=route.interface_id==RustInterfacePump::LORA_IFACE_ID?HubRoute::LoRa:
+                route.interface_id>=RustInterfacePump::TCP_IFACE_BASE && route.interface_id<RustInterfacePump::TCP_IFACE_BASE+RustInterfacePump::MAX_TCP?HubRoute::Tcp:
+                route.interface_id==RustInterfacePump::AUTO_IFACE_ID?HubRoute::LocalWifi:
+                route.interface_id==RustInterfacePump::WIFI_AP_IFACE_ID?HubRoute::AccessPoint:HubRoute::Unknown;
         }
     }
     for (size_t i = 0; i < _bookmarks.count && used < capacity; ++i) {
@@ -207,7 +211,9 @@ size_t RustRrcEngine::channels(RoomView* output, size_t capacity, size_t offset)
     return output ? used : position;
 }
 size_t RustRrcEngine::people(const char* name, PersonView* output, size_t capacity) const {
-    const auto* room = name ? findRoom(name) : nullptr; const uint8_t mask = room ? uint8_t(1u << (room - _rooms)) : 0xff;
+    const auto* room = name ? findRoom(name) : nullptr;
+    if(name && *name && !room) return 0;
+    const uint8_t mask = room ? uint8_t(1u << (room - _rooms)) : 0xff;
     size_t used = 0; if (output) for (const auto& person : _people) if ((person.rooms & mask) && used < capacity) output[used++] = person;
     return used;
 }
@@ -464,8 +470,9 @@ void RustRrcEngine::applyRoomControl(const uint8_t* data, size_t length, const r
         if (room.view.phase == RoomPhase::Error && !confirming) return;
         const bool replace = confirming || (includesSelf && !(room.view.phase == RoomPhase::Joined && count == 1));
         if (replace) for (auto& person : _people) person.rooms &= uint8_t(~(1u << slot));
-        if (replace) room.view.membersComplete = includesSelf;
-        else if (count > 1) room.view.membersComplete = false;
+        // RRC has no last-roster-fragment marker. A dropped continuation is
+        // indistinguishable from a complete first packet, even with self in it.
+        room.view.membersComplete = false;
         room.view.phase = RoomPhase::Joined;
         joined(room);
         for (size_t n = 0; n < count; ++n) { uint8_t identity[16]; rs_handheld_rrc_member(data, length, n, identity, &count);

@@ -60,7 +60,7 @@ void MessagesScreen::pollRrc() {
     if (page==Page::People && !_rrc.navigation.conversationCurrent()) { _rrc.completeRows(view,false);return; }
     if (!_rrc.completeRows(view,true)) return;
     switch (_rrc.navigation.page()) {
-    case Page::Hubs: { HubView rows[HubViewCapacity]; const auto count = _backend->rrcHubs(rows,HubViewCapacity); _rrc.rows(rows,count); break; }
+    case Page::Hubs: case Page::HubInfo: { HubView rows[HubViewCapacity]; const auto count = _backend->rrcHubs(rows,HubViewCapacity); _rrc.rows(rows,count); break; }
     case Page::People: { PersonView rows[PeopleCapacity]; const auto count = _backend->rrcPeople(_rrc.navigation.conversation().room,rows,PeopleCapacity); _rrc.rows(rows,count); break; }
     case Page::Directory: { DirectoryView rows[5]; const auto count = _backend->rrcDirectory(rows,5,_rrc.navigation.offset()); _rrc.rows(rows,count,false,true); break; }
     default: break;

@@ -57,12 +57,15 @@ struct Command {
     Action action = Action::Connect;
     uint8_t flags = 0; // remember key / enabled; Draft bit0=CAS using counter, bit1=durable send intent
 };
+enum class HubRoute : uint8_t { Unknown, LoRa, Tcp, LocalWifi, AccessPoint };
 struct HubView {
     uint8_t address[16]{};
     char name[33]{};
     uint32_t ageSeconds = 0;
     uint8_t hops = 0, interface = UINT8_MAX;
     bool saved = false, reachable = false, active = false;
+    bool heard = false;
+    HubRoute route = HubRoute::Unknown;
 };
 // Persisted HRP1 values retain the original 0=All / 1=Muted meaning.
 enum class Notifications : uint8_t { All=0, Muted=1, Mentions=2 };
