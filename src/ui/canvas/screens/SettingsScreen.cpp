@@ -711,7 +711,9 @@ void SettingsScreen::render(M5Canvas& canvas) {
     // Header with accent bar
     const char* headers[] = {"SETTINGS", "RADIO", "WIFI", "TCP CONNECTIONS",
                              "SD CARD", "DISPLAY", "AUDIO", "ABOUT", "WIFI SCAN",
-                             "PROPAGATION", "MANUAL NODE", "PROPAGATION NODES"};
+                             "PROPAGATION", "MANUAL NODE", "PROPAGATION NODES", "VOICE"};
+    static_assert(sizeof(headers) / sizeof(headers[0]) == MENU_VOICE + 1,
+                  "Every settings menu needs a visible header");
     const int headerH = Theme::SECTION_HEADER_H;
     canvas.fillRect(0, y0, Theme::CONTENT_W, headerH, Theme::BG_SURFACE);
     canvas.fillRect(0, y0 + 2, 3, headerH - 4, Theme::ACCENT);

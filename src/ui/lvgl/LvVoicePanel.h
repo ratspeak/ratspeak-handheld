@@ -19,6 +19,6 @@ private:
     void action(handheld::voice::Action);
     handheld::ServiceClient* _service=nullptr;
     handheld::voice::VoiceUi _model;
-    lv_obj_t *_root=nullptr,*_label=nullptr,*_peer=nullptr,*_route=nullptr,*_hold=nullptr,*_holdLabel=nullptr,*_accept=nullptr,*_end=nullptr,*_endLabel=nullptr,*_hint=nullptr,*_return=nullptr;
+    lv_obj_t *_root=nullptr,*_label=nullptr,*_peer=nullptr,*_route=nullptr,*_hold=nullptr,*_holdLabel=nullptr,*_accept=nullptr,*_end=nullptr,*_endLabel=nullptr,*_hint=nullptr,*_return=nullptr,*_quieter=nullptr,*_louder=nullptr,*_back=nullptr;
     uint32_t _painted=0;
 };

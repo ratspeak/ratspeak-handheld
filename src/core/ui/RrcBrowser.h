@@ -109,6 +109,15 @@ public:
         default: return rrc::DraftCapacity;
         }
     }
+    const char* formAction() const {
+        switch(navigation.page()) {
+        case Page::Address: return "Review hub";
+        case Page::RoomName: return "Review channel";
+        case Page::RoomKey: return "Join channel";
+        case Page::Nickname: return "Set nickname";
+        default: return "Send command";
+        }
+    }
     const char* heading() const {
         switch (navigation.page()) {
         case Page::Hubs: return "Hubs";

@@ -15,14 +15,15 @@ void LvSettingsScreen::buildPropagationItems(int& idx) {
     auto& settings = _cfg->settings().propagation;
     const int start = idx; _propCategory = int(_categories.size());
     _items.push_back({"Propagation", SettingType::TOGGLE,
-        [&settings] { return settings.enabled ? 1 : 0; }, [&settings](int v) { settings.enabled = v != 0; }}); ++idx;
+        [&settings] { return settings.enabled ? 1 : 0; }, [&settings](int v) { settings.enabled = v != 0; },
+        [](int v) { return String(v ? "ON" : "OFF"); }}); ++idx;
     _items.push_back({"Node mode", SettingType::ENUM_CHOICE,
         [&settings] { return int(settings.selection); }, [this, &settings](int v) {
             settings.selection = Selection(v); _propChoicePending = v == int(Selection::Manual);
         }, nullptr, 0, 1, 1, {"AUTO", "MANUAL"}}); ++idx;
     _items.push_back({"Delivery", SettingType::ENUM_CHOICE,
         [&settings] { return int(settings.delivery); }, [&settings](int v) { settings.delivery = Delivery(v); },
-        nullptr, 0, 1, 1, {"AUTO", "ALWAYS"}}); ++idx;
+        nullptr, 0, 1, 1, {"AUTO: direct first", "ALWAYS: relay only"}}); ++idx;
     _items.push_back({"Manual node", SettingType::READONLY, nullptr, nullptr, [&settings](int) {
         char hash[33]; settings.manualHex(hash); return settings.hasManual ? String(hash) : String("Not set");
     }}); ++idx;
@@ -52,8 +53,13 @@ void LvSettingsScreen::pollPropagationUI() {
     const auto status = _service ? _service->status().propagation.status : SyncStatus::Off;
     if (status != _propStatus) {
         _propStatus = status;
-        if (_view == SettingsView::ITEM_LIST && _categoryIdx == _propCategory && !_editing && !_textEditing && !_freqEditing)
+        if (_view == SettingsView::ITEM_LIST && _categoryIdx == _propCategory && !_editing && !_textEditing && !_freqEditing) {
+            // A background inbox update must not move keyboard focus away from
+            // the action the person is about to activate.
+            auto* focused=lv_group_get_focused(LvInput::group());
+            for(auto* row:_rowObjs) if(row==focused) _selectedIdx=int(intptr_t(lv_obj_get_user_data(row)));
             rebuildItemList();
+        }
     }
 }
 
@@ -178,14 +184,14 @@ void LvSettingsScreen::rebuildPropagationDialog() {
         return main;
     };
     if (_view == SettingsView::PROPAGATION_CHOICE) {
-        row("Manual propagation node", "The address stays pinned while unreachable", -1);
+        row("Manual propagation node", "Kept until you clear or replace it", -1);
         row("Enter address", nullptr, 0); row("Choose from list", nullptr, 1); row("< Back", nullptr, 2);
     } else if (_view == SettingsView::PROPAGATION_ENTRY) {
         row("< Back", nullptr, 0);
         row("Node address", "32 hexadecimal characters", -1);
         _editValueLbl = row(_propInput[0] ? _propInput : "_", nullptr, -1);
         lv_obj_set_style_text_font(_editValueLbl, &lv_font_rsdeck_10, 0);
-        row("Save address", "Verification can finish when the node is reachable", 1);
+        row("Save address", "The node can be offline when saved", 1);
     } else {
         row("< Back", nullptr, 0); row("Refresh nodes", nullptr, 1);
         if (_propLoading) row("Loading nodes...", nullptr, -1);
@@ -194,8 +200,8 @@ void LvSettingsScreen::rebuildPropagationDialog() {
         for (size_t i = 0; i < _propCount; ++i) {
             const auto& node = _propNodes[i]; Settings hash; hash.hasManual = true; memcpy(hash.manual, node.address, 16);
             char address[33], title[80]; hash.manualHex(address);
-            snprintf(title, sizeof title, "%s %s  %s", node.interface ? "WiFi" : "LoRa",
-                     node.name[0] ? node.name : "Node", node.usable ? "" : "(unavailable)");
+            snprintf(title, sizeof title, "%s%s: %s", node.interface==UINT8_MAX ? "Unknown route" : node.interface ? "WiFi/TCP" : "LoRa",
+                     node.usable ? "" : " unavailable", node.name[0] ? node.name : "Node");
             row(title, address, int(i + 2));
         }
     }

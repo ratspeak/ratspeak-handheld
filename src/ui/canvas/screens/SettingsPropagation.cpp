@@ -10,7 +10,7 @@ void SettingsScreen::buildPropagationMenu() {
     const auto& settings = _candidate.settings().propagation;
     _list.addItem(settings.enabled ? "Propagation: ON" : "Propagation: OFF");
     _list.addItem(settings.selection == Selection::Auto ? "Node mode: AUTO" : "Node mode: MANUAL");
-    _list.addItem(settings.delivery == Delivery::Auto ? "Delivery: AUTO" : "Delivery: ALWAYS");
+    _list.addItem(settings.delivery == Delivery::Auto ? "Delivery AUTO: direct first" : "Delivery ALWAYS: relay only");
     char address[33]; settings.manualHex(address);
     _list.addItem(settings.hasManual ? std::string("Pin ") + address : "Manual node: Not set");
     _list.addItem("Choose / replace node");
@@ -53,8 +53,8 @@ void SettingsScreen::showPropagationNodes() {
     for (size_t i = 0; i < _propCount; ++i) {
         char label[64], address[33]; Settings pin; pin.hasManual = true;
         memcpy(pin.manual, _propNodes[i].address, 16); pin.manualHex(address);
-        snprintf(label, sizeof label, "%s %s%s", _propNodes[i].interface ? "WiFi" : "LoRa",
-                 _propNodes[i].name[0] ? _propNodes[i].name : "Node", _propNodes[i].usable ? "" : " offline");
+        snprintf(label, sizeof label, "%s%s: %s", _propNodes[i].interface==UINT8_MAX ? "Unknown route" : _propNodes[i].interface ? "WiFi/TCP" : "LoRa",
+                 _propNodes[i].usable ? "" : " unavailable", _propNodes[i].name[0] ? _propNodes[i].name : "Node");
         _list.addItem(label); _list.addItem(address);
     }
     if (!_propCount) _list.addItem("No nodes discovered");
@@ -83,7 +83,12 @@ void SettingsScreen::activatePropagationRow(int row) {
             applyAndSave();
         } else if (row == 4) { showPropagationChoice(); return; }
         else if (row == 5) { settings.setManual(nullptr, 0); applyAndSave(); }
-        else if (row == 6) showToast(_backend && _backend->propagationSync() ? "Sync requested" : "OFF, busy, or synced within 30s", 2500);
+        else if (row == 6) {
+            const auto* feedback=!settings.enabled?"Enable propagation to sync":
+                !_backend?"Inbox unavailable; try again":_backend->propagationStatus().busy?"Inbox sync already running":
+                _backend->propagationSync()?"Sync requested":"Wait 30s, then sync again";
+            showToast(feedback,2500);
+        }
         else if (row == 8) { _subMenu = MENU_MAIN; buildMainMenu(); return; }
         buildPropagationMenu(); _list.setSelected(row); pollPropagationUI();
     } else if (_subMenu == MENU_PROPAGATION_CHOICE) {

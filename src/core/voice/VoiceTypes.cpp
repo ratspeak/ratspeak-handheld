@@ -28,7 +28,7 @@ const char* description(const Status& s) {
         case Phase::Calling: return "Requesting voice...";
         case Phase::Incoming: return "Voice request";
         case Phase::Connecting: return "Connecting...";
-        case Phase::Ready: return "Hold to talk";
+        case Phase::Ready: return "Connected";
         case Phase::Talking: return "Talking";
         case Phase::Receiving: return "Incoming audio";
         case Phase::Ending: return "Ending voice...";

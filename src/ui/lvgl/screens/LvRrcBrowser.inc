@@ -107,7 +107,7 @@ void LvMessagesScreen::renderRrc() {
                     "Remember after joining: ON":"Remember after joining: OFF");
             },LV_EVENT_VALUE_CHANGED,nullptr);
         }
-        auto* submit=button("Confirm",0);
+        auto* submit=button(_rrc.formAction(),0);
         lv_obj_add_event_cb(submit,[](lv_event_t* e) { static_cast<LvMessagesScreen*>(lv_event_get_user_data(e))->submitRrc(); },LV_EVENT_CLICKED,this);
         auto* cancel=button("Back",1);
         lv_obj_add_event_cb(cancel,[](lv_event_t* e) {
@@ -157,7 +157,13 @@ void LvMessagesScreen::submitRrc() {
 bool LvMessagesScreen::handleRrcKey(const KeyEvent& event) {
     if (_rrc.form()) {
         if (event.character==0x1b && !event.repeat) { _rrc.back();renderRrc();return true; }
-        if (event.enter) { if (!event.repeat) submitRrc();return true; }
+        if (event.enter) {
+            if (event.repeat) return true;
+            // Buttons keep their native Enter action, including the key-memory
+            // toggle and Back. Enter in the editor remains the submit shortcut.
+            if (lv_group_get_focused(LvInput::group())!=_rrcText) return false;
+            submitRrc();return true;
+        }
         if (_rrcText && (event.del || event.character==8)) { lv_textarea_del_char(_rrcText);return true; }
         if (_rrcText && event.character>=0x20 && event.character<=0x7e) { char text[]={event.character,0};lv_textarea_add_text(_rrcText,text);return true; }
         return false;

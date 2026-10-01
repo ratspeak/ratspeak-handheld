@@ -575,7 +575,8 @@ void DeviceService::execute(uint8_t slot) {
     case Operation::PropagationSync: {
         const bool requested = _backend.propagationSync();
         complete(slot, requested ? Outcome::Ok : Outcome::Failed,
-                 requested ? "Sync requested" : "Propagation is OFF, busy, or synced within 30s");
+                 requested ? "Sync requested" : !_config.settings().propagation.enabled ? "Enable propagation to sync" :
+                 _backend.propagationStatus().busy ? "Inbox sync already running" : "Wait 30s, then sync again");
         break;
     }
     case Operation::PropagationNodes: {
