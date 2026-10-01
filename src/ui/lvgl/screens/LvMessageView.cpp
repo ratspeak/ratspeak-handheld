@@ -490,6 +490,7 @@ void LvMessageView::readFull(size_t index) {
     // Old widgets may still be visible while a replacement's status is pending.
     // Their indices cannot select rows from that unbound publication.
     if (!boundWindow()) return;
+    if(_rrcMode) {openRrcTools(index);return;}
     auto& window = _service->historyWindow();
     const auto* row = window.span(index);
     if (!row || !row->more() || window.mode() != HistoryWindow::Mode::Chat) return;
@@ -619,6 +620,7 @@ void LvMessageView::onEnter() {
 }
 
 void LvMessageView::onExit() {
+    _rrcTools.close();hideSendModeMenu();
     _rrcSendRequested=false; // Leaving cancels an intent still waiting for draft durability.
     if (_rrcMode) saveRrcDraft(true);
     else if (_service && !_inputText.empty() && (!_sendPending || _retainedDraftPeer==_peerHex)) {
@@ -758,7 +760,7 @@ void LvMessageView::appendMessage(size_t index, const Span& span, const char* te
     lv_obj_set_width(lbl, textW);
     lv_label_set_text_static(lbl, text);
 
-    if (span.more() && _service && _service->historyWindow().mode() == HistoryWindow::Mode::Chat) {
+    if ((span.more() || (_rrcMode && !span.unavailable())) && _service && _service->historyWindow().mode() == HistoryWindow::Mode::Chat) {
         auto* button = _readButtons[index] = lv_btn_create(box);
         lv_obj_set_size(button, 78, 20); lv_obj_add_style(button, LvTheme::styleBtn(), 0);
         lv_obj_set_style_pad_all(button, 0, 0);
@@ -767,7 +769,7 @@ void LvMessageView::appendMessage(size_t index, const Span& span, const char* te
             auto* self = static_cast<LvMessageView*>(lv_event_get_user_data(e));
             self->readFull(uintptr_t(lv_obj_get_user_data(lv_event_get_target(e))));
         }, LV_EVENT_CLICKED, this);
-        auto* label = lv_label_create(button); lv_label_set_text(label, "Read full");
+        auto* label = lv_label_create(button); lv_label_set_text(label, _rrcMode?"Actions":"Read full");
         lv_obj_set_style_text_font(label, &lv_font_rsdeck_10, 0); lv_obj_center(label);
     }
 
@@ -957,6 +959,13 @@ void LvMessageView::sendCurrentMessage(bool viaLink) {
 }
 
 bool LvMessageView::handleKey(const KeyEvent& event) {
+    if(_rrcMode && _rrcTools.visible()) {
+        if(event.character==0x1B || event.del || event.character==0x08) {if(!event.repeat) closeRrcTools();return true;}
+        if(event.up || event.left) {_rrcTools.move(-1);updateSendModeMenu();return true;}
+        if(event.down || event.right || event.tab) {_rrcTools.move(1);updateSendModeMenu();return true;}
+        if((event.enter || event.character=='\n' || event.character=='\r') && !event.repeat) activateRrcTool();
+        return true;
+    }
     if (_sendOverlay) {
         if (event.character == 0x1B ||
             ((event.del || event.character == 0x08) && !event.repeat)) {
@@ -1062,31 +1071,32 @@ bool LvMessageView::handleKey(const KeyEvent& event) {
 }
 
 bool LvMessageView::handleLongPress() {
+    if(_rrcTools.visible()) return true;
     if (_inputText.empty()) return false;
     showSendModeMenu();
     return true;
 }
 
 void LvMessageView::showSendModeMenu() {
-    if (_inputText.empty()) return;
+    if (_inputText.empty() && !_rrcTools.visible()) return;
     hideSendModeMenu();
     _sendMenuIdx = 0;
 
     _sendOverlay = lv_obj_create(lv_layer_top());
-    lv_obj_set_size(_sendOverlay, 244, 118);
+    lv_obj_set_size(_sendOverlay,244,_rrcTools.visible()?std::min(Theme::CONTENT_H,268):118);
     lv_obj_center(_sendOverlay);
     lv_obj_add_style(_sendOverlay, LvTheme::styleModal(), 0);
     lv_obj_set_style_pad_all(_sendOverlay, 8, 0);
-    lv_obj_clear_flag(_sendOverlay, LV_OBJ_FLAG_SCROLLABLE);
+    if(!_rrcTools.visible()) lv_obj_clear_flag(_sendOverlay, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t* title = lv_label_create(_sendOverlay);
     lv_obj_set_style_text_font(title, &lv_font_rsdeck_12, 0);
     lv_obj_set_style_text_color(title, lv_color_hex(Theme::ACCENT), 0);
-    lv_label_set_text(title, "Send mode");
+    lv_label_set_text(title, _rrcTools.visible()?_rrcTools.title():"Send mode");
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 0);
 
     static const char* labels[3] = {"Send normally", "Send as link", "Cancel"};
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < (_rrcTools.visible()?int(_rrcTools.count()):3); i++) {
         lv_obj_t* row = lv_obj_create(_sendOverlay);
         lv_obj_set_size(row, 220, 24);
         lv_obj_set_pos(row, 12, 24 + i * 28);
@@ -1105,7 +1115,8 @@ void LvMessageView::showSendModeMenu() {
 
         _sendLabels[i] = lv_label_create(row);
         lv_obj_set_style_text_font(_sendLabels[i], &lv_font_rsdeck_12, 0);
-        lv_label_set_text(_sendLabels[i], _rrcMode && i==1 ? "Send as action" : labels[i]);
+        if(_rrcTools.visible()) {char label[64];_rrcTools.label(i,label,sizeof label);lv_label_set_text(_sendLabels[i],label);}
+        else lv_label_set_text(_sendLabels[i], _rrcMode && i==1 ? "Send as action" : labels[i]);
         lv_obj_center(_sendLabels[i]);
         _sendRows[i] = row;
     }
@@ -1118,16 +1129,20 @@ void LvMessageView::hideSendModeMenu() {
         lv_obj_del_async(_sendOverlay);
         _sendOverlay = nullptr;
     }
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 8; i++) {
         _sendRows[i] = nullptr;
         _sendLabels[i] = nullptr;
     }
 }
 
 void LvMessageView::updateSendModeMenu() {
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 8; i++) {
         if (!_sendRows[i] || !_sendLabels[i]) continue;
         bool selected = i == _sendMenuIdx;
+        if(_rrcTools.visible()) {
+            char label[64];_rrcTools.label(i,label,sizeof label);lv_label_set_text(_sendLabels[i],label);
+            selected=i==_rrcTools.selected;
+        }
         lv_obj_set_style_bg_color(_sendRows[i],
             lv_color_hex(selected ? Theme::PRIMARY_SUBTLE : Theme::BG_SURFACE), 0);
         lv_obj_set_style_border_color(_sendRows[i],
@@ -1135,9 +1150,15 @@ void LvMessageView::updateSendModeMenu() {
         lv_obj_set_style_text_color(_sendLabels[i],
             lv_color_hex(selected ? Theme::ACCENT : Theme::TEXT_SECONDARY), 0);
     }
+    if(_rrcTools.visible() && _sendRows[_rrcTools.selected])
+        lv_obj_scroll_to_view(_sendRows[_rrcTools.selected],LV_ANIM_OFF);
 }
 
 void LvMessageView::chooseSendMode(int idx) {
+    if(_rrcTools.visible()) {
+        if(idx<0 || size_t(idx)>=_rrcTools.count()) return;
+        _rrcTools.selected=uint8_t(idx);activateRrcTool();return;
+    }
     bool viaLink = idx == 1;
     if (idx == 2) {
         hideSendModeMenu();

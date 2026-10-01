@@ -7,6 +7,7 @@
 #include <string>
 #include <array>
 #include "history/HistoryWindow.h"
+#include "ui/RrcMessageMenu.h"
 
 
 class LvMessageView : public LvScreen {
@@ -34,6 +35,12 @@ public:
     const char* title() const override { return "Chat"; }
 
 private:
+    using RrcTools=handheld::ui::RrcMessageMenu;
+    RrcTools _rrcTools;
+    void openRrcTools(size_t index);
+    void readRrcTool(RrcTools::Action action,bool metadata=false);
+    void activateRrcTool();
+    void closeRrcTools();
     bool leaveRrcDraft();
     void loadRrcDraft();
     void saveRrcDraft(bool immediate = false, bool forSend = false);
@@ -121,8 +128,8 @@ private:
     lv_obj_t* _textarea = nullptr;
     lv_obj_t* _btnSend = nullptr;
     lv_obj_t* _sendOverlay = nullptr;
-    lv_obj_t* _sendRows[3] = {};
-    lv_obj_t* _sendLabels[3] = {};
+    lv_obj_t* _sendRows[8] = {};
+    lv_obj_t* _sendLabels[8] = {};
     int _sendMenuIdx = 0;
     bool _suppressNextSendClick = false;
 

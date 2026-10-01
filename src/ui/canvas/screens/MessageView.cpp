@@ -92,7 +92,7 @@ int visitChatLines(const History& history, bool rrc, Visitor visit) {
                                     row.statusError, row.flags & History::Span::TxSuppressed);
             if (detail) emit(index, detail, Theme::WARNING);
         }
-        if (history.mode() == History::Mode::Chat && row.more()) emit(index, "Read full: Tab, then Enter", Theme::ACCENT);
+        if (history.mode() == History::Mode::Chat && row.more()) emit(index, rrc?"Actions: Tab, then Enter":"Read full: Tab, then Enter", Theme::ACCENT);
     }
     return line;
 }
@@ -137,6 +137,7 @@ bool MessageView::setPeerHex(const std::string& peerHex) {
     return true;
 }
 void MessageView::onExit() {
+    _rrcTools.close();
     _rrcSendRequested=false; // Already-admitted messages continue on their protocol owner.
     if (_rrcMode) saveRrcDraft(true);
     else if (_backend && (!_sendTicket.valid() || _retainedPeer==_peerHex)) {
@@ -193,6 +194,7 @@ void MessageView::refreshMessages() {
 }
 
 void MessageView::render(M5Canvas& canvas) {
+    if(_rrcMode && _rrcTools.visible()) {renderRrcTools(canvas);return;}
     int baseY = Theme::CONTENT_Y;
     const int headerH=CHAT_HEADER_H+(_rrcMode?Theme::CHAR_H+2:0);
 
@@ -272,7 +274,7 @@ void MessageView::render(M5Canvas& canvas) {
         canvas.drawString("Arrows: read  R: refresh", 2, inputY + 2);
     } else if (_history.focusedSpan() < _history.spanCount()) {
         canvas.setTextColor(Theme::TEXT_SECONDARY);
-        canvas.drawString("Enter: read  R: refresh", 2, inputY + 2);
+        canvas.drawString(_rrcMode?"Enter: actions  R: refresh":"Enter: read  R: refresh", 2, inputY + 2);
     } else if (_rrcMode && (!rrcWritable() || !_rrcLoaded)) {
         canvas.setTextColor(Theme::TEXT_SECONDARY);
         canvas.drawString(!rrcWritable()?"Hub notices are read-only":"Loading draft...",2,inputY+2);
@@ -285,6 +287,13 @@ void MessageView::render(M5Canvas& canvas) {
 }
 
 bool MessageView::handleKey(const KeyEvent& event) {
+    if(_rrcMode && _rrcTools.visible()) {
+        if(event.escape || event.backspace) {if(!event.repeat) closeRrcTools();return true;}
+        if(event.up || event.left) {_rrcTools.move(-1);return true;}
+        if(event.down || event.right || event.tab) {_rrcTools.move(1);return true;}
+        if(event.enter && !event.repeat) activateRrcTool();
+        return true;
+    }
     const bool full = _history.mode() == History::Mode::Full;
     if (!_draftReady && !full && event.enter && !event.repeat) {
         onEnter();
@@ -335,6 +344,7 @@ bool MessageView::handleKey(const KeyEvent& event) {
         if (event.enter && !event.repeat) {
             const auto selected = _history.focusedSpan();
             if (_history.span(selected)->unavailable()) _history.refresh();
+            else if(_rrcMode) openRrcTools(selected);
             else _history.openFull(selected);
         }
         return true;

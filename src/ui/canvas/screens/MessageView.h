@@ -7,6 +7,7 @@
 #include "history/HistoryWindow.h"
 #include "RrcClient.h"
 #include "RrcHistoryAdapter.h"
+#include "ui/RrcMessageMenu.h"
 #include <string>
 
 class AnnounceManager;
@@ -46,6 +47,13 @@ public:
     void setUnreadUpdateCallback(UnreadUpdateCb cb) { _unreadCb = cb; }
 
 private:
+    using RrcTools=handheld::ui::RrcMessageMenu;
+    RrcTools _rrcTools;
+    void openRrcTools(size_t index);
+    void readRrcTool(RrcTools::Action action,bool metadata=false);
+    void activateRrcTool();
+    void closeRrcTools();
+    void renderRrcTools(M5Canvas&);
     bool leaveRrcDraft();
     bool sameRrcIdentity(const handheld::rrc::Conversation&, const uint8_t[16]) const;
     void loadRrcDraft();

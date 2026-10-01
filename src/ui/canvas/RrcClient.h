@@ -4,6 +4,7 @@
 #include "protocol/RrcPreferences.h"
 #include "storage/MessageStore.h"
 #include "ui/RrcCommandId.h"
+#include "history/RrcHistory.h"
 #include <functional>
 #include <utility>
 
@@ -19,7 +20,7 @@ public:
     void bind(ProtocolBackend* backend, MessageStore* store, storage::Ticket* ticket) {
         _backend=backend;_store=store;_ticket=ticket;
     }
-    bool readingDraft() const { return bool(_draft); }
+    bool readingDraft() const { return bool(_read); }
     bool pending() const { return _preferenceId || _sendId || readingDraft(); }
     uint32_t command(rrc::Command command, const uint8_t* body, size_t length, Completion complete) {
         if (!_backend) return 0;
@@ -36,15 +37,18 @@ public:
         else {_preferenceId=command.revision;_preference=std::move(complete);}
         return command.revision;
     }
-    uint32_t draft(const rrc::Conversation& binding, Rows<rrc::DraftView> complete) {
-        if (!_backend || !_store || !_ticket || _ticket->valid() || _draft || !complete) return 0;
-        storage::rrc::Context context;
-        if (!_backend->rrcContext(binding.hub,binding.room,binding.privateNotice()?binding.participant:nullptr,context)) return 0;
-        storage::rrc::Record record;storage::rrc::Record::make(record,context,storage::rrc::Kind::Draft,nullptr,0);
-        const auto id=ui::nextCardRrcCommand();if (!id) return 0;
-        const auto submitted=_store->requestRrc(storage::Operation::RrcRead,record);
-        if (!submitted.accepted()) return 0;
-        *_ticket=submitted.ticket;_draftContext=context;_draft=std::move(complete);_draftId=id;return id;
+    template<class Complete>
+    uint32_t draft(const rrc::Conversation& binding,Complete complete) {
+        return query(binding,0,[complete=std::move(complete)](const Result& result,const void* row,size_t count) {
+            complete(result,static_cast<const rrc::DraftView*>(row),count);
+        });
+    }
+    template<class Complete>
+    uint32_t detail(const rrc::Conversation& binding,uint32_t counter,Complete complete) {
+        if(!counter) return 0;
+        return query(binding,counter,[complete=std::move(complete)](const Result& result,const void* row,size_t count) {
+            complete(result,static_cast<const rrc::MessageDetail*>(row),count);
+        });
     }
     void poll() {
         if (!_backend) return;
@@ -57,35 +61,58 @@ public:
             const Result result{status.sendSaved?rrc::Code::Ok:rrc::Code::Storage,_sendId,0};
             auto complete=std::move(_send);_send={};_sendId=0;if (complete) complete(result);
         }
-        if (!_draft || !_store || !_ticket || !_ticket->valid()) return;
+        if (!_read || !_store || !_ticket || !_ticket->valid()) return;
         storage::Result stored;if (!_store->peekResult(*_ticket,stored)) return;
-        Result result;result.revision=_draftId;rrc::DraftView draft;
-        if (stored.outcome==storage::Outcome::Committed) {
-            if (!stored.length) result.code=rrc::Code::Ok;
-            else if (stored.length>=storage::rrc::Header && stored.length<=storage::rrc::Maximum) {
-                storage::rrc::Record record;
-                if (_store->readPayload(*_ticket,record.bytes,stored.length) && record.valid(stored.length) &&
-                    record.matches(_draftContext) && record.kind()==storage::rrc::Kind::Draft &&
-                    (record.status()==storage::rrc::Status::Received || record.status()==storage::rrc::Status::Unconfirmed) && record.payloadLength()>=8 &&
-                    !memcmp(record.payload(),"HRD1",4) && rrc::validDraftText(record.payload()+8,record.payloadLength()-8)) {
-                    result.code=rrc::Code::Ok;draft.revision=storage::prepared::read32(record.payload()+4);
-                    draft.storageRevision=record.revision();draft.uncertain=record.status()==storage::rrc::Status::Unconfirmed;draft.length=record.payloadLength()-8;
-                    memcpy(draft.text,record.payload()+8,draft.length);
-                }
+        Result result;result.revision=_readId;
+        storage::rrc::Record record;
+        const bool valid=stored.outcome==storage::Outcome::Committed && stored.length>=storage::rrc::Header &&
+            stored.length<=storage::rrc::Maximum && _store->readPayload(*_ticket,record.bytes,stored.length) &&
+            record.valid(stored.length) && record.matches(_readContext);
+        auto deliver=[&](const void* row) {
+            if(!_store->releaseResult(*_ticket)) return;
+            *_ticket={};auto complete=std::move(_read);_read={};_readId=_readCounter=0;
+            complete(result,row,result.code==rrc::Code::Ok?1:0);
+        };
+        if(_readCounter) {
+            rrc::MessageDetail detail;
+            if(valid && record.counter()==_readCounter && history::rrc::detail(record,_readContext,detail)) result.code=rrc::Code::Ok;
+            deliver(&detail);
+        } else {
+            rrc::DraftView draft;
+            if(stored.outcome==storage::Outcome::Committed && !stored.length) result.code=rrc::Code::Ok;
+            else if(valid && record.kind()==storage::rrc::Kind::Draft &&
+                (record.status()==storage::rrc::Status::Received || record.status()==storage::rrc::Status::Unconfirmed) &&
+                record.payloadLength()>=8 && !memcmp(record.payload(),"HRD1",4) &&
+                rrc::validDraftText(record.payload()+8,record.payloadLength()-8)) {
+                result.code=rrc::Code::Ok;draft.revision=storage::prepared::read32(record.payload()+4);
+                draft.storageRevision=record.revision();draft.uncertain=record.status()==storage::rrc::Status::Unconfirmed;
+                draft.length=record.payloadLength()-8;memcpy(draft.text,record.payload()+8,draft.length);
             }
+            deliver(&draft);
         }
-        if (!_store->releaseResult(*_ticket)) return;
-        *_ticket={};auto complete=std::move(_draft);_draft={};_draftId=0;
-        complete(result,&draft,result.code==rrc::Code::Ok?1:0);
     }
+
 private:
     ProtocolBackend* _backend=nullptr;
     MessageStore* _store=nullptr;
     storage::Ticket* _ticket=nullptr;
-    storage::rrc::Context _draftContext;
+    storage::rrc::Context _readContext;
     Completion _preference,_send;
-    Rows<rrc::DraftView> _draft;
-    uint32_t _preferenceId=0,_sendId=0,_draftId=0;
+    using ReadCompletion=std::function<void(const Result&,const void*,size_t)>;
+    ReadCompletion _read;
+    uint32_t query(const rrc::Conversation& binding,uint32_t counter,ReadCompletion complete) {
+        if(!_backend || !_store || !_ticket || _ticket->valid() || _read || !complete) return 0;
+        storage::rrc::Context context;
+        if(!_backend->rrcContext(binding.hub,binding.room,binding.privateNotice()?binding.participant:nullptr,context)) return 0;
+        storage::rrc::Record record;
+        storage::rrc::Record::make(record,context,counter?storage::rrc::Kind::Message:storage::rrc::Kind::Draft,nullptr,0);
+        const auto id=ui::nextCardRrcCommand();if(!id) return 0;
+        const auto submitted=_store->requestRrc(storage::Operation::RrcRead,record,nullptr,counter);
+        if(!submitted.accepted()) return 0;
+        *_ticket=submitted.ticket;_readContext=context;_read=std::move(complete);_readId=id;_readCounter=counter;return id;
+    }
+    uint32_t _readCounter=0;
+    uint32_t _preferenceId=0,_sendId=0,_readId=0;
 };
 static_assert(sizeof(RrcClient)<=192,"Canvas RRC port retains only callbacks and one borrowed query binding");
 }

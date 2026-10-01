@@ -125,6 +125,7 @@ void MessageView::clearConfirmedRrcDraft() {
 }
 bool MessageView::pollRrc(bool allowAdmission) {
     if (!_backend) return false;
+    const auto beforeMenu=_rrcTools.state;
     const auto before=_input.revision();const auto notice=_sendNotice;
     const auto oldSend=_rrcSendId;
     _rrcClient.bind(_backend,_store,&_readTicket);_rrcClient.poll();
@@ -150,14 +151,14 @@ bool MessageView::pollRrc(bool allowAdmission) {
         _rrcSendId=0;
     }
     if (allowAdmission) clearConfirmedRrcDraft();
-    if (!_rrcMode) return statusChanged || oldSend!=_rrcSendId || notice!=_sendNotice;
+    if (!_rrcMode) return beforeMenu!=_rrcTools.state || statusChanged || oldSend!=_rrcSendId || notice!=_sendNotice;
     if (!sameRrcIdentity(_rrcBinding,_rrcIdentity)) {
         _input.clear();_peerHex.clear();memset(_rrcInsert,0,sizeof _rrcInsert);
         _rrcLoaded=false;_rrcMode=false;++_rrcView;_history.close();
         if (_visible && _backCb) _backCb();
         return true;
     }
-    if (!allowAdmission) return statusChanged || oldSend!=_rrcSendId || notice!=_sendNotice || before!=_input.revision();
+    if (!allowAdmission) return beforeMenu!=_rrcTools.state || statusChanged || oldSend!=_rrcSendId || notice!=_sendNotice || before!=_input.revision();
     if (_visible && _history.mode()==History::Mode::Closed) enterRrcHistory();
     if (_visible) loadRrcDraft();
     saveRrcDraft();
@@ -174,7 +175,7 @@ bool MessageView::pollRrc(bool allowAdmission) {
             if (view==_rrcView && result.code==handheld::rrc::Code::Ok) _rrcReadThrough=counter;
         });
     }
-    return statusChanged || oldSend!=_rrcSendId || notice!=_sendNotice || before!=_input.revision();
+    return beforeMenu!=_rrcTools.state || statusChanged || oldSend!=_rrcSendId || notice!=_sendNotice || before!=_input.revision();
 }
 void MessageView::sendRrcMessage() {
     if (!_backend || !_draftReady || !_rrcMode || !_rrcLoaded || !rrcWritable() || _input.getText().empty() || _rrcSendId || _rrcClearPending) return;
@@ -205,4 +206,92 @@ void MessageView::sendRrcMessage() {
     if (!_rrcSendId) return;
     _rrcSendId=id;_rrcResendConfirmed=false;_rrcPreparedRevision=0;
     rrcNotice("Saving message...");
+}
+
+void MessageView::openRrcTools(size_t index) {
+    if(!_rrcMode || !_visible || !_history.visible()) return;
+    const auto* row=_history.span(index);if(!row || row->unavailable()) return;
+    _history.focusSpan(index);_rrcTools.begin(row->counter);_input.setActive(false);
+    readRrcTool(RrcTools::Action::Read,true);
+}
+void MessageView::closeRrcTools() {
+    if(_rrcTools.state==RrcTools::State::Identity || _rrcTools.state==RrcTools::State::Copy) {
+        _rrcTools.state=RrcTools::State::Menu;_rrcTools.selected=0;return;
+    }
+    _rrcTools.close();_input.setActive(_history.focusedSpan()>=_history.spanCount() && rrcWritable());
+}
+void MessageView::renderRrcTools(M5Canvas& canvas) {
+    canvas.fillRect(0,Theme::CONTENT_Y,Theme::CONTENT_W,Theme::CONTENT_H,Theme::BG);
+    Theme::useSmallFont(canvas);canvas.setTextColor(Theme::ACCENT);
+    char heading[64];snprintf(heading,sizeof heading,"%s %u/%u",_rrcTools.title(),unsigned(_rrcTools.selected+1),unsigned(_rrcTools.count()));
+    canvas.drawString(heading,3,Theme::CONTENT_Y+2);
+    const size_t first=_rrcTools.selected>=4?_rrcTools.selected-3:0;
+    for(size_t n=first;n<_rrcTools.count() && n<first+4;++n) {
+        char label[64];_rrcTools.label(n,label,sizeof label);
+        const int y=Theme::CONTENT_Y+19+int(n-first)*17;
+        if(n==_rrcTools.selected) canvas.fillRect(0,y,Theme::CONTENT_W,17,Theme::SELECTION_BG);
+        canvas.setTextColor(n==_rrcTools.selected?Theme::ACCENT:Theme::TEXT_PRIMARY);canvas.drawString(label,4,y+1);
+    }
+}
+void MessageView::activateRrcTool() {
+    using Action=RrcTools::Action;using State=RrcTools::State;
+    if(_rrcTools.state==State::Loading) {closeRrcTools();return;}
+    if(_rrcTools.state==State::Failed) {
+        if(_rrcTools.selected) closeRrcTools();else {_rrcTools.state=State::Loading;readRrcTool(Action::Read,true);}return;
+    }
+    if(_rrcTools.state==State::Identity) {if(_rrcTools.selected==4) closeRrcTools();return;}
+    if(_rrcTools.state==State::Copy) {
+        if(_rrcTools.selected==1) readRrcTool(Action::Copy);
+        else if(_rrcTools.selected==2) closeRrcTools();return;
+    }
+    const auto action=_rrcTools.action();
+    if(action==Action::Back) {closeRrcTools();return;}
+    if(action==Action::Identity) {_rrcTools.state=State::Identity;_rrcTools.selected=0;return;}
+    if(action==Action::Copy) {_rrcTools.state=State::Copy;_rrcTools.selected=1;return;}
+    if(action==Action::Read) {
+        for(size_t n=0;n<_history.spanCount();++n) if(_history.span(n)->counter==_rrcTools.counter) {
+            if(_history.openFull(n)) _rrcTools.close();return;
+        }
+        rrcNotice("Message moved; reopen its actions");closeRrcTools();return;
+    }
+    readRrcTool(action);
+}
+void MessageView::readRrcTool(RrcTools::Action action,bool metadata) {
+    if(!_backend || !_visible || !_rrcMode || !_rrcTools.visible()) return;
+    if(!metadata && (action==RrcTools::Action::Private || action==RrcTools::Action::Direct) && !leaveRrcDraft()) return;
+    const auto view=_rrcView,revision=_rrcTools.revision,counter=_rrcTools.counter;
+    _rrcTools.state=RrcTools::State::Loading;
+    const auto id=_rrcClient.detail(_rrcBinding,counter,[this,view,revision,counter,action,metadata](const handheld::canvas::RrcClient::Result& result,const handheld::rrc::MessageDetail* rows,size_t count) {
+        if(!_visible || !_rrcMode || _rrcView!=view || _rrcTools.revision!=revision || !_rrcTools.visible() ||
+            !sameRrcIdentity(_rrcBinding,_rrcIdentity)) return;
+        if(result.code!=handheld::rrc::Code::Ok || count!=1 || rows[0].counter!=counter) {_rrcTools.state=RrcTools::State::Failed;return;}
+        const auto& row=rows[0];
+        if(metadata) {_rrcTools.accept(row);return;}
+        _rrcTools.state=RrcTools::State::Menu;
+        if(!row.kind) {rrcNotice("This is a local history marker");return;}
+        if(action==RrcTools::Action::Private || action==RrcTools::Action::Direct) {
+            if(action==RrcTools::Action::Private && !(_backend->rrcStatus().capabilities&4)) {rrcNotice("Hub does not support private notices");return;}
+            if(!leaveRrcDraft()) return;
+            if(action==RrcTools::Action::Private) {
+                auto binding=_rrcBinding;binding.room[0]=0;memcpy(binding.participant,row.source,16);
+                onExit();if(setRrcConversation(binding)) onEnter();
+            } else {
+                uint8_t destination[16];char address[33];
+                if(rs_handheld_lxmf_destination_for_identity(row.source,destination)!=RS_HANDHELD_OK) return;
+                RrcTools::hex(destination,16,address);onExit();if(setPeerHex(address)) onEnter();
+            }
+            return;
+        }
+        if(!rrcWritable() || !_rrcLoaded) {rrcNotice("Open a channel or private composer first");return;}
+        const auto available=handheld::rrc::DraftCapacity-_input.getText().size();
+        char insertion[handheld::rrc::DraftCapacity+1]{};size_t length=0;bool shortened=false;
+        if(action==RrcTools::Action::Quote) length=RrcTools::quote(row,insertion,available+1,shortened);
+        else if(action==RrcTools::Action::Mention) {char token[36];length=RrcTools::mention(row,token);if(length<=available) memcpy(insertion,token,length+1);else length=0;}
+        else if(action==RrcTools::Action::Copy && row.length<=available) {length=row.length;memcpy(insertion,row.text,length);}
+        if(!length) {rrcNotice("Draft has no room; text kept");return;}
+        _input.appendText(insertion,length);rrcEdited();_rrcTools.close();_history.backToChat();
+        _history.focusSpan(History::VisibleSpans);_input.setActive(true);
+        rrcNotice(shortened?"Quote shortened to fit draft":"Added to draft; review before sending");
+    });
+    if(!id) {_rrcTools.state=RrcTools::State::Failed;rrcNotice("History busy; try again");}
 }

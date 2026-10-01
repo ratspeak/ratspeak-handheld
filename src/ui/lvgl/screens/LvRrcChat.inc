@@ -192,3 +192,84 @@ void LvMessageView::sendRrcMessage() {
     _rrcSendId=id;_rrcResendConfirmed=false;_rrcPreparedRevision=0;
     rrcNotice("Saving message...");
 }
+
+void LvMessageView::openRrcTools(size_t index) {
+    if(!_rrcMode || !_entered || !boundWindow()) return;
+    auto& window=_service->historyWindow();const auto* row=window.span(index);
+    if(!row || row->unavailable()) return;
+    saveScroll();window.focusSpan(index);_rrcTools.begin(row->counter);
+    showSendModeMenu();readRrcTool(RrcTools::Action::Read,true);
+}
+void LvMessageView::closeRrcTools() {
+    if(_rrcTools.state==RrcTools::State::Identity || _rrcTools.state==RrcTools::State::Copy) {
+        _rrcTools.state=RrcTools::State::Menu;_rrcTools.selected=0;showSendModeMenu();return;
+    }
+    _rrcTools.close();hideSendModeMenu();updateHistoryFocus();
+}
+void LvMessageView::activateRrcTool() {
+    using Action=RrcTools::Action;using State=RrcTools::State;
+    if(_rrcTools.state==State::Loading) {closeRrcTools();return;}
+    if(_rrcTools.state==State::Failed) {
+        if(_rrcTools.selected) closeRrcTools();else {_rrcTools.state=State::Loading;readRrcTool(Action::Read,true);}return;
+    }
+    if(_rrcTools.state==State::Identity) {if(_rrcTools.selected==4) closeRrcTools();return;}
+    if(_rrcTools.state==State::Copy) {
+        if(_rrcTools.selected==1) readRrcTool(Action::Copy);
+        else if(_rrcTools.selected==2) closeRrcTools();return;
+    }
+    const auto action=_rrcTools.action();
+    if(action==Action::Back) {closeRrcTools();return;}
+    if(action==Action::Identity || action==Action::Copy) {
+        _rrcTools.state=action==Action::Identity?State::Identity:State::Copy;
+        _rrcTools.selected=action==Action::Copy?1:0;showSendModeMenu();return;
+    }
+    if(action==Action::Read) {
+        auto& window=_service->historyWindow();
+        for(size_t n=0;n<window.spanCount();++n) if(window.span(n)->counter==_rrcTools.counter) {
+            if(window.openFull(n)) {_rrcTools.close();hideSendModeMenu();_scrollToEnd=false;refreshUI();}return;
+        }
+        rrcNotice("Message moved; reopen its actions");closeRrcTools();return;
+    }
+    readRrcTool(action);
+}
+void LvMessageView::readRrcTool(RrcTools::Action action,bool metadata) {
+    if(!_service || !_entered || !_rrcMode || !_rrcTools.visible()) return;
+    if(!metadata && (action==RrcTools::Action::Private || action==RrcTools::Action::Direct) && !leaveRrcDraft()) return;
+    const auto view=_rrcView,revision=_rrcTools.revision,counter=_rrcTools.counter;
+    _rrcTools.state=RrcTools::State::Loading;showSendModeMenu();
+    const auto id=_service->requestRrcDetail(_rrcBinding,_service->historyWindow().peer(),counter,
+        [this,view,revision,counter,action,metadata](const handheld::Result& result,const handheld::rrc::MessageDetail* rows,size_t count) {
+        if(!_entered || !_screen || !_rrcMode || _rrcView!=view || _rrcTools.revision!=revision || !_rrcTools.visible() ||
+            _rrcIdentity!=_service->status().generation) return;
+        if(result.outcome!=handheld::Outcome::Ok || count!=1 || rows[0].counter!=counter) {_rrcTools.state=RrcTools::State::Failed;showSendModeMenu();return;}
+        const auto& row=rows[0];
+        if(metadata) {_rrcTools.accept(row);showSendModeMenu();return;}
+        _rrcTools.state=RrcTools::State::Menu;showSendModeMenu();
+        if(!row.kind) {rrcNotice("This is a local history marker");return;}
+        if(action==RrcTools::Action::Private || action==RrcTools::Action::Direct) {
+            if(action==RrcTools::Action::Private && !(_service->status().rrc.capabilities&4)) {rrcNotice("Hub does not support private notices");return;}
+            if(!leaveRrcDraft()) return;
+            if(action==RrcTools::Action::Private) {
+                auto binding=_rrcBinding;binding.room[0]=0;memcpy(binding.participant,row.source,16);
+                onExit();if(setRrcConversation(binding)) onEnter();
+            } else {
+                uint8_t destination[16];char address[33];
+                if(rs_handheld_lxmf_destination_for_identity(row.source,destination)!=RS_HANDHELD_OK) return;
+                RrcTools::hex(destination,16,address);onExit();if(setPeerHex(address)) onEnter();
+            }
+            return;
+        }
+        if(!rrcWritable() || !_rrcLoaded) {rrcNotice("Open a channel or private composer first");return;}
+        const auto available=handheld::rrc::DraftCapacity-_inputText.size();
+        char insertion[handheld::rrc::DraftCapacity+1]{};size_t length=0;bool shortened=false;
+        if(action==RrcTools::Action::Quote) length=RrcTools::quote(row,insertion,available+1,shortened);
+        else if(action==RrcTools::Action::Mention) {char token[36];length=RrcTools::mention(row,token);if(length<=available) memcpy(insertion,token,length+1);else length=0;}
+        else if(action==RrcTools::Action::Copy && row.length<=available) {length=row.length;memcpy(insertion,row.text,length);}
+        if(!length) {rrcNotice("Draft has no room; text kept");return;}
+        _inputText.append(insertion,length);composerEdited();_rrcTools.close();hideSendModeMenu();
+        auto& window=_service->historyWindow();window.backToChat();window.focusSpan(HistoryWindow::VisibleSpans);
+        updateComposerText();updateComposerState();updateHistoryFocus();
+        rrcNotice(shortened?"Quote shortened to fit draft":"Added to draft; review before sending");
+    });
+    if(!id) {_rrcTools.state=RrcTools::State::Failed;showSendModeMenu();rrcNotice("History busy; try again");}
+}
