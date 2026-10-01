@@ -1,5 +1,5 @@
 #pragma once
-#ifndef STORAGE_ASYNC_WRITES
+#if defined(ARDUINO) && !defined(STORAGE_ASYNC_WRITES)
 #include "config/Config.h"
 #endif
 #include <cstddef>
