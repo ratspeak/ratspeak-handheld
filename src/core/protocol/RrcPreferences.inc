@@ -90,6 +90,7 @@ RustRrcEngine::Code RustRrcEngine::preferenceCommand(const Command& command, con
     }
     case Action::Draft: {
         if (length > DraftCapacity) return Code::TooLong;
+        if (length && memchr(body, 0, length)) return Code::Invalid;
         disk::Context scope;
         if (!context(command.hub, command.room, nonzero(command.participant) ? command.participant : nullptr, scope)) return Code::Invalid;
         uint8_t payload[DraftCapacity + 8]{}; memcpy(payload, "HRD1", 4);
@@ -103,7 +104,7 @@ RustRrcEngine::Code RustRrcEngine::preferenceCommand(const Command& command, con
         if (!context(command.hub, command.room, nonzero(command.participant) ? command.participant : nullptr, scope)) return Code::Invalid;
         if (command.action == Action::ClearHistory && _send.length && !memcmp(scope.conversation, _send.conversation, 16)) return Code::Busy;
         Record::make(_preferences.record, scope, disk::Kind::Message, nullptr, 0);
-        _preferences.record.counter(command.revision); _preferences.record.seal();
+        _preferences.record.counter(command.counter); _preferences.record.seal();
         _preferences.step = command.action == Action::MarkRead ? PreferenceStep::MarkRead : PreferenceStep::ClearHistory;
         _preferences.write = false;
         const auto* room = findRoom(command.room); _preferences.room = room ? uint8_t(room - _rooms) : UINT8_MAX;

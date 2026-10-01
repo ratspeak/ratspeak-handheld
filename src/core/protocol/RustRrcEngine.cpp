@@ -344,7 +344,8 @@ RustRrcEngine::Code RustRrcEngine::send(const Command& command, const uint8_t* b
     _send.ticket = submitted.ticket; _send.length = count; _send.token = ++_sequence;
     _send.born = now(); _send.deadline = now() + wait(8); memcpy(_send.conversation, scope.conversation, 16);
     _send.waitMs = wait(8);
-    _status.sending = SendPhase::Saving; _status.sendRevision = command.revision; ++_rateCount; changed(); return Code::Ok;
+    _status.sending = SendPhase::Saving; _status.sendRevision = command.revision;
+    _status.sendSaved = false; _status.sendSettled = false; ++_rateCount; changed(); return Code::Ok;
 }
 
 void RustRrcEngine::onRrcTransmit(Handle handle, uint32_t token, bool started) {
@@ -377,7 +378,7 @@ void RustRrcEngine::pollSend() {
             _d.store->readPayload(_send.ticket, saved.bytes, result.length) && saved.valid(result.length);
         _d.store->releaseResult(_send.ticket); _send.ticket = {};
         if (result.outcome != store::Outcome::Committed) {
-            if (!_send.statusWrite) { _status.sending = SendPhase::NotSent; wipe(&_send, sizeof _send); _send = {}; }
+            if (!_send.statusWrite) { _status.sending = SendPhase::NotSent; _status.sendSettled = true; wipe(&_send, sizeof _send); _send = {}; }
             else { _send.statusDirty = true; _send.statusRead = result.error == store::Error::Stale; }
             notice("Storage failed; draft retained"); return;
         }
@@ -389,6 +390,7 @@ void RustRrcEngine::pollSend() {
             }
         }
         _send.counter = result.key.counter; _send.revision = result.revision;
+        _status.sendSaved = true;
         if (_send.statusWrite) { _send.statusWrite = false; }
         else if (_status.phase == Phase::Online && !_stopped) _status.sending = SendPhase::Sending;
         else { _send.status = disk::Status::Failed; _send.statusDirty = true; _status.sending = SendPhase::NotSent; }
@@ -415,7 +417,7 @@ void RustRrcEngine::pollSend() {
     }
     if (_status.sending == SendPhase::Confirmed || _status.sending == SendPhase::Transmitted ||
         _status.sending == SendPhase::Unconfirmed || _status.sending == SendPhase::NotSent) {
-        wipe(&_send, sizeof _send); _send = {}; changed();
+        wipe(&_send, sizeof _send); _send = {}; _status.sendSettled = true; changed();
     }
 }
 

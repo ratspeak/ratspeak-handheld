@@ -58,6 +58,11 @@ private:
     void history(uint8_t slot);
     void pollHistory();
     void finishHistory(const storage::Result&);
+    void executeRrc(uint8_t slot);
+    void pollRrcCommands();
+    bool readRrcContext(uint8_t slot, storage::rrc::Context&) const;
+    storage::Submission submitRrcRead(uint8_t slot);
+    Result projectRrcRead(const storage::Result&);
     void pollSends();
     void pollStorageWrites();
     void pollMaintenance();
@@ -100,6 +105,7 @@ private:
     };
     PendingSend _sends[ServiceMailbox::NormalSlots];
     storage::Ticket _storageWrites[ServiceMailbox::NormalSlots];
+    uint16_t _rrcCommands = 0; // Existing mailbox slots retain their own immutable command.
     bool _outgoingPaused = false;
 };
 

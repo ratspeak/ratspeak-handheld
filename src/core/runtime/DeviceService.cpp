@@ -4,6 +4,7 @@
 #include "util/AnnounceData.h"
 #include "history/HistoryWindow.h"
 #include "history/ConversationWindow.h"
+#include "history/RrcHistory.h"
 #include "TaskOwner.h"
 #if !defined(RSCARDPUTER)
 #include "util/Bytes.h"
@@ -17,6 +18,16 @@
 namespace handheld {
 
 namespace {
+bool rrcRead(Operation operation) { return operation >= Operation::RrcHistoryPage && operation <= Operation::RrcDetail; }
+history::HistoryWindow::Query rrcHistoryQuery(const Request& request, const storage::rrc::Context& context) {
+    history::HistoryWindow::Query query;
+    query.kind = request.operation == Operation::RrcHistoryPage ? history::HistoryWindow::Kind::Page :
+        request.operation == Operation::RrcHistoryStatus ? history::HistoryWindow::Kind::Status : history::HistoryWindow::Kind::Record;
+    memcpy(query.peer, context.conversation, 16); query.nonce = request.query;
+    query.cursor = {request.argument, request.incoming}; query.direction = request.historyDirection;
+    query.offset = request.offset; query.statusRevision = request.statusRevision;
+    return query;
+}
 bool summaryQuery(Operation operation) {
     return operation == Operation::ConversationPage || operation == Operation::ConversationDetail;
 }
@@ -24,9 +35,11 @@ size_t queryCapacity(Operation operation) {
     switch (operation) {
         case Operation::ConversationPage: return history::ConversationList::PageSize * sizeof(storage::ConversationSelector);
         case Operation::ConversationDetail: return sizeof(storage::ConversationView);
-        case Operation::HistoryPage: return 48 * sizeof(storage::HistoryEntry);
-        case Operation::ReadRecord: return 512;
-        case Operation::HistoryStatus: return sizeof(history::HistoryWindow::StatusProjection);
+        case Operation::RrcHistoryPage: case Operation::HistoryPage: return 48 * sizeof(storage::HistoryEntry);
+        case Operation::RrcHistoryRecord: case Operation::ReadRecord: return 512;
+        case Operation::RrcHistoryStatus: case Operation::HistoryStatus: return sizeof(history::HistoryWindow::StatusProjection);
+        case Operation::RrcDraft: return sizeof(rrc::DraftView);
+        case Operation::RrcDetail: return sizeof(rrc::MessageDetail);
         default: return 0;
     }
 }
@@ -109,12 +122,15 @@ bool DeviceService::readyForCommand() {
     if (!_storageOwnerBound || _backend.pollRadioBeforeBlockingWork()) return true;
     const auto* request = _mailbox.nextRequest();
     if (!request) return false;
-    if (request->operation == Operation::PropagationNodes || request->operation == Operation::PropagationSync) return true;
+    if (request->operation == Operation::PropagationNodes || request->operation == Operation::PropagationSync ||
+        (request->operation >= Operation::RrcHubs && request->operation <= Operation::RrcContext)) return true;
     if (!_messages.deferredIO()) return false;
     switch (request->operation) {
         case Operation::Send: case Operation::MarkRead: case Operation::DeleteConversation:
         case Operation::ConversationPage: case Operation::ConversationDetail:
         case Operation::HistoryPage: case Operation::ReadRecord: case Operation::HistoryStatus:
+        case Operation::RrcHistoryPage: case Operation::RrcHistoryRecord: case Operation::RrcHistoryStatus:
+        case Operation::RrcDraft: case Operation::RrcDetail: case Operation::RrcCommand:
             return true; // Typed worker submissions and result copies only.
         default: return false; // Settings, contacts and callbacks may write inline.
     }
@@ -145,6 +161,7 @@ void DeviceService::poll() {
     else if (!_maintenance.accepting() && pollSettlements) pollSettlements();
     pollSends();
     pollStorageWrites();
+    pollRrcCommands();
     if (_backend.pollRadioBeforeBlockingWork()) pollSettings();
     if (_status.state == ServiceState::Running && millis() - _lastIdentityRetry >= 30000 &&
         _backend.pollRadioBeforeBlockingWork()) {
@@ -227,7 +244,7 @@ void DeviceService::pollMaintenance() {
     if (_maintenance.accepting()) return;
     MaintenanceBarrier::Snapshot snapshot;
     snapshot.normalPending = _mailbox.normalWorkPending() || _config.settingsPending();
-    snapshot.applicationPending = !_backend.lxmfDrained() || !_backend.rrcDrained();
+    snapshot.applicationPending = !_backend.lxmfDrained() || !_backend.rrcDrained() || _rrcCommands;
     snapshot.helpersPending = !_maintenance.helpersStarted() || (quiescent && !quiescent());
     snapshot.storageStopped = _maintenance.storageStopStarted() && _messages.finishStop();
     snapshot.error = _backend.lxmfDrainError();
@@ -290,6 +307,7 @@ void DeviceService::refreshStatus() {
     _status.storeRevision = _messages.revision();
     _status.historyRevision = _messages.historyRevision();
     _status.statusRevision = _backend.lxmfStatusRevision();
+    _status.rrc = _backend.rrcStatus();
     _status.flash = _flash.isReady();
     _status.sd = _sd.isReady();
     if ((!_lastStorageStatus || _lastStatus - _lastStorageStatus >= 5000) &&
@@ -445,13 +463,16 @@ void DeviceService::execute(uint8_t slot) {
     }
     if (!_maintenance.accepting() && (request.operation == Operation::Announce ||
         request.operation == Operation::Diagnostics || request.operation == Operation::HomeReady ||
-        request.operation == Operation::Scan || request.operation == Operation::PropagationSync)) {
+        request.operation == Operation::Scan || request.operation == Operation::PropagationSync || request.operation == Operation::RrcCommand)) {
         complete(slot, Outcome::Cancelled, "Cancelled for maintenance"); return;
     }
     const auto length = _mailbox.length(slot);
     if (!_mailbox.read(slot, _scratch, length)) { complete(slot, Outcome::Invalid); return; }
     _scratch[length] = 0;
     switch (request.operation) {
+    case Operation::RrcHubs: case Operation::RrcRooms: case Operation::RrcPeople: case Operation::RrcDirectory:
+    case Operation::RrcContext: case Operation::RrcCommand:
+        executeRrc(slot); break;
     case Operation::Send: {
         if (_outgoingPaused || _mailbox.cancellationRequested(slot)) {
             complete(slot, Outcome::Cancelled, "Sending cancelled"); break;
@@ -608,6 +629,8 @@ void DeviceService::execute(uint8_t slot) {
     }
     case Operation::ConversationPage: case Operation::ConversationDetail:
     case Operation::HistoryPage: case Operation::ReadRecord: case Operation::HistoryStatus:
+    case Operation::RrcHistoryPage: case Operation::RrcHistoryRecord: case Operation::RrcHistoryStatus:
+    case Operation::RrcDraft: case Operation::RrcDetail:
         history(slot); break;
     case Operation::Identities: {
         JsonDocument doc; auto rows = doc.to<JsonArray>();
@@ -643,7 +666,17 @@ void DeviceService::history(uint8_t slot) {
     if (_querySlot != ServiceMailbox::NoSlot) {
         complete(slot, Outcome::NotReady, "History reader busy"); return;
     }
-    if (summaryQuery(request.operation)) {
+    if (rrcRead(request.operation)) {
+        storage::rrc::Context context;
+        if (!readRrcContext(slot, context) ||
+            (request.operation != Operation::RrcDraft && (!storage::decodeHex(request.peer, strnlen(request.peer, sizeof request.peer), peer, 16) ||
+             memcmp(peer, context.conversation, 16))) ||
+            (request.operation != Operation::RrcHistoryPage && request.operation != Operation::RrcDraft && !request.argument) ||
+            (request.operation == Operation::RrcHistoryStatus && request.incoming) ||
+            (request.historyDirection != storage::HistoryDirection::Before && request.historyDirection != storage::HistoryDirection::After)) {
+            complete(slot, Outcome::Invalid); return;
+        }
+    } else if (summaryQuery(request.operation)) {
         ConversationQuery query;
         if (!readConversationQuery(_mailbox, slot, query)) { complete(slot, Outcome::Invalid); return; }
     } else if (!storage::decodeHex(request.peer, strnlen(request.peer, sizeof(request.peer)), peer, 16) ||
@@ -668,7 +701,9 @@ void DeviceService::finishHistory(const storage::Result& stored) {
     result.next = stored.nextOffset; result.total = stored.total; result.more = stored.more;
     result.storageError = stored.error;
     result.outcome = stored.outcome == storage::Outcome::Committed ? Outcome::Ok : Outcome::Failed;
-    if (request.operation == Operation::HistoryStatus) {
+    if (rrcRead(request.operation)) {
+        result = projectRrcRead(stored);
+    } else if (request.operation == Operation::HistoryStatus) {
         handheld::history::HistoryWindow::StatusProjection row;
         row.counter = request.argument; row.error = stored.error;
         storage::StoredRecordHeader header;
@@ -740,7 +775,9 @@ void DeviceService::pollHistory() {
         }
     }
     storage::Submission submitted;
-    if (summaryQuery(request.operation)) {
+    if (rrcRead(request.operation)) {
+        submitted = submitRrcRead(_querySlot);
+    } else if (summaryQuery(request.operation)) {
         ConversationQuery query;
         if (!readConversationQuery(_mailbox, _querySlot, query)) {
             const auto slot = _querySlot; _querySlot = ServiceMailbox::NoSlot;
@@ -767,6 +804,8 @@ void DeviceService::pollHistory() {
     Result result; result.outcome = Outcome::Failed; result.storageError = storage::Error::Unavailable;
     result.key = key; _mailbox.complete(slot, result);
 }
+
+#include "RrcService.inc"
 
 void DeviceService::runLifecycle(uint8_t slot) {
     const auto request = _mailbox.request(slot);

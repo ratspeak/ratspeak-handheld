@@ -52,6 +52,7 @@ public:
     String destinationHashHex() const { return String(_status.destination); }
     String destinationHashStr() const { return String(_status.destination); }
     String publicKeyHex() const { return String(_status.publicKey); }
+    const rrc::Status& rrcStatus() const { return _status.rrc; }
 private:
     const Status& _status;
 };
@@ -73,6 +74,16 @@ public:
     uint32_t requestPeerName(const std::string& peer, TextCompletion completion);
     using PropagationCompletion = std::function<void(const Result&, const propagation::NodeView*, size_t)>;
     uint32_t requestPropagationNodes(PropagationCompletion);
+    template<class Row> using RrcCompletion = std::function<void(const Result&, const Row*, size_t)>;
+    uint32_t requestRrcHubs(RrcCompletion<rrc::HubView>);
+    uint32_t requestRrcRooms(RrcCompletion<rrc::RoomView>);
+    uint32_t requestRrcPeople(const char* room, RrcCompletion<rrc::PersonView>);
+    uint32_t requestRrcDirectory(size_t offset, RrcCompletion<rrc::DirectoryView>);
+    uint32_t rrcCommand(const rrc::Command&, const uint8_t* body = nullptr, size_t length = 0, Completion = {});
+    uint32_t requestRrcDraft(const rrc::Conversation&, RrcCompletion<rrc::DraftView>);
+    uint32_t requestRrcDetail(const rrc::Conversation&, const uint8_t key[16], uint32_t counter, RrcCompletion<rrc::MessageDetail>);
+    uint32_t watchRrcHistory(const rrc::Conversation&, Completion = {});
+    bool rrcHistory() const { return _rrcHistory; }
     // Pending Send only. Completion is still consumed; navigation does not cancel.
     bool cancelSend(uint32_t requestId) { return _mailbox.cancelSend(requestId); }
     bool applySettings(Completion completion = {}, bool applyRadio = true);
@@ -111,6 +122,7 @@ private:
     uint32_t submit(Request request, const void* body, size_t length, size_t capacity, ValueCompletion callback);
     template<class Window> void submitReadQuery(Window&, uint32_t nonce, bool status,
         Request, const void* body, size_t length, size_t capacity);
+    template<class Row, size_t Capacity> uint32_t rrcQuery(Request, const void*, size_t, RrcCompletion<Row>);
     void requestNodes();
     void requestHistory();
     void requestConversationWindow();
@@ -136,6 +148,9 @@ private:
     bool _identitiesPending = false;
     std::vector<IdentitySlot> _identities;
     history::HistoryWindow _history;
+    rrc::Conversation _rrcConversation;
+    uint32_t _rrcViewRevision = 0;
+    bool _rrcHistory = false;
     history::ConversationList _conversationWindow;
     String _scanJson;
 };

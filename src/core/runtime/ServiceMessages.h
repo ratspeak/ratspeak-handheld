@@ -5,14 +5,16 @@
 #include <type_traits>
 #include "storage/ConversationView.h"
 #include "config/PropagationSettings.h"
+#include "protocol/RrcTypes.h"
 
 namespace handheld {
 
 enum class Operation : uint8_t {
     Nodes, PeerName, ConversationPage, ConversationDetail, HistoryPage, ReadRecord, HistoryStatus, Settings, Identities, Scan, PropagationNodes,
+    RrcHubs, RrcRooms, RrcPeople, RrcDirectory, RrcContext, RrcHistoryPage, RrcHistoryRecord, RrcHistoryStatus, RrcDraft, RrcDetail,
     Send, MarkRead, DeleteConversation, SaveContact, DeleteContact, RenameContact,
     ApplySettings, Announce, CreateIdentity, ImportIdentity, Diagnostics,
-    PropagationSync, HomeReady, Restart, PowerOff, SwitchIdentity, FormatSD, WipeSD, FactoryReset,
+    PropagationSync, RrcCommand, HomeReady, Restart, PowerOff, SwitchIdentity, FormatSD, WipeSD, FactoryReset,
     EnableSDAndRestart, ClearOldDataAndRestart
 };
 enum class Admission : uint8_t { Admitted, Busy, NotReady, Invalid };
@@ -23,7 +25,7 @@ constexpr bool lifecycleOperation(Operation op) {
     return op >= Operation::Restart;
 }
 constexpr bool queryOperation(Operation op) {
-    return op <= Operation::PropagationNodes;
+    return op <= Operation::RrcDetail;
 }
 
 struct Request {
@@ -71,6 +73,7 @@ struct Result {
 
 struct Status {
     propagation::SyncView propagation;
+    rrc::Status rrc;
     uint32_t generation = 1;
     uint32_t storeRevision = 0;
     uint32_t historyRevision = 0; // Structural invalidation only; MAX is exhausted.

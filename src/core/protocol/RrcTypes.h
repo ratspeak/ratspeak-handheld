@@ -16,8 +16,41 @@ enum class Code : uint8_t { Ok, Busy, Stale, Offline, Invalid, TooLong, Unsuppor
 enum class SendPhase : uint8_t { Idle, Saving, Sending, Awaiting, Confirmed, Transmitted, NotSent, Unconfirmed };
 enum class Action : uint8_t { Connect, Disconnect, Join, Leave, Message, PrivateNotice, Emote,
     Directory, Who, Topic, Nickname, Advanced, Retry, Mute, SaveHub, ForgetHub, Draft, ClearHistory, MarkRead };
+// A local view binding. Empty room/participant means hub notices. Participant
+// notices have their own history and never become a Direct conversation.
+struct Conversation {
+    uint8_t hub[16]{}, participant[16]{};
+    char room[65]{};
+    bool privateNotice() const {
+        uint8_t any = 0; for (auto byte : participant) any |= byte; return any != 0;
+    }
+};
+struct DraftView { uint32_t revision = 0; uint16_t length = 0; char text[DraftCapacity + 1]{}; };
+struct MessageDetail {
+    uint8_t source[16]{};
+    uint32_t counter = 0, timestamp = 0;
+    char nickname[33]{};
+    uint16_t length = 0;
+    uint8_t kind = 0, status = 0;
+    char text[PacketCapacity + 1]{};
+};
+inline const char* codeName(Code code) {
+    switch (code) {
+    case Code::Ok: return "";
+    case Code::Busy: return "Hub busy; try again";
+    case Code::Stale: return "Hub changed; reopen this view";
+    case Code::Offline: return "Hub unavailable";
+    case Code::Invalid: return "Check the entered value";
+    case Code::TooLong: return "Too long for this hub or radio packet";
+    case Code::Unsupported: return "Hub does not support this action";
+    case Code::Full: return "Device limit reached";
+    case Code::Storage: return "Could not save; try again";
+    case Code::NotJoined: return "Join this channel first";
+    }
+    return "Hub action failed";
+}
 struct Command {
-    uint32_t generation = 0, revision = 0;
+    uint32_t generation = 0, revision = 0, counter = 0; // MarkRead uses counter; revision identifies the request.
     uint8_t hub[16]{}, participant[16]{};
     char room[65]{};
     Action action = Action::Connect;
@@ -55,6 +88,7 @@ struct Status {
     Phase phase = Phase::Disconnected;
     SendPhase sending = SendPhase::Idle;
     bool busy = false, directoryPending = false, directoryPartial = false;
+    bool sendSaved = false, sendSettled = true;
     uint32_t preferenceRevision = 0;
     Code preferenceResult = Code::Ok;
 };

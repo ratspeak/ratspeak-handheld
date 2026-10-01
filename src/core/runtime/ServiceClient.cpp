@@ -152,12 +152,13 @@ void ServiceClient::poll() {
         // publication immediately, but retain any accepted request until its
         // stale callback retires below.
         nodes._nodes.clear(); nodes._revision = 0;
+        closeHistory();
         _nodeStaging.clear(); _nodeOffset = 0; _nodeCursorRevision = 0;
     }
     if (_history.mode() != history::HistoryWindow::Mode::Closed &&
         _history.identityGeneration() != _status.generation) _history.close();
-    _history.observeStatusRevision(_status.statusRevision);
-    _history.observeHistoryRevision(_status.historyRevision);
+    _history.observeStatusRevision(_rrcHistory ? _status.rrc.revision : _status.statusRevision);
+    _history.observeHistoryRevision(_rrcHistory ? _status.rrc.revision : _status.historyRevision);
     if (_conversationWindow.identityGeneration() != _status.generation &&
         _conversationWindow.state() != history::ConversationList::State::Closed) _conversationWindow.close();
     _conversationWindow.observeRevision(_status.storeRevision);
@@ -218,6 +219,7 @@ void ServiceClient::requestNodes() {
 }
 
 void ServiceClient::watchHistory(const std::string& peer) {
+    if (_rrcHistory) closeHistory();
     uint8_t decoded[16];
     if (!storage::decodeHex(peer.data(), peer.size(), decoded, 16)) { closeHistory(); return; }
     if (_history.mode() != history::HistoryWindow::Mode::Closed &&
@@ -228,6 +230,8 @@ void ServiceClient::closeHistory() {
     // A mode/peer change invalidates presentation, never the callback that owns
     // an accepted mailbox result. Hidden views still copy/release that result.
     _history.close();
+    _rrcHistory = false;
+    if (_rrcViewRevision != UINT32_MAX) ++_rrcViewRevision;
 }
 
 void ServiceClient::requestHistory() {
@@ -239,12 +243,17 @@ void ServiceClient::requestHistory() {
     Request request;
     request.operation = query.kind == Window::Kind::Page ? Operation::HistoryPage :
                         query.kind == Window::Kind::Status ? Operation::HistoryStatus : Operation::ReadRecord;
+    if (_rrcHistory) request.operation = query.kind == Window::Kind::Page ? Operation::RrcHistoryPage :
+        query.kind == Window::Kind::Status ? Operation::RrcHistoryStatus : Operation::RrcHistoryRecord;
     request.query = query.nonce; request.argument = query.cursor.counter; request.incoming = query.cursor.incoming;
     request.offset = query.offset; request.historyDirection = query.direction;
     request.statusRevision = query.statusRevision;
     storage::encodeHex(query.peer, 16, request.peer);
-    submitReadQuery(_history, query.nonce, query.kind == Window::Kind::Status, request, nullptr, 0, query.capacity);
+    submitReadQuery(_history, query.nonce, query.kind == Window::Kind::Status, request,
+        _rrcHistory ? &_rrcConversation : nullptr, _rrcHistory ? sizeof _rrcConversation : 0, query.capacity);
 }
+
+#include "RrcClient.inc"
 
 void ServiceClient::watchConversations() { _conversationWindow.resume(_status.generation); }
 void ServiceClient::closeConversations() { _conversationWindow.close(); }
