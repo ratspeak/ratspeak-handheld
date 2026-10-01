@@ -163,7 +163,10 @@ void LvMessageView::pollRrc() {
     }
 }
 void LvMessageView::sendRrcMessage() {
+    if(!_service || _rrcIdentity!=_service->status().generation) return;
     if (!_service || !_rrcMode || !_rrcLoaded || !rrcWritable() || _inputText.empty() || _rrcSendId || _rrcClearPending) return;
+    const auto& live=_service->status().rrc;
+    if(memcmp(live.hub,_rrcBinding.hub,16) || live.phase!=handheld::rrc::Phase::Online) {showRrcGuidance(RrcTools::State::Connect);return;}
     if (_rrcUncertain && !_rrcResendConfirmed) {
         _rrcResendConfirmed=true;rrcNotice("May duplicate an unconfirmed send. Press Send again.");return;
     }
@@ -171,6 +174,7 @@ void LvMessageView::sendRrcMessage() {
     const auto preview=handheld::ui::rrc_input::preview(_service->status().rrc,_rrcBinding,action,
         reinterpret_cast<const uint8_t*>(_inputText.data()),_inputText.size());
     if (preview.code!=handheld::rrc::Code::Ok) {
+        if(preview.code==handheld::rrc::Code::Unsupported && _rrcEmote && !_rrcBinding.privateNotice()) {showRrcGuidance(RrcTools::State::Plain);return;}
         rrcNotice(_inputText[0]=='/'?"Use Advanced command in the channel menu":handheld::rrc::codeName(preview.code));return;
     }
     if (_rrcSaving || _rrcSavedRevision!=_draftRevision || _rrcPreparedRevision!=_draftRevision) {
@@ -184,7 +188,12 @@ void LvMessageView::sendRrcMessage() {
         [this,view](const handheld::Result& result) {
             if (result.outcome!=handheld::Outcome::Ok) {
                 _rrcSendId=0;
-                if (_rrcMode && _rrcView==view) rrcNotice("Not sent; draft kept");
+                if (_rrcMode && _rrcView==view) {
+                    const auto code=handheld::rrc::Code(result.next);
+                    if(code==handheld::rrc::Code::NotJoined) showRrcGuidance(RrcTools::State::Join);
+                    else if(code==handheld::rrc::Code::Offline || code==handheld::rrc::Code::Stale) showRrcGuidance(RrcTools::State::Connect);
+                    else rrcNotice(handheld::rrc::codeName(code==handheld::rrc::Code::Ok?handheld::rrc::Code::Storage:code));
+                }
             }
         });
     if (!id) {_rrcSendId=0;rrcNotice("Hub busy; draft kept");return;}
@@ -208,6 +217,7 @@ void LvMessageView::closeRrcTools() {
 }
 void LvMessageView::activateRrcTool() {
     using Action=RrcTools::Action;using State=RrcTools::State;
+    if(_rrcTools.state==State::Connect || _rrcTools.state==State::Join || _rrcTools.state==State::Plain) {activateRrcGuidance();return;}
     if(_rrcTools.state==State::Loading) {closeRrcTools();return;}
     if(_rrcTools.state==State::Failed) {
         if(_rrcTools.selected) closeRrcTools();else {_rrcTools.state=State::Loading;readRrcTool(Action::Read,true);}return;
@@ -272,4 +282,41 @@ void LvMessageView::readRrcTool(RrcTools::Action action,bool metadata) {
         rrcNotice(shortened?"Quote shortened to fit draft":"Added to draft; review before sending");
     });
     if(!id) {_rrcTools.state=RrcTools::State::Failed;showSendModeMenu();rrcNotice("History busy; try again");}
+}
+
+void LvMessageView::showRrcGuidance(RrcTools::State state) {
+    _rrcSendRequested=false;_rrcTools.begin(0);_rrcTools.state=state;
+    const auto& live=_service->status().rrc;
+    _rrcTools.kind=live.phase!=handheld::rrc::Phase::Disconnected && memcmp(live.hub,_rrcBinding.hub,16);
+    memcpy(_rrcTools.source,_rrcBinding.hub,16);_rrcTools.selected=state==RrcTools::State::Connect?3:1;
+    showSendModeMenu();
+}
+void LvMessageView::activateRrcGuidance() {
+    if(!_service || _rrcIdentity!=_service->status().generation) return;
+    using State=RrcTools::State;const auto state=_rrcTools.state;const auto selected=_rrcTools.selected;
+    if((state==State::Connect && selected==4) || (state==State::Join && selected==3) || (state==State::Plain && selected==2)) {closeRrcTools();return;}
+    if(state==State::Plain) {
+        if(selected==1) {closeRrcTools();_rrcEmote=false;sendRrcMessage();}return;
+    }
+    if(state==State::Join && selected==2) {
+        if(!leaveRrcDraft()) return;_rrcTools.close();hideSendModeMenu();if(_onBack) _onBack();return;
+    }
+    if((state==State::Connect && selected!=3) || (state==State::Join && selected!=1)) return;
+    auto action=handheld::rrc::Action::Join;
+    if(state==State::Connect) {
+        const auto& live=_service->status().rrc;const bool same=!memcmp(live.hub,_rrcBinding.hub,16);
+        if(same && live.phase!=handheld::rrc::Phase::Disconnected && live.phase!=handheld::rrc::Phase::Recovering) {
+            closeRrcTools();rrcNotice("Connection in progress; draft kept");return;
+        }
+        action=same && live.phase==handheld::rrc::Phase::Recovering?handheld::rrc::Action::Retry:handheld::rrc::Action::Connect;
+    }
+    auto command=rrcCommand(action);memset(command.participant,0,16);
+    const auto view=_rrcView,revision=_rrcTools.revision;
+    _rrcTools.state=State::Loading;showSendModeMenu();
+    const auto id=_service->rrcCommand(command,nullptr,0,[this,view,revision,state,action](const handheld::Result& result) {
+        if(!_entered || !_screen || !_rrcMode || _rrcView!=view || _rrcTools.revision!=revision || !_rrcTools.visible() || _rrcIdentity!=_service->status().generation) return;
+        if(result.outcome==handheld::Outcome::Ok) {closeRrcTools();rrcNotice(action==handheld::rrc::Action::Join?"Joining; send when ready":"Connecting; draft kept");}
+        else {_rrcTools.state=state;showSendModeMenu();rrcNotice(handheld::rrc::codeName(handheld::rrc::Code(result.next)));}
+    });
+    if(!id) {_rrcTools.state=state;showSendModeMenu();rrcNotice("Hub busy; draft kept");}
 }

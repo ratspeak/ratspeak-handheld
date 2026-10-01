@@ -178,7 +178,10 @@ bool MessageView::pollRrc(bool allowAdmission) {
     return beforeMenu!=_rrcTools.state || statusChanged || oldSend!=_rrcSendId || notice!=_sendNotice || before!=_input.revision();
 }
 void MessageView::sendRrcMessage() {
+    if(!_backend || !sameRrcIdentity(_rrcBinding,_rrcIdentity)) return;
     if (!_backend || !_draftReady || !_rrcMode || !_rrcLoaded || !rrcWritable() || _input.getText().empty() || _rrcSendId || _rrcClearPending) return;
+    const auto& live=_backend->rrcStatus();
+    if(memcmp(live.hub,_rrcBinding.hub,16) || live.phase!=handheld::rrc::Phase::Online) {showRrcGuidance(RrcTools::State::Connect);return;}
     if (_rrcUncertain && !_rrcResendConfirmed) {
         _rrcResendConfirmed=true;rrcNotice("Unconfirmed. Enter again resends");return;
     }
@@ -186,6 +189,7 @@ void MessageView::sendRrcMessage() {
     const auto preview=handheld::ui::rrc_input::preview(_backend->rrcStatus(),_rrcBinding,action,
         reinterpret_cast<const uint8_t*>(_input.getText().data()),_input.getText().size());
     if (preview.code!=handheld::rrc::Code::Ok) {
+        if(preview.code==handheld::rrc::Code::Unsupported && _rrcEmote && !_rrcBinding.privateNotice()) {showRrcGuidance(RrcTools::State::Plain);return;}
         rrcNotice(_input.getText()[0]=='/'?"Use Advanced command in the channel menu":handheld::rrc::codeName(preview.code));return;
     }
     if (_rrcSaving || _rrcSavedRevision!=_input.revision() || _rrcPreparedRevision!=_input.revision()) {
@@ -199,7 +203,12 @@ void MessageView::sendRrcMessage() {
         [this,view](const handheld::canvas::RrcClient::Result& result) {
             if (result.code!=handheld::rrc::Code::Ok) {
                 _rrcSendId=0;
-                if (_rrcMode && _rrcView==view) rrcNotice("Not sent; draft kept");
+                if (_rrcMode && _rrcView==view) {
+                    const auto code=result.code;
+                    if(code==handheld::rrc::Code::NotJoined) showRrcGuidance(RrcTools::State::Join);
+                    else if(code==handheld::rrc::Code::Offline || code==handheld::rrc::Code::Stale) showRrcGuidance(RrcTools::State::Connect);
+                    else rrcNotice(handheld::rrc::codeName(code==handheld::rrc::Code::Ok?handheld::rrc::Code::Storage:code));
+                }
             }
         });
     if (!id) {_rrcSendId=0;rrcNotice("Hub busy; draft kept");return;}
@@ -235,6 +244,7 @@ void MessageView::renderRrcTools(M5Canvas& canvas) {
 }
 void MessageView::activateRrcTool() {
     using Action=RrcTools::Action;using State=RrcTools::State;
+    if(_rrcTools.state==State::Connect || _rrcTools.state==State::Join || _rrcTools.state==State::Plain) {activateRrcGuidance();return;}
     if(_rrcTools.state==State::Loading) {closeRrcTools();return;}
     if(_rrcTools.state==State::Failed) {
         if(_rrcTools.selected) closeRrcTools();else {_rrcTools.state=State::Loading;readRrcTool(Action::Read,true);}return;
@@ -294,4 +304,37 @@ void MessageView::readRrcTool(RrcTools::Action action,bool metadata) {
         rrcNotice(shortened?"Quote shortened to fit draft":"Added to draft; review before sending");
     });
     if(!id) {_rrcTools.state=RrcTools::State::Failed;rrcNotice("History busy; try again");}
+}
+
+void MessageView::showRrcGuidance(RrcTools::State state) {
+    _rrcSendRequested=false;_rrcTools.begin(0);_rrcTools.state=state;
+    const auto& live=_backend->rrcStatus();
+    _rrcTools.kind=live.phase!=handheld::rrc::Phase::Disconnected && memcmp(live.hub,_rrcBinding.hub,16);
+    memcpy(_rrcTools.source,_rrcBinding.hub,16);_rrcTools.selected=state==RrcTools::State::Connect?3:1;
+    _input.setActive(false);
+}
+void MessageView::activateRrcGuidance() {
+    if(!_backend || !sameRrcIdentity(_rrcBinding,_rrcIdentity)) return;
+    using State=RrcTools::State;const auto state=_rrcTools.state;const auto selected=_rrcTools.selected;
+    if((state==State::Connect && selected==4) || (state==State::Join && selected==3) || (state==State::Plain && selected==2)) {closeRrcTools();return;}
+    if(state==State::Plain) {
+        if(selected==1) {closeRrcTools();_rrcEmote=false;sendRrcMessage();}return;
+    }
+    if(state==State::Join && selected==2) {
+        if(!leaveRrcDraft()) return;_rrcTools.close();if(_backCb) _backCb();return;
+    }
+    if((state==State::Connect && selected!=3) || (state==State::Join && selected!=1)) return;
+    auto action=handheld::rrc::Action::Join;
+    if(state==State::Connect) {
+        const auto& live=_backend->rrcStatus();const bool same=!memcmp(live.hub,_rrcBinding.hub,16);
+        if(same && live.phase!=handheld::rrc::Phase::Disconnected && live.phase!=handheld::rrc::Phase::Recovering) {
+            closeRrcTools();rrcNotice("Connection in progress; draft kept");return;
+        }
+        action=same && live.phase==handheld::rrc::Phase::Recovering?handheld::rrc::Action::Retry:handheld::rrc::Action::Connect;
+    }
+    auto command=rrcCommand(action);memset(command.participant,0,16);
+    command.revision=handheld::ui::nextCardRrcCommand();
+    const auto code=_backend->rrcCommand(command,nullptr,0);
+    if(code==handheld::rrc::Code::Ok) {closeRrcTools();rrcNotice(action==handheld::rrc::Action::Join?"Joining; send when ready":"Connecting; draft kept");}
+    else rrcNotice(handheld::rrc::codeName(code==handheld::rrc::Code::Ok?handheld::rrc::Code::Storage:code));
 }

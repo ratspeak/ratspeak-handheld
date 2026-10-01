@@ -41,6 +41,8 @@ private:
     void readRrcTool(RrcTools::Action action,bool metadata=false);
     void activateRrcTool();
     void closeRrcTools();
+    void showRrcGuidance(RrcTools::State);
+    void activateRrcGuidance();
     bool leaveRrcDraft();
     void loadRrcDraft();
     void saveRrcDraft(bool immediate = false, bool forSend = false);

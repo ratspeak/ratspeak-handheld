@@ -53,6 +53,8 @@ private:
     void readRrcTool(RrcTools::Action action,bool metadata=false);
     void activateRrcTool();
     void closeRrcTools();
+    void showRrcGuidance(RrcTools::State);
+    void activateRrcGuidance();
     void renderRrcTools(M5Canvas&);
     bool leaveRrcDraft();
     bool sameRrcIdentity(const handheld::rrc::Conversation&, const uint8_t[16]) const;

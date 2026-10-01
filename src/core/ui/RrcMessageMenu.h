@@ -8,7 +8,7 @@ namespace handheld::ui {
 // reads its exact immutable counter through the existing query owner, then
 // inserts into the foreground editor. No second body cache is introduced.
 struct RrcMessageMenu {
-    enum class State : uint8_t { Closed, Loading, Failed, Menu, Identity, Copy };
+    enum class State : uint8_t { Closed, Loading, Failed, Menu, Identity, Copy, Connect, Join, Plain };
     enum class Action : uint8_t { Read, Quote, Mention, Private, Identity, Direct, Copy, Back };
     State state=State::Closed;
     uint8_t selected=0,kind=0,status=0;
@@ -24,6 +24,9 @@ struct RrcMessageMenu {
         kind=detail.kind;status=detail.status;state=State::Menu;selected=0;return true;
     }
     size_t count() const {
+        if(state==State::Connect) return 5;
+        if(state==State::Join) return 4;
+        if(state==State::Plain) return 3;
         if(state==State::Identity) return 5;
         if(state==State::Copy) return 3;
         if(state==State::Failed || (state==State::Menu && !kind)) return 2;
@@ -37,6 +40,9 @@ struct RrcMessageMenu {
         out[length*2]=0;
     }
     const char* title() const {
+        if(state==State::Connect) return kind?"Switch to this hub?":"Connect this hub?";
+        if(state==State::Join) return "Join channel";
+        if(state==State::Plain) return "Send ordinary text?";
         return state==State::Identity?"Sender identity":state==State::Copy?"Reuse message?":"Message actions";
     }
     void label(size_t row,char* out,size_t capacity) const {
@@ -44,6 +50,11 @@ struct RrcMessageMenu {
         const char* value="Back";
         if(state==State::Loading) value="Loading... Back";
         else if(state==State::Failed) value=row?"Back":"Read failed; retry";
+        else if(state==State::Connect) {
+            if(row<2) {char part[17];hex(source+row*8,8,part);snprintf(out,capacity,"%s",part);return;}
+            value=row==2?"Hub can read messages":row==3?(kind?"Switch and connect":"Connect"):"Cancel";
+        } else if(state==State::Join) value=row==0?"Join this channel first":row==1?"Join channel":row==2?"Open channel menu":"Cancel";
+        else if(state==State::Plain) value=row==0?"Hub lacks ACTION":row==1?"Use ordinary text":"Cancel";
         else if(state==State::Identity) {
             if(row<2) {char part[17];hex(source+row*8,8,part);snprintf(out,capacity,"%s",part);return;}
             value=row==2?"Identity reported":row==3?"by this hub":"Back";
