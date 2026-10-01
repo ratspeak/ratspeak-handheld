@@ -22,7 +22,9 @@ public:
     bool handleKey(const KeyEvent& event) override;
     bool handleLongPress() override;
 
-    void setPeerHex(const std::string& hex);
+    bool setPeerHex(const std::string& hex);
+    bool setRrcConversation(const handheld::rrc::Conversation&, const char* insert = nullptr);
+    void pollRrc(); // App-owned, including hidden drafts and send completions.
     void setBackend(handheld::ProtocolView* backend) { _backend = backend; }
     void setAnnounceManager(handheld::NodeView* am) { _am = am; }
     void setUIManager(class UIManager* ui) { _ui = ui; }
@@ -31,6 +33,25 @@ public:
     const char* title() const override { return "Chat"; }
 
 private:
+    bool leaveRrcDraft();
+    void loadRrcDraft();
+    void saveRrcDraft(bool immediate = false);
+    void clearConfirmedRrcDraft();
+    void enterRrcHistory();
+    void sendRrcMessage();
+    void rrcNotice(const char*);
+    handheld::rrc::Command rrcCommand(handheld::rrc::Action) const;
+    bool rrcWritable() const { return _rrcBinding.room[0] || _rrcBinding.privateNotice(); }
+    handheld::rrc::Conversation _rrcBinding;
+    handheld::rrc::Conversation _rrcSendingBinding;
+    char _rrcInsert[36]{}; // One pending nickname insertion, never message text.
+    uint64_t _rrcSavedRevision = 0, _rrcSentDraftRevision = 0;
+    uint64_t _rrcRequestedRevision = 0, _rrcClearEditorRevision = 0;
+    uint32_t _rrcIdentity = 0, _rrcView = 0, _rrcSentView = 0, _rrcSendId = 0, _rrcRetryAt = 0, _rrcEditAt = 0;
+    bool _rrcMode = false, _rrcLoaded = false, _rrcLoading = false, _rrcSaving = false;
+    bool _rrcEmote = false, _rrcUncertain = false, _rrcResendConfirmed = false;
+    uint32_t _rrcStorageRevision = 0, _rrcSentStorageRevision = 0, _rrcSendIdentity = 0, _rrcClearView = 0;
+    bool _rrcSendRequested = false, _rrcRequestedEmote = false, _rrcClearPending = false, _rrcClearing = false;
     handheld::ServiceClient* _service = nullptr;
     void sendCurrentMessage(bool viaLink = false);
     void rebuildMessages();
@@ -82,7 +103,7 @@ private:
     uint8_t _rowCount = 0;
 
     void updateMessageStatus(size_t index, const Span& span);
-    static void applyStatusGlyph(lv_obj_t* label, const Span& span);
+    void applyStatusGlyph(lv_obj_t* label, const Span& span);
 
     // LVGL widgets
     lv_obj_t* _header = nullptr;

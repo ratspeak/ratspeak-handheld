@@ -25,6 +25,7 @@ void DeviceService::pollRrcCommands() {
             code = status.sendSaved ? rrc::Code::Ok : rrc::Code::Storage;
         }
         Result result; result.outcome = code == rrc::Code::Ok ? Outcome::Ok : Outcome::Failed;
+        if (rrcPreferenceAction(command.action)) result.total = status.preferenceRecordRevision;
         result.next = uint32_t(code); result.revision = request.id;
         strlcpy(result.detail, rrc::codeName(code), sizeof result.detail);
         _rrcCommands &= ~(uint16_t(1) << slot); _mailbox.complete(slot, result);
@@ -135,8 +136,9 @@ Result DeviceService::projectRrcRead(const storage::Result& stored) {
             if (stored.length) {
                 const auto length = record.payloadLength();
                 if (record.kind() != storage::rrc::Kind::Draft || length < 8 || length > 8 + rrc::DraftCapacity ||
-                    memcmp(record.payload(), "HRD1", 4) || memchr(record.payload() + 8, 0, length - 8)) return invalid();
+                    memcmp(record.payload(), "HRD1", 4) || !rrc::validDraftText(record.payload() + 8, length - 8)) return invalid();
                 draft.revision = storage::prepared::read32(record.payload() + 4); draft.length = length - 8;
+                draft.storageRevision = record.revision();
                 memcpy(draft.text, record.payload() + 8, draft.length);
             }
             if (!_mailbox.write(slot, &draft, sizeof draft)) return invalid();

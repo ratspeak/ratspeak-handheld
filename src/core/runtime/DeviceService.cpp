@@ -5,6 +5,7 @@
 #include "history/HistoryWindow.h"
 #include "history/ConversationWindow.h"
 #include "history/RrcHistory.h"
+#include "protocol/RrcPreferences.h"
 #include "TaskOwner.h"
 #if !defined(RSCARDPUTER)
 #include "util/Bytes.h"

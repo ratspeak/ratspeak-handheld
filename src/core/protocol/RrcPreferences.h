@@ -1,9 +1,20 @@
 #pragma once
 #include "protocol/RrcTypes.h"
 #include "storage/RrcRecord.h"
+#include "util/DisplayText.h"
 #include <cstring>
 
 namespace handheld::rrc {
+inline bool validDraftText(const uint8_t* text, size_t length) {
+    if ((length && !text) || length > DraftCapacity) return false;
+    for (size_t at=0;at<length;) {
+        bool escape=false;
+        const auto size=display::codepoint(text+at,length-at,true,escape);
+        if (!text[at] || !size || (text[at]>=0x80 && escape)) return false;
+        at+=size;
+    }
+    return true;
+}
 // Private application payloads inside CRC-protected, identity/hub-bound records.
 // The root and hub indices hold keys only; saved room bodies are read on demand.
 // All layouts are byte-defined, never serialized compiler structs.

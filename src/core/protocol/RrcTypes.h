@@ -25,7 +25,7 @@ struct Conversation {
         uint8_t any = 0; for (auto byte : participant) any |= byte; return any != 0;
     }
 };
-struct DraftView { uint32_t revision = 0; uint16_t length = 0; char text[DraftCapacity + 1]{}; };
+struct DraftView { uint32_t revision = 0, storageRevision = 0; uint16_t length = 0; char text[DraftCapacity + 1]{}; };
 struct MessageDetail {
     uint8_t source[16]{};
     uint32_t counter = 0, timestamp = 0;
@@ -54,7 +54,7 @@ struct Command {
     uint8_t hub[16]{}, participant[16]{};
     char room[65]{};
     Action action = Action::Connect;
-    uint8_t flags = 0; // remember key / enabled, defined by action
+    uint8_t flags = 0; // remember key / enabled; Draft=conditional replacement using counter as storage revision
 };
 struct HubView {
     uint8_t address[16]{};
@@ -90,6 +90,7 @@ struct Status {
     bool busy = false, directoryPending = false, directoryPartial = false;
     bool sendSaved = false, sendSettled = true;
     uint32_t preferenceRevision = 0;
+    uint32_t preferenceRecordRevision = 0;
     Code preferenceResult = Code::Ok;
 };
 inline const char* phaseName(Phase phase) {

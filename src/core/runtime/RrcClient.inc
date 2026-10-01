@@ -33,14 +33,14 @@ uint32_t ServiceClient::requestRrcDirectory(size_t offset, RrcCompletion<rrc::Di
     Request request; request.operation = Operation::RrcDirectory; request.offset = offset;
     return rrcQuery<rrc::DirectoryView, 8>(request, nullptr, 0, std::move(completion));
 }
-uint32_t ServiceClient::rrcCommand(const rrc::Command& command, const uint8_t* body, size_t length, Completion completion) {
+uint32_t ServiceClient::rrcCommand(const rrc::Command& command, const uint8_t* body, size_t length, Completion completion, bool quiet) {
     if (length > rrc::PacketCapacity || (length && !body) || command.room[64] || command.action > rrc::Action::MarkRead || command.flags > 1) return 0;
     uint8_t payload[sizeof command + rrc::PacketCapacity]; memcpy(payload, &command, sizeof command);
     if (length) memcpy(payload + sizeof command, body, length);
     Request request; request.operation = Operation::RrcCommand;
     const auto id = submit(request, payload, sizeof command + length, 0,
-        [this, completion = std::move(completion)](const Result& result, const char*) {
-            if (result.outcome != Outcome::Ok) tell(result.detail[0] ? result.detail : "Hub action failed");
+        [this, quiet, completion = std::move(completion)](const Result& result, const char*) {
+            if (!quiet && result.outcome != Outcome::Ok) tell(result.detail[0] ? result.detail : "Hub action failed");
             if (completion) completion(result);
         });
     volatile uint8_t* clear = payload; for (size_t n = 0; n < sizeof command + length; ++n) clear[n] = 0;

@@ -320,6 +320,9 @@ void MessageTransactions::rrcTransaction(const Request& request, uint8_t* bytes,
     if (append && present) { finish(previous, true); return; } // exact local file identity is immutable
     if ((request.offset && (!present || request.offset != previous.revision())) ||
         (present && previous.revision() == UINT32_MAX)) { result.error = Error::Stale; return; }
+    // Draft bit 0 is an admission-only conditional replacement flag. The
+    // worker checked the exact persisted revision above; never store the flag.
+    if (kind == rrc::Kind::Draft) input.flags(0);
     // Quota and retention are worker work. No directory IO reaches the protocol
     // or UI owner; one extra atomic record is the maximum temporary overage.
     uint32_t highest = 0;

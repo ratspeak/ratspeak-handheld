@@ -11,7 +11,8 @@ namespace handheld::canvas {
 class RrcHistoryAdapter {
 public:
     bool pending() const { return _pending; }
-    void poll(history::HistoryWindow& window, MessageStore& store,
+    template<class Store>
+    void poll(history::HistoryWindow& window, Store& store,
               const storage::rrc::Context* visibleContext, uint32_t statusRevision,
               uint32_t now, bool allowAdmission) {
         if (_pending) {

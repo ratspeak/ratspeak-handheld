@@ -44,6 +44,7 @@ struct Record {
     void counter(uint32_t value) { prepared::write32(bytes + 8, value); }
     void revision(uint32_t value) { prepared::write32(bytes + 12, value); }
     void status(Status value) { bytes[5] = uint8_t(value); }
+    void flags(uint8_t value) { bytes[6] = value; }
     bool valid(size_t size) const {
         return size >= Header && size <= Maximum && !std::memcmp(bytes, "HRC1", 4) &&
             bytes[4] >= uint8_t(Kind::Message) && bytes[4] <= uint8_t(Kind::Tombstone) &&

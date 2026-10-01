@@ -1,8 +1,7 @@
 #pragma once
 
 #include "HistoryWindow.h"
-#include "storage/MessageStore.h"
-#include "storage/MessageRecord.h"
+#include "storage/RrcRecord.h"
 #include "ratspeak_protocol.h"
 #include <algorithm>
 #include <cstdio>
@@ -13,7 +12,8 @@ namespace disk = storage::rrc;
 
 // A stateless adapter onto the existing reader/window. Conversation keys are
 // local storage identifiers; these projected headers never go to LXMF or RNS.
-inline storage::Submission submit(MessageStore& store, const disk::Context& context,
+template<class Store>
+inline storage::Submission submit(Store& store, const disk::Context& context,
                                   const HistoryWindow::Query& query) {
     if (std::memcmp(context.conversation, query.peer, 16) ||
         (query.kind != HistoryWindow::Kind::Page && query.kind != HistoryWindow::Kind::Record &&
@@ -106,7 +106,9 @@ inline bool project(const disk::Context& context, const HistoryWindow::Query& qu
         result.total = result.nextOffset = 0; result.more = false; return true;
     }
     if (query.kind != HistoryWindow::Kind::Record || query.capacity < sizeof(storage::StoredRecordHeader)) return fail(result);
-    char title[64]{}; char id[13]; storage::encodeHex(view.meta.source, 6, id);
+    char title[64]{}; char id[13]{};
+    constexpr char hex[] = "0123456789abcdef";
+    for (size_t n=0;n<6;++n) { id[2*n]=hex[view.meta.source[n]>>4]; id[2*n+1]=hex[view.meta.source[n]&15]; }
     const size_t nickLength = std::min(size_t(view.nickname.length), size_t(32));
     // Nicknames remain untrusted text. The full identity is available through
     // message details; a short suffix distinguishes equal visible nicknames.

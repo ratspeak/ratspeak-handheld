@@ -1062,7 +1062,7 @@ void handheld::lvgl_application::setup() {
     lvContactsScreen.setAnnounceManager(&serviceClient.nodes);
     lvContactsScreen.setUIManager(&ui);
     lvContactsScreen.setNodeSelectedCallback([](const std::string& peerHex) {
-        lvMessageView.setPeerHex(peerHex);
+        if (!lvMessageView.setPeerHex(peerHex)) return;
         ui.lvTabBar().setActiveTab(LvTabBar::TAB_MSGS);
         ui.setScreen(&lvMessageView);
     });
@@ -1071,7 +1071,7 @@ void handheld::lvgl_application::setup() {
     lvNodesScreen.setUIManager(&ui);
     lvNodesScreen.setUserConfig(&serviceClient.config);
     lvNodesScreen.setNodeSelectedCallback([](const std::string& peerHex) {
-        lvMessageView.setPeerHex(peerHex);
+        if (!lvMessageView.setPeerHex(peerHex)) return;
         ui.lvTabBar().setActiveTab(LvTabBar::TAB_MSGS);
         ui.setScreen(&lvMessageView);
     });
@@ -1080,10 +1080,13 @@ void handheld::lvgl_application::setup() {
     lvMessagesScreen.setBackend(&serviceClient.protocol);
     lvMessagesScreen.setUIManager(&ui);
     lvMessagesScreen.setOpenCallback([](const std::string& peerHex) {
-        lvMessageView.setPeerHex(peerHex);
+        if (!lvMessageView.setPeerHex(peerHex)) return;
         ui.setScreen(&lvMessageView);
     });
 
+    lvMessagesScreen.setRrcOpenCallback([](const handheld::rrc::Conversation& binding,const char* insert) {
+        if (lvMessageView.setRrcConversation(binding,insert)) ui.setScreen(&lvMessageView);
+    });
     lvMessageView.setBackend(&serviceClient.protocol);
     lvMessageView.setAnnounceManager(&serviceClient.nodes);
     lvMessageView.setUIManager(&ui);
@@ -1423,6 +1426,7 @@ void handheld::lvgl_application::loop() {
     lvSettingsScreen.pollFirmwareCheck();
     serviceRunner.cooperativeTick();
     serviceClient.poll();
+    lvMessageView.pollRrc();
     if (homeAnnounceRequested && serviceClient.status().state == handheld::ServiceState::Running &&
         serviceClient.action(handheld::Operation::HomeReady)) homeAnnounceRequested = false;
     static uint32_t previousInputLoop = 0, maxInputGap = 0, lastUiMetrics = 0;

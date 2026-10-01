@@ -8,6 +8,8 @@
 #include <time.h>
 #include <cmath>
 #include "fonts/fonts.h"
+#include "ui/RrcCompose.h"
+#include "history/RrcHistory.h"
 
 namespace {
 
@@ -76,6 +78,21 @@ void makeTransparent(lv_obj_t* obj) {
 
 void LvMessageView::updateHeader() {
     if (!_lblHeader) return;
+    if (_rrcMode) {
+        lv_label_set_text(_lblHeader,_rrcBinding.room[0]?_rrcBinding.room:_rrcBinding.privateNotice()?"Private hub notice":"Hub notices");
+        const auto& live=_service->status().rrc;
+        const bool current=!memcmp(live.hub,_rrcBinding.hub,16);
+        const auto status=current?live:handheld::rrc::Status{};
+        const auto action=_rrcBinding.privateNotice()?handheld::rrc::Action::PrivateNotice:_rrcEmote?handheld::rrc::Action::Emote:handheld::rrc::Action::Message;
+        const auto limit=handheld::ui::rrc_input::preview(status,_rrcBinding,action,nullptr,0);
+        char text[96];
+        char hub[33];snprintf(hub,sizeof hub,"Hub %02x%02x%02x",_rrcBinding.hub[0],_rrcBinding.hub[1],_rrcBinding.hub[2]);
+        const auto* name=current && status.name[0]?status.name:hub;
+        if (rrcWritable()) snprintf(text,sizeof text,"%s · %s · %u/%u bytes",name,handheld::rrc::phaseName(status.phase),unsigned(_inputText.size()),limit.maximum);
+        else snprintf(text,sizeof text,"%s · %s",name,handheld::rrc::phaseName(status.phase));
+        if (_lblHeaderMeta) lv_label_set_text(_lblHeaderMeta,text);
+        return;
+    }
     if (_lblHeaderMeta && strcmp(lv_label_get_text(_lblHeaderMeta), _peerHex.c_str())) {
         lv_label_set_text(_lblHeaderMeta, _peerHex.c_str());
     }
@@ -117,6 +134,20 @@ void LvMessageView::markVisibleConversationRead() {
     const auto now = uint32_t(millis());
     if (_readRetry && uint32_t(now - _readRetryStarted) < 1000) return;
     if (!_service->available()) return;
+    if (_rrcMode) {
+        if (!_readThrough || !windowMatches()) return;
+        const auto view=_rrcView;
+        auto command=rrcCommand(handheld::rrc::Action::MarkRead);command.counter=_readThrough;
+        _markReadPending=false;_readInFlight=true;
+        const auto id=_service->rrcCommand(command,nullptr,0,[this,view](const handheld::Result& result) {
+            _readInFlight=false;
+            if (_rrcView==view && result.outcome!=handheld::Outcome::Ok) {
+                _markReadPending=true;_readRetry=true;_readRetryStarted=millis();
+            }
+        });
+        if (!id) { _readInFlight=false;_markReadPending=true;_readRetry=true;_readRetryStarted=now; }
+        return;
+    }
     std::array<uint8_t, 16> peer;
     memcpy(peer.data(), _service->historyWindow().peer(), peer.size());
     const auto identity = _service->status().generation;
@@ -147,6 +178,7 @@ void LvMessageView::markVisibleConversationRead() {
 void LvMessageView::updateComposerState() {
     if (!_btnSend) return;
     bool hasText = !_inputText.empty();
+    if (_rrcMode && (!_rrcLoaded || !rrcWritable())) hasText=false;
     lv_obj_set_style_border_color(_btnSend, lv_color_hex(hasText ? Theme::PRIMARY : Theme::BORDER), 0);
     lv_obj_set_style_bg_color(_btnSend, lv_color_hex(hasText ? Theme::PRIMARY_SUBTLE : Theme::BG_ELEVATED), 0);
     if (_textarea) {
@@ -158,6 +190,7 @@ void LvMessageView::updateComposerState() {
 void LvMessageView::composerEdited() {
     if (_nextDraftRevision != UINT64_MAX) ++_nextDraftRevision;
     _draftRevision = _nextDraftRevision;
+    if (_rrcMode) { _rrcEditAt=millis();_rrcResendConfirmed=false;return; }
     if (_peerHex == _retainedDraftPeer && _service &&
         _retainedDraftIdentity == _service->status().generation) {
         _retainedDraft = _inputText;
@@ -168,8 +201,8 @@ void LvMessageView::composerEdited() {
 void LvMessageView::refreshComposerPlaceholder() {
     if (!_textarea) return;
     bool focused = lv_obj_has_state(_textarea, LV_STATE_FOCUSED);
-    lv_textarea_set_placeholder_text(_textarea,
-        (_inputText.empty() && !focused) ? kComposerPlaceholder : "");
+    lv_textarea_set_placeholder_text(_textarea, _rrcMode && !rrcWritable()?"Hub notices are read-only":
+        _rrcMode && !_rrcLoaded?"Loading draft...":(_inputText.empty() && !focused) ? kComposerPlaceholder : "");
     updateComposerText();
 }
 
@@ -329,7 +362,7 @@ void LvMessageView::createUI(lv_obj_t* parent) {
     lv_obj_set_size(_textarea, Theme::CONTENT_W - kComposerButtonW - 12, 23);
     lv_obj_align(_textarea, LV_ALIGN_LEFT_MID, 0, 0);
     lv_textarea_set_one_line(_textarea, true);
-    lv_textarea_set_max_length(_textarea, MAX_COMPOSER_CHARS + 1);
+    lv_textarea_set_max_length(_textarea, (_rrcMode?handheld::rrc::DraftCapacity:MAX_COMPOSER_CHARS) + 1);
     lv_textarea_set_placeholder_text(_textarea, kComposerPlaceholder);
     lv_obj_add_style(_textarea, LvTheme::styleTextarea(), 0);
     lv_obj_add_style(_textarea, LvTheme::styleTextareaFocused(), LV_STATE_FOCUSED);
@@ -374,8 +407,10 @@ void LvMessageView::createUI(lv_obj_t* parent) {
     updateComposerState();
 }
 
-void LvMessageView::setPeerHex(const std::string& hex) {
-    if (_peerHex == hex) return;
+bool LvMessageView::setPeerHex(const std::string& hex) {
+    if (_rrcMode && !leaveRrcDraft()) return false;
+    const bool wasRrc=_rrcMode;_rrcMode=false;++_rrcView;
+    if (_peerHex == hex && !wasRrc) return true;
     clearMessages();
     if (_service) _service->historyWindow().acknowledgePublication(_service->historyWindow().revision());
     _peerHex = hex;
@@ -391,10 +426,12 @@ void LvMessageView::setPeerHex(const std::string& hex) {
         _readThrough = 0; _readRetry = false;
         refreshUI();
     }
+    return true;
 }
 
 bool LvMessageView::windowMatches() const {
     if (!_service || _peerHex.size() != 32) return false;
+    if (_service->rrcHistory()!=_rrcMode) return false;
     const auto& window = _service->historyWindow();
     if (window.identityGeneration() != _service->status().generation) return false;
     static constexpr char hex[] = "0123456789abcdef";
@@ -562,6 +599,11 @@ void LvMessageView::destroyUI() {
 
 void LvMessageView::onEnter() {
     _entered = true;
+    if (_rrcMode) {
+        _markReadPending=false;_readThrough=0;_readRetry=false;
+        _scrollToEnd=true;_atBottom=true;hideSendModeMenu();clearMessages();
+        enterRrcHistory();loadRrcDraft();updateComposerText();updateHeader();updateComposerState();return;
+    }
     _nameResolved = false;
     _markReadPending = _service != nullptr;
     _readThrough = 0; _readRetry = false;
@@ -577,6 +619,11 @@ void LvMessageView::onEnter() {
 }
 
 void LvMessageView::onExit() {
+    if (_rrcMode) saveRrcDraft(true);
+    else if (_service && !_inputText.empty() && (!_sendPending || _retainedDraftPeer==_peerHex)) {
+        _retainedDraft=_inputText;_retainedDraftPeer=_peerHex;_retainedDraftRevision=_draftRevision;
+        _retainedDraftIdentity=_service->status().generation;
+    }
     saveScroll(); _entered = false;
     _nameResolved = false;
     clearMessages();
@@ -585,10 +632,11 @@ void LvMessageView::onExit() {
         _service->historyWindow().acknowledgePublication(_service->historyWindow().revision());
     }
     _markReadPending = false;
-    hideSendModeMenu(); _inputText.clear();
+    hideSendModeMenu(); if (!_rrcMode && (!_sendPending || _retainedDraftPeer==_peerHex)) _inputText.clear();
 }
 
 void LvMessageView::refreshUI() {
+    pollRrc();
     if (!_screen || !_entered || !_service) return;
     auto& window = _service->historyWindow();
     const bool matches = windowMatches();
@@ -611,12 +659,19 @@ void LvMessageView::refreshUI() {
         }
     }
     updateHeader(); updateHistoryControls(); updateHistoryFocus();
-    if (matches && window.visible() && window.statusReady() && window.mode() == HistoryWindow::Mode::Chat) {
+    if (matches && window.visible() && window.statusReady() &&
+        (window.mode() == HistoryWindow::Mode::Chat || (_rrcMode && window.mode() == HistoryWindow::Mode::Full))) {
         // New incoming tuples can request one further write while the current
         // one is held. Status changes and stale unread snapshots cannot.
         for (size_t i = 0; i < window.spanCount(); ++i) {
             const auto& row = *window.span(i);
-            if (row.incoming() && !row.unavailable() && row.counter > _readThrough) {
+            bool visible=true;
+            if (_rrcMode && _bubbleBoxes[i]) {
+                lv_area_t item,viewport;lv_obj_get_coords(_bubbleBoxes[i],&item);lv_obj_get_coords(_msgScroll,&viewport);
+                // Seeing the end also covers a message taller than the screen.
+                visible=item.y2>=viewport.y1 && item.y2<=viewport.y2;
+            }
+            if (visible && row.incoming() && !row.unavailable() && row.counter > _readThrough) {
                 _readThrough = row.counter;
                 if (!(row.flags & Span::Read)) _markReadPending = true;
             }
@@ -657,7 +712,7 @@ void LvMessageView::appendMessage(size_t index, const Span& span, const char* te
     lv_obj_set_style_pad_row(box, 3, 0);
     lv_obj_set_style_radius(box, 6, 0);
     lv_obj_set_style_border_width(box, 1, 0);
-    lv_obj_set_style_border_color(box, lv_color_hex(bubbleBorderColor(status)), 0);
+    lv_obj_set_style_border_color(box, lv_color_hex(_rrcMode ? Theme::BORDER : bubbleBorderColor(status)), 0);
     lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
 
     if (span.incoming()) {
@@ -671,7 +726,7 @@ void LvMessageView::appendMessage(size_t index, const Span& span, const char* te
 
     // Message text color - incoming is plain text, outgoing reflects delivery status
     uint32_t textColor = Theme::TEXT_PRIMARY; // incoming default
-    if (!span.incoming()) {
+    if (!span.incoming() && !_rrcMode) {
         switch (status) {
             case LXMFStatus::QUEUED:
             case LXMFStatus::SENDING:
@@ -778,7 +833,7 @@ void LvMessageView::updateMessageStatus(size_t index, const Span& span) {
     const auto previousMetaHeight = lv_obj_get_height(lv_obj_get_parent(statusLbl));
     applyStatusGlyph(statusLbl, span);
     if (bubbleBox) {
-        lv_obj_set_style_border_color(bubbleBox, lv_color_hex(bubbleBorderColor(status)), 0);
+        lv_obj_set_style_border_color(bubbleBox, lv_color_hex(_rrcMode ? Theme::BORDER : bubbleBorderColor(status)), 0);
         // History rows pin their height after layout. A transient storage
         // caption can add or remove a line without rebuilding the history.
         if (lv_obj_get_style_height(lv_obj_get_parent(statusLbl), 0) != previousMetaHeight) {
@@ -790,9 +845,9 @@ void LvMessageView::updateMessageStatus(size_t index, const Span& span) {
     // Update text color to match status
     if (textLbl) {
         uint32_t textColor = Theme::TEXT_PRIMARY;
-        if (status == LXMFStatus::QUEUED || status == LXMFStatus::SENDING) {
+        if (!_rrcMode && (status == LXMFStatus::QUEUED || status == LXMFStatus::SENDING)) {
             textColor = Theme::TEXT_SECONDARY;
-        } else if (status == LXMFStatus::FAILED) {
+        } else if (!_rrcMode && status == LXMFStatus::FAILED) {
             textColor = Theme::ERROR_CLR;
         }
         lv_obj_set_style_text_color(textLbl, lv_color_hex(textColor), 0);
@@ -801,6 +856,12 @@ void LvMessageView::updateMessageStatus(size_t index, const Span& span) {
 
 void LvMessageView::applyStatusGlyph(lv_obj_t* lbl, const Span& span) {
     if (!lbl) return;
+    if (_rrcMode) {
+        lv_label_set_text(lbl,handheld::history::rrc::statusName(span.status));
+        lv_obj_set_style_text_color(lbl,lv_color_hex(span.status==uint8_t(handheld::storage::rrc::Status::Failed)?Theme::ERROR_CLR:
+            span.status==uint8_t(handheld::storage::rrc::Status::Confirmed)?Theme::SUCCESS:Theme::TEXT_MUTED),0);
+        return;
+    }
     const char* glyph = messageStatusLabel(static_cast<LXMFStatus>(span.status));
     uint32_t color;
     switch (static_cast<LXMFStatus>(span.status)) {
@@ -859,6 +920,7 @@ void LvMessageView::applyStatusGlyph(lv_obj_t* lbl, const Span& span) {
 }
 
 void LvMessageView::sendCurrentMessage(bool viaLink) {
+    if (_rrcMode) { sendRrcMessage();return; }
     if (!_service || _peerHex.empty() || _inputText.empty() || _sendPending) return;
     if (_inputText.size() > MAX_COMPOSER_CHARS) {
         if (_ui) _ui->lvStatusBar().showToast("Message too long", 1500);
@@ -875,7 +937,7 @@ void LvMessageView::sendCurrentMessage(bool viaLink) {
     const auto id = _service->action(handheld::Operation::Send, _peerHex, _inputText, viaLink,
         [this, revision, identity](const handheld::Result& result) {
             _sendPending = false;
-            const bool sameView = _peerHex == _retainedDraftPeer && _service &&
+            const bool sameView = !_rrcMode && _peerHex == _retainedDraftPeer && _service &&
                                   _service->status().generation == identity;
             if (result.outcome == handheld::Outcome::Ok) {
                 if (sameView && _draftRevision == revision) _inputText.clear();
@@ -977,7 +1039,8 @@ bool LvMessageView::handleKey(const KeyEvent& event) {
     if (event.left || event.right) return true;
 
     if (event.character >= 0x20 && event.character < 0x7F) {
-        if (_inputText.size() >= MAX_COMPOSER_CHARS) {
+        if (_rrcMode && (!_rrcLoaded || !rrcWritable())) return true;
+        if (_inputText.size() >= (_rrcMode ? handheld::rrc::DraftCapacity : MAX_COMPOSER_CHARS)) {
             if (_ui) _ui->lvStatusBar().showToast("Message too long", 900);
             return true;
         }
@@ -1041,7 +1104,7 @@ void LvMessageView::showSendModeMenu() {
 
         _sendLabels[i] = lv_label_create(row);
         lv_obj_set_style_text_font(_sendLabels[i], &lv_font_rsdeck_12, 0);
-        lv_label_set_text(_sendLabels[i], labels[i]);
+        lv_label_set_text(_sendLabels[i], _rrcMode && i==1 ? "Send as action" : labels[i]);
         lv_obj_center(_sendLabels[i]);
         _sendRows[i] = row;
     }
@@ -1080,5 +1143,9 @@ void LvMessageView::chooseSendMode(int idx) {
         return;
     }
     hideSendModeMenu();
+    if (_rrcMode) _rrcEmote=idx==1;
     sendCurrentMessage(viaLink);
+    if (_rrcMode) _rrcEmote=false;
 }
+
+#include "LvRrcChat.inc"

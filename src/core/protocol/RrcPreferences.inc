@@ -12,9 +12,13 @@ void RustRrcEngine::preferenceDone(Code result) {
     if (_preferences.revision) {
         _status.preferenceRevision = _preferences.revision;
         _status.preferenceResult = result;
+        _status.preferenceRecordRevision = result == Code::Ok ? _preferences.record.revision() : 0;
     }
-    if (result != Code::Ok) {
+    if (result != Code::Ok && !(_preferences.action == Action::Draft && (_preferences.record.flags() & 1) && result == Code::Stale)) {
         notice(result == Code::Storage ? "Preferences were not saved" : "Channel request failed");
+    }
+    if (result != Code::Ok && (_preferences.step == PreferenceStep::ReadJoin ||
+        _preferences.step == PreferenceStep::WriteRoom || _preferences.step == PreferenceStep::WriteHub)) {
         _joinRoom = UINT8_MAX; _joinConfirmed = false; _joinPreferenceLength = 0;
     }
     wipe(&_preferences.record, sizeof _preferences.record);
@@ -90,13 +94,15 @@ RustRrcEngine::Code RustRrcEngine::preferenceCommand(const Command& command, con
     }
     case Action::Draft: {
         if (length > DraftCapacity) return Code::TooLong;
-        if (length && memchr(body, 0, length)) return Code::Invalid;
+        if (!validDraftText(body,length)) return Code::Invalid;
+        if ((command.flags & 1) && !command.counter) return Code::Invalid;
         disk::Context scope;
         if (!context(command.hub, command.room, nonzero(command.participant) ? command.participant : nullptr, scope)) return Code::Invalid;
         uint8_t payload[DraftCapacity + 8]{}; memcpy(payload, "HRD1", 4);
         store::prepared::write32(payload + 4, command.revision);
         if (length) memcpy(payload + 8, body, length);
         Record::make(_preferences.record, scope, disk::Kind::Draft, payload, 8 + length);
+        if (command.flags & 1) { _preferences.record.flags(1); _preferences.record.revision(command.counter); _preferences.record.seal(); }
         _preferences.step = PreferenceStep::WriteDraft; _preferences.write = true; return Code::Ok;
     }
     case Action::MarkRead: case Action::ClearHistory: {
@@ -130,7 +136,7 @@ void RustRrcEngine::pollPreferences() {
         if (!good) {
             if (step == PreferenceStep::ReadRoot) { _preferences.ready = true; _preferences.corrupt = true; }
             if (step == PreferenceStep::ReadJoin && _preferences.room < RoomCapacity) _rooms[_preferences.room].view.phase = RoomPhase::Error;
-            preferenceDone(Code::Storage); return;
+            preferenceDone(result.error == store::Error::Stale ? Code::Stale : Code::Storage); return;
         }
         if (step == PreferenceStep::ReadUnread) {
             if (_preferences.room < RoomCapacity) {
@@ -229,7 +235,8 @@ void RustRrcEngine::pollPreferences() {
         } else if (_preferences.step == PreferenceStep::MarkRead) operation = store::Operation::RrcMarkRead;
         else if (_preferences.step == PreferenceStep::ClearHistory) operation = store::Operation::RrcClear;
         const auto submitted = _d.store->requestRrc(operation, _preferences.record, nullptr,
-            operation == store::Operation::RrcMarkRead ? _preferences.record.counter() : 0);
+            operation == store::Operation::RrcMarkRead ? _preferences.record.counter() : 0,
+            _preferences.step == PreferenceStep::WriteDraft && (_preferences.record.flags() & 1) ? _preferences.record.revision() : 0);
         if (submitted.accepted()) _preferences.ticket = submitted.ticket;
         else if (submitted.rejection != store::Rejection::Busy) preferenceDone(Code::Storage);
     }
