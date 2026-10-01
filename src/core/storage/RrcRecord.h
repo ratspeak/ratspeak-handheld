@@ -64,7 +64,17 @@ struct Record {
         out.seal(); return true;
     }
 };
-inline bool operation(Operation op) { return op >= Operation::RrcRead && op <= Operation::RrcClear; }
+// A worker page contains metadata only. Keys are local conversation identities,
+// never RNS destinations. The transcript is not counted by this metadata query.
+struct SavedRoom {
+    uint8_t key[16]{};
+    char name[65]{};
+    uint8_t notifications = 0;
+    bool keyRemembered = false;
+};
+constexpr size_t SavedPageCapacity = 4;
+inline bool operation(Operation op) { return op >= Operation::RrcRead && op <= Operation::RrcSavedRooms; }
+static_assert(SavedPageCapacity * sizeof(SavedRoom) <= Budget::SmallPayload, "Saved channels share one metadata credit");
 static_assert(sizeof(Context) == 48 && sizeof(Record) <= Budget::SmallPayload && sizeof(Selector) <= 28,
               "RRC records and pages must fit existing small storage credits");
 }

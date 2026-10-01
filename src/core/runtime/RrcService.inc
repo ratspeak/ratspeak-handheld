@@ -85,12 +85,6 @@ void DeviceService::executeRrc(uint8_t slot) {
         const size_t count = _backend.rrcRooms(rows, rrc::RoomCapacity);
         if (count > rrc::RoomCapacity) { complete(slot, Outcome::Invalid); return; }
         publish(rows, count, sizeof rows[0]);
-    } else if (request.operation == Operation::RrcChannels) {
-        rrc::RoomView rows[4]{};
-        const auto count=_backend.rrcChannels(rows,4,request.offset);
-        if (count>4) {complete(slot,Outcome::Invalid);return;}
-        rrc::RoomView next;result.more=_backend.rrcChannels(&next,1,request.offset+count)!=0;
-        result.next=request.offset+count;publish(rows,count,sizeof rows[0]);
     } else if (request.operation == Operation::RrcPeople) {
         char room[65]{};
         if (_mailbox.length(slot) >= sizeof room || !_mailbox.read(slot, room, _mailbox.length(slot))) { complete(slot, Outcome::Invalid); return; }
@@ -113,6 +107,16 @@ storage::Submission DeviceService::submitRrcRead(uint8_t slot) {
     storage::rrc::Context context;
     if (!readRrcContext(slot, context)) return {{}, storage::Rejection::Invalid};
     const auto& request = _mailbox.request(slot);
+    if (rrcCatalog(request.operation)) {
+        for (auto byte:context.conversation) if (byte) return {{},storage::Rejection::Invalid};
+        const auto status=_backend.rrcStatus();
+        if (request.revision!=status.generation || (request.operation==Operation::RrcChannels && request.statusRevision!=status.revision))
+            return {{},storage::Rejection::Fenced};
+        storage::rrc::Record record;uint32_t cursor=0;
+        if (!history::rrc_catalog::prepare(_backend,context.hub,request.operation==Operation::RrcChannels,request.offset,record,cursor))
+            return {{},storage::Rejection::Invalid};
+        return _messages.requestRrc(storage::Operation::RrcSavedRooms,record,nullptr,cursor);
+    }
     if (request.operation == Operation::RrcDraft) {
         storage::rrc::Record record;
         storage::rrc::Record::make(record, context, storage::rrc::Kind::Draft, nullptr, 0);
@@ -131,6 +135,17 @@ Result DeviceService::projectRrcRead(const storage::Result& stored) {
     }
     if (stored.outcome != storage::Outcome::Committed) return result;
     auto invalid = [&]() { result.storageError = storage::Error::InvalidRecord; return result; };
+    if (rrcCatalog(request.operation)) {
+        const auto status=_backend.rrcStatus();
+        if (request.revision!=status.generation || (request.operation==Operation::RrcChannels && request.statusRevision!=status.revision)) {
+            result.outcome=Outcome::Stale;result.storageError=storage::Error::Stale;return result;
+        }
+        rrc::RoomView rows[history::rrc_catalog::Capacity];size_t count=0;bool more=false;
+        if (!history::rrc_catalog::project(_backend,context.hub,request.operation==Operation::RrcChannels,request.offset,
+            stored,reinterpret_cast<const uint8_t*>(_scratch),rows,count,more) || !_mailbox.write(slot,rows,count*sizeof rows[0])) return invalid();
+        result.length=count*sizeof rows[0];result.more=more;result.next=request.offset+count;
+        result.total=count;result.outcome=Outcome::Ok;return result;
+    }
     if (request.operation == Operation::RrcDraft || request.operation == Operation::RrcDetail) {
         storage::rrc::Record record;
         if (stored.length) {

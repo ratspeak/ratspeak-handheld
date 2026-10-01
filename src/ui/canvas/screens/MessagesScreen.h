@@ -9,6 +9,7 @@
 
 class AnnounceManager;
 class ProtocolBackend;
+class MessageStore;
 
 class MessagesScreen : public Screen {
 public:
@@ -21,6 +22,7 @@ public:
     void setLXMFManager(LXMFManager* lxmf) { _lxmf = lxmf; }
     void setAnnounceManager(AnnounceManager* am) { _am = am; }
     void setBackend(ProtocolBackend* backend) { _backend = backend; }
+    void setMessageStore(MessageStore* store) { _store=store; }
 
     // Callback to open a conversation
     using OpenConversationCb = std::function<void(const std::string& peerHex)>;
@@ -38,6 +40,7 @@ public:
 
 private:
     void pollRrc();
+    bool pollRrcCatalog();
     void renderRrc(M5Canvas&, int y);
     bool handleRrcKey(const KeyEvent&);
     void switchFamily();
@@ -45,6 +48,8 @@ private:
     handheld::ui::RrcBrowser _rrc;
     TextInput _rrcInput;
     uint32_t _rrcFormView = 0;
+    uint32_t _rrcQueryView = 0, _rrcQuerySession = 0, _rrcQueryRevision = 0, _rrcQueryOffset = 0;
+    bool _rrcQueryMerged = false;
     bool _rememberKey = false;
     using Conversations = handheld::history::ConversationList;
     std::string peerHex(size_t index) const;
@@ -61,6 +66,7 @@ private:
     LXMFManager* _lxmf = nullptr;
     AnnounceManager* _am = nullptr;
     ProtocolBackend* _backend = nullptr;
+    MessageStore* _store = nullptr;
     Conversations _conversations;
     OpenConversationCb _openCb;
     AddContactCb _addContactCb;

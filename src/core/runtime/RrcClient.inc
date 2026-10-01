@@ -25,7 +25,15 @@ uint32_t ServiceClient::requestRrcRooms(RrcCompletion<rrc::RoomView> completion)
 uint32_t ServiceClient::requestRrcChannels(size_t offset, RrcCompletion<rrc::RoomView> completion) {
     if (offset>UINT32_MAX) return 0;
     Request request;request.operation=Operation::RrcChannels;request.offset=offset;
-    return rrcQuery<rrc::RoomView,4>(request,nullptr,0,std::move(completion));
+    request.statusRevision=_status.rrc.revision;
+    rrc::Conversation binding;memcpy(binding.hub,_status.rrc.hub,16);
+    return rrcQuery<rrc::RoomView,4>(request,&binding,sizeof binding,std::move(completion));
+}
+uint32_t ServiceClient::requestRrcSavedRooms(const uint8_t hub[16],size_t offset,RrcCompletion<rrc::RoomView> completion) {
+    if (!hub || offset>UINT32_MAX) return 0;
+    Request request;request.operation=Operation::RrcSavedRooms;request.offset=offset;
+    rrc::Conversation binding;memcpy(binding.hub,hub,16);
+    return rrcQuery<rrc::RoomView,4>(request,&binding,sizeof binding,std::move(completion));
 }
 uint32_t ServiceClient::requestRrcPeople(const char* room, RrcCompletion<rrc::PersonView> completion) {
     const size_t length = room ? strnlen(room, 65) : 0;

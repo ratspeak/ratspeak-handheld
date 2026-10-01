@@ -31,6 +31,8 @@ public:
     handheld::rrc::Status status() const;
     size_t hubs(handheld::rrc::HubView*, size_t capacity) const;
     size_t rooms(handheld::rrc::RoomView*, size_t capacity) const;
+    // Live + public (non-saved) projection. A null output counts this prefix;
+    // the storage worker supplies saved rooms outside the active room table.
     size_t channels(handheld::rrc::RoomView*, size_t capacity, size_t offset = 0) const;
     size_t people(const char* room, handheld::rrc::PersonView*, size_t capacity) const;
     size_t directory(handheld::rrc::DirectoryView*, size_t capacity, size_t offset = 0) const;

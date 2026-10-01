@@ -5,6 +5,8 @@
 #include "reticulum/AnnounceManager.h"
 #include "protocol/ProtocolBackend.h"
 #include "ui/RrcCommandId.h"
+#include "history/RrcCatalog.h"
+#include "storage/MessageStore.h"
 
 namespace {
 constexpr int NavigationHeight = 18;
@@ -23,14 +25,49 @@ void MessagesScreen::pollRrc() {
     using Page = handheld::ui::RrcNavigation::Page;
     using namespace handheld::rrc;
     const auto view = _rrc.beginRows();
+    const auto page=_rrc.navigation.page();
+    if (page==Page::Channels || page==Page::SavedRooms) {
+        if (_deleteTicket.valid()) { _rrc.cancelRows(view);return; }
+        const auto status=_backend->rrcStatus();
+        const auto* hub=page==Page::Channels?status.hub:_rrc.navigation.conversation().hub;
+        handheld::storage::rrc::Record record;uint32_t cursor=0;
+        if (!_store || !handheld::history::rrc_catalog::prepare(*_backend,hub,page==Page::Channels,_rrc.navigation.offset(),record,cursor)) {
+            _rrc.completeRows(view,false);return;
+        }
+        const auto submitted=_store->requestRrc(handheld::storage::Operation::RrcSavedRooms,record,nullptr,cursor);
+        if (!submitted.accepted()) {
+            if (submitted.rejection==handheld::storage::Rejection::Busy) _rrc.cancelRows(view);
+            else _rrc.completeRows(view,false);
+            return;
+        }
+        _deleteTicket=submitted.ticket;_deleteSettled=false;memcpy(_deletePeer,hub,16);
+        _rrcQueryView=view;_rrcQuerySession=status.generation;_rrcQueryRevision=status.revision;
+        _rrcQueryOffset=_rrc.navigation.offset();_rrcQueryMerged=page==Page::Channels;return;
+    }
+    if (page==Page::People && !_rrc.navigation.conversationCurrent()) { _rrc.completeRows(view,false);return; }
     if (!_rrc.completeRows(view,true)) return;
     switch (_rrc.navigation.page()) {
     case Page::Hubs: { HubView rows[HubViewCapacity]; const auto count = _backend->rrcHubs(rows,HubViewCapacity); _rrc.rows(rows,count); break; }
-    case Page::Channels: { RoomView rows[5]; const auto count = _backend->rrcChannels(rows,5,_rrc.navigation.offset()); _rrc.rows(rows,count,false,true); break; }
     case Page::People: { PersonView rows[PeopleCapacity]; const auto count = _backend->rrcPeople(_rrc.navigation.conversation().room,rows,PeopleCapacity); _rrc.rows(rows,count); break; }
     case Page::Directory: { DirectoryView rows[5]; const auto count = _backend->rrcDirectory(rows,5,_rrc.navigation.offset()); _rrc.rows(rows,count,false,true); break; }
     default: break;
     }
+}
+bool MessagesScreen::pollRrcCatalog() {
+    if (!_rrcQueryView || !_deleteTicket.valid() || !_store || !_backend) return false;
+    handheld::storage::Result result;if (!_store->peekResult(_deleteTicket,result)) return false;
+    const auto status=_backend->rrcStatus();
+    const bool current=_visible && !_rrc.navigation.direct() && _rrcQuerySession==status.generation &&
+        (!_rrcQueryMerged || _rrcQueryRevision==status.revision);
+    uint8_t bytes[handheld::storage::Budget::SmallPayload];
+    handheld::rrc::RoomView rows[handheld::history::rrc_catalog::Capacity];size_t count=0;bool more=false;
+    const bool ok=current && result.length<=sizeof bytes && _store->readPayload(_deleteTicket,bytes,result.length) &&
+        handheld::history::rrc_catalog::project(*_backend,_deletePeer,_rrcQueryMerged,_rrcQueryOffset,result,bytes,rows,count,more);
+    if (!_store->releaseResult(_deleteTicket)) return false;
+    const auto view=_rrcQueryView;_rrcQueryView=0;_deleteTicket={};
+    if (!current) _rrc.cancelRows(view);
+    else if (_rrc.completeRows(view,ok)) _rrc.rows(rows,count,more,true);
+    return true;
 }
 void MessagesScreen::prepareRrcForm() {
     if (!_rrc.form() || _rrcFormView == _rrc.navigation.revision()) return;
@@ -132,6 +169,7 @@ std::string MessagesScreen::peerLabel(const std::string& peer) const {
 
 bool MessagesScreen::pollConversations(bool allowAdmission) {
     const auto rrcRevision = _rrc.revision();
+    pollRrcCatalog();
     if (allowAdmission) pollRrc();
     if (!_lxmf) return false;
     const auto publication = _conversations.revision(), statuses = _conversations.statusRevision();
@@ -252,6 +290,7 @@ void MessagesScreen::executeContextAction() {
 }
 
 bool MessagesScreen::pollDeletion() {
+    if (_rrcQueryView) return pollRrcCatalog();
     if (!_deleteTicket.valid()) {
         if (_deleteNotice && uint32_t(millis() - _deleteNoticeSince) >= 4000) {
             _deleteNotice = nullptr;

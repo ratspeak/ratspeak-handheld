@@ -34,8 +34,9 @@ void LvMessagesScreen::pollRrc() {
     auto completion=[this,view,identity,session,page](const handheld::Result& result,const auto* rows,size_t count) {
         const bool current=_active && !_rrc.navigation.direct() && identity==_service->status().generation &&
             session==_service->status().rrc.generation && page==_rrc.navigation.page();
-        if (_rrc.completeRows(view,current && result.outcome==handheld::Outcome::Ok))
-            _rrc.rows(rows,count,result.more,page==handheld::ui::RrcNavigation::Page::Directory || page==handheld::ui::RrcNavigation::Page::Channels);
+        if (!current || result.outcome==handheld::Outcome::Stale) _rrc.cancelRows(view);
+        else if (_rrc.completeRows(view,result.outcome==handheld::Outcome::Ok))
+            _rrc.rows(rows,count,result.more,page==handheld::ui::RrcNavigation::Page::Directory || page==handheld::ui::RrcNavigation::Page::Channels || page==handheld::ui::RrcNavigation::Page::SavedRooms);
         _rrcRetryAt=millis()+500;
     };
     uint32_t request=0;
@@ -43,8 +44,11 @@ void LvMessagesScreen::pollRrc() {
     switch (page) {
     case Page::Hubs: request=_service->requestRrcHubs(completion);break;
     case Page::Channels: request=_service->requestRrcChannels(_rrc.navigation.offset(),completion);break;
-    case Page::People: request=_service->requestRrcPeople(_rrc.navigation.conversation().room,completion);break;
+    case Page::People:
+        if (!_rrc.navigation.conversationCurrent()) { _rrc.completeRows(view,false);return; }
+        request=_service->requestRrcPeople(_rrc.navigation.conversation().room,completion);break;
     case Page::Directory: request=_service->requestRrcDirectory(_rrc.navigation.offset(),completion);break;
+    case Page::SavedRooms: request=_service->requestRrcSavedRooms(_rrc.navigation.conversation().hub,_rrc.navigation.offset(),completion);break;
     default: break;
     }
     if (!request) { _rrc.cancelRows(view);_rrcRetryAt=millis()+500; }
@@ -110,6 +114,10 @@ void LvMessagesScreen::renderRrc() {
     } else if (!_rrc.ready()) {
         auto* loading=label(_rrcPanel,&lv_font_rsdeck_12,Theme::TEXT_MUTED,0,0,Theme::CONTENT_W-16);
         lv_label_set_text(loading,"Loading...");
+        auto* back=button("Back",0);
+        lv_obj_add_event_cb(back,[](lv_event_t* event) {
+            auto* self=static_cast<LvMessagesScreen*>(lv_event_get_user_data(event));self->_rrc.back();self->renderRrc();
+        },LV_EVENT_CLICKED,this);
     } else {
         for (size_t n=0;n<_rrc.count() && n<sizeof _rrcRows/sizeof _rrcRows[0];++n) {
             char text[112];_rrc.label(n,_service->status().rrc,text,sizeof text);

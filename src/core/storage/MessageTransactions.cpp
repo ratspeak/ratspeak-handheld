@@ -1,6 +1,7 @@
 #include "MessageTransactions.h"
 #include "PreparedEnvelope.h"
 #include "RrcRecord.h"
+#include "protocol/RrcPreferences.h"
 #include "PurgeJournal.h"
 #include "config/Config.h"
 #include <Preferences.h>

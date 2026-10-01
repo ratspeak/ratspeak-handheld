@@ -170,6 +170,48 @@ void MessageTransactions::rrcTransaction(const Request& request, uint8_t* bytes,
     uint32_t deleted = 0;
     result.error = marker(rrc::Kind::Tombstone, deleted); if (result.error != Error::None) return;
 
+    if (request.operation == Operation::RrcSavedRooms) {
+        // HQS1 + page capacity + exclusion count + zero reserved bytes + keys.
+        // The caller excludes live rooms already projected by the protocol
+        // owner. The durable HRI1 index alone decides whether a room is saved;
+        // abandoned/forgotten room preferences cannot resurrect a bookmark.
+        const auto* query = input.payload();
+        if (kind != rrc::Kind::Preferences || input.payloadLength() < 8 ||
+            memcmp(query,"HQS1",4) || query[4] > rrc::SavedPageCapacity || query[5] > 8 ||
+            query[6] || query[7] || input.payloadLength() != 8 + size_t(query[5])*16) {
+            result.error=Error::InvalidRecord;return;
+        }
+        for (auto byte:context.conversation) if (byte) { result.error=Error::InvalidRecord;return; }
+        rrc::Record indexRecord;bool present=false;
+        result.error=rrcLoad(flash,path,context,rrc::Kind::Preferences,indexRecord,present);
+        if (result.error!=Error::None) return;
+        handheld::rrc::SavedIndex index;
+        if (present && (!handheld::rrc::decodeIndex(indexRecord.payload(),indexRecord.payloadLength(),index,nullptr,nullptr) ||
+            index.count>handheld::rrc::SavedRoomCapacity)) {result.error=Error::InvalidRecord;return;}
+        rrc::SavedRoom rows[rrc::SavedPageCapacity]{};size_t used=0,eligible=0;
+        for (size_t n=0;n<index.count;++n) {
+            bool excluded=false;
+            for (size_t m=0;m<query[5];++m) excluded |= !memcmp(index.keys[n],query+8+m*16,16);
+            if (excluded) continue;
+            const auto position=eligible++;
+            if (position<request.key.counter || used>=query[4]) continue;
+            auto scope=context;memcpy(scope.conversation,index.keys[n],16);
+            char roomPath[RrcPath];rrcPath(scope,rrc::Kind::Preferences,nullptr,roomPath);
+            rrc::Record room;bool found=false;
+            result.error=rrcLoad(flash,roomPath,scope,rrc::Kind::Preferences,room,found);
+            if (result.error!=Error::None) return;
+            if (!found || !handheld::rrc::validRoomPreference(room.payload(),room.payloadLength())) {
+                result.error=Error::InvalidRecord;return;
+            }
+            auto& row=rows[used++];memcpy(row.key,index.keys[n],16);memcpy(row.name,room.payload()+7,sizeof row.name);
+            row.notifications=room.payload()[4];row.keyRemembered=room.payloadLength()>handheld::rrc::RoomPreferenceHeader;
+            yield();
+        }
+        memcpy(bytes,rows,used*sizeof rows[0]);result.length=uint16_t(used*sizeof rows[0]);
+        result.total=eligible;result.nextOffset=request.key.counter+used;
+        result.more=result.nextOffset<eligible;result.outcome=Outcome::Committed;return;
+    }
+
     if (request.operation == Operation::RrcPage) {
         if (kind != rrc::Kind::Message || (request.historyDirection != HistoryDirection::Before &&
             request.historyDirection != HistoryDirection::After)) { result.error = Error::InvalidRecord; return; }

@@ -21,7 +21,8 @@ public:
         {Choice::BrowseHubs,"Browse other hubs"}, {Choice::HubInfo,"Hub details"},
         {Choice::Notices,"Hub notices"}, {Choice::Inbox,"Private notices"},
         {Choice::Nickname,"My nickname"}, {Choice::Advanced,"Advanced command"},
-        {Choice::Help,"Help"}, {Choice::Disconnect,"Disconnect hub"}, {Choice::Back,"Back"}
+        {Choice::Help,"Help"}, {Choice::Disconnect,"Disconnect hub"},
+        {Choice::SavedRooms,"Saved channels"}, {Choice::Back,"Back"}
     };
     static constexpr Item RoomActions[] = {
         {Choice::OpenChat,"Open conversation"}, {Choice::Join,"Join channel"},
@@ -72,12 +73,14 @@ public:
     }
     bool push(Page page) {
         if (_depth == sizeof _back / sizeof _back[0] || _revision == UINT32_MAX) return false;
-        _back[_depth++] = {_page, _offset, _selected};
+        if (_offset>UINT32_MAX || (_selected!=SIZE_MAX && _selected>=UINT16_MAX)) return false;
+        _back[_depth++] = {uint32_t(_offset), uint16_t(_selected), _page};
         _page = page; _offset = _selected = 0; changed(); return true;
     }
     void back() {
         if (!_depth) { root(); return; }
-        const auto frame = _back[--_depth]; _page = frame.page; _offset = frame.offset; _selected = frame.selected;
+        const auto frame = _back[--_depth]; _page = frame.page; _offset = frame.offset;
+        _selected = frame.selected==UINT16_MAX ? SIZE_MAX : frame.selected;
         if (!_depth && (_page == Page::Hubs || _page == Page::Channels)) _page = connected() ? Page::Channels : Page::Hubs;
         changed();
     }
@@ -92,8 +95,18 @@ public:
     }
     bool chooseRoom(const uint8_t hub[16], const char* room) {
         if (!hub || !room || !*room || strnlen(room, 65) > 64 || !push(Page::Room)) return false;
-        _conversation = {}; std::memcpy(_conversation.hub, hub, 16); copy(_conversation.room, room);
+        // The target can be the saved-list binding itself. Copy before clearing.
+        uint8_t target[16];std::memcpy(target,hub,16);
+        _conversation = {}; std::memcpy(_conversation.hub, target, 16); copy(_conversation.room, room);
         _conversationSession = _session; return true;
+    }
+    bool savedRooms(bool selectedHub=false) {
+        if (!push(Page::SavedRooms)) return false;
+        _conversation={};std::memcpy(_conversation.hub,selectedHub?_selectedHub:_activeHub,16);
+        _conversationSession=_session;return true;
+    }
+    bool conversationCurrent() const {
+        return _conversationSession==_session && !std::memcmp(_conversation.hub,_activeHub,16);
     }
     bool choosePerson(const rrc::PersonView& person) {
         if (!push(Page::Person)) return false;
@@ -126,8 +139,8 @@ private:
         std::memset(out, 0, N); if (n) std::memcpy(out, in, n);
     }
     void changed() { if (_revision != UINT32_MAX) ++_revision; }
-    struct Frame { Page page = Page::Hubs; size_t offset = 0, selected = 0; };
-    Frame _back[4]{};
+    struct Frame { uint32_t offset = 0; uint16_t selected = 0; Page page = Page::Hubs; };
+    Frame _back[8]{};
     rrc::Conversation _conversation;
     uint8_t _activeHub[16]{}, _selectedHub[16]{}, _person[16]{};
     char _hubName[33]{}, _personName[33]{};

@@ -11,7 +11,7 @@ namespace handheld {
 
 enum class Operation : uint8_t {
     Nodes, PeerName, ConversationPage, ConversationDetail, HistoryPage, ReadRecord, HistoryStatus, Settings, Identities, Scan, PropagationNodes,
-    RrcHubs, RrcRooms, RrcChannels, RrcPeople, RrcDirectory, RrcContext, RrcHistoryPage, RrcHistoryRecord, RrcHistoryStatus, RrcDraft, RrcDetail,
+    RrcHubs, RrcRooms, RrcChannels, RrcPeople, RrcDirectory, RrcContext, RrcHistoryPage, RrcHistoryRecord, RrcHistoryStatus, RrcDraft, RrcDetail, RrcSavedRooms,
     Send, MarkRead, DeleteConversation, SaveContact, DeleteContact, RenameContact,
     ApplySettings, Announce, CreateIdentity, ImportIdentity, Diagnostics,
     PropagationSync, RrcCommand, HomeReady, Restart, PowerOff, SwitchIdentity, FormatSD, WipeSD, FactoryReset,
@@ -25,7 +25,7 @@ constexpr bool lifecycleOperation(Operation op) {
     return op >= Operation::Restart;
 }
 constexpr bool queryOperation(Operation op) {
-    return op <= Operation::RrcDetail;
+    return op <= Operation::RrcSavedRooms;
 }
 
 struct Request {

@@ -787,6 +787,7 @@ void setup() {
     messagesScreen.setLXMFManager(&lxmf);
     messagesScreen.setAnnounceManager(announceManager);
     messagesScreen.setBackend(backend);
+    messagesScreen.setMessageStore(&messageStore);
     messagesScreen.setOpenCallback([](const std::string& peerHex) {
         if (!messageView.setPeerHex(peerHex)) return;
         ui.setScreen(&messageView);

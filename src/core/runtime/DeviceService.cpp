@@ -5,6 +5,7 @@
 #include "history/HistoryWindow.h"
 #include "history/ConversationWindow.h"
 #include "history/RrcHistory.h"
+#include "history/RrcCatalog.h"
 #include "protocol/RrcPreferences.h"
 #include "TaskOwner.h"
 #if !defined(RSCARDPUTER)
@@ -19,7 +20,8 @@
 namespace handheld {
 
 namespace {
-bool rrcRead(Operation operation) { return operation >= Operation::RrcHistoryPage && operation <= Operation::RrcDetail; }
+bool rrcCatalog(Operation operation) { return operation==Operation::RrcChannels || operation==Operation::RrcSavedRooms; }
+bool rrcRead(Operation operation) { return rrcCatalog(operation) || (operation >= Operation::RrcHistoryPage && operation <= Operation::RrcDetail); }
 history::HistoryWindow::Query rrcHistoryQuery(const Request& request, const storage::rrc::Context& context) {
     history::HistoryWindow::Query query;
     query.kind = request.operation == Operation::RrcHistoryPage ? history::HistoryWindow::Kind::Page :
@@ -41,6 +43,7 @@ size_t queryCapacity(Operation operation) {
         case Operation::RrcHistoryStatus: case Operation::HistoryStatus: return sizeof(history::HistoryWindow::StatusProjection);
         case Operation::RrcDraft: return sizeof(rrc::DraftView);
         case Operation::RrcDetail: return sizeof(rrc::MessageDetail);
+        case Operation::RrcChannels: case Operation::RrcSavedRooms: return 4*sizeof(rrc::RoomView);
         default: return 0;
     }
 }
@@ -124,14 +127,14 @@ bool DeviceService::readyForCommand() {
     const auto* request = _mailbox.nextRequest();
     if (!request) return false;
     if (request->operation == Operation::PropagationNodes || request->operation == Operation::PropagationSync ||
-        (request->operation >= Operation::RrcHubs && request->operation <= Operation::RrcContext)) return true;
+        (request->operation >= Operation::RrcHubs && request->operation <= Operation::RrcContext && !rrcCatalog(request->operation))) return true;
     if (!_messages.deferredIO()) return false;
     switch (request->operation) {
         case Operation::Send: case Operation::MarkRead: case Operation::DeleteConversation:
         case Operation::ConversationPage: case Operation::ConversationDetail:
         case Operation::HistoryPage: case Operation::ReadRecord: case Operation::HistoryStatus:
         case Operation::RrcHistoryPage: case Operation::RrcHistoryRecord: case Operation::RrcHistoryStatus:
-        case Operation::RrcDraft: case Operation::RrcDetail: case Operation::RrcCommand:
+        case Operation::RrcDraft: case Operation::RrcDetail: case Operation::RrcCommand: case Operation::RrcChannels: case Operation::RrcSavedRooms:
             return true; // Typed worker submissions and result copies only.
         default: return false; // Settings, contacts and callbacks may write inline.
     }
@@ -471,7 +474,7 @@ void DeviceService::execute(uint8_t slot) {
     if (!_mailbox.read(slot, _scratch, length)) { complete(slot, Outcome::Invalid); return; }
     _scratch[length] = 0;
     switch (request.operation) {
-    case Operation::RrcHubs: case Operation::RrcRooms: case Operation::RrcChannels: case Operation::RrcPeople: case Operation::RrcDirectory:
+    case Operation::RrcHubs: case Operation::RrcRooms: case Operation::RrcPeople: case Operation::RrcDirectory:
     case Operation::RrcContext: case Operation::RrcCommand:
         executeRrc(slot); break;
     case Operation::Send: {
@@ -631,7 +634,7 @@ void DeviceService::execute(uint8_t slot) {
     case Operation::ConversationPage: case Operation::ConversationDetail:
     case Operation::HistoryPage: case Operation::ReadRecord: case Operation::HistoryStatus:
     case Operation::RrcHistoryPage: case Operation::RrcHistoryRecord: case Operation::RrcHistoryStatus:
-    case Operation::RrcDraft: case Operation::RrcDetail:
+    case Operation::RrcDraft: case Operation::RrcDetail: case Operation::RrcChannels: case Operation::RrcSavedRooms:
         history(slot); break;
     case Operation::Identities: {
         JsonDocument doc; auto rows = doc.to<JsonArray>();
@@ -670,9 +673,9 @@ void DeviceService::history(uint8_t slot) {
     if (rrcRead(request.operation)) {
         storage::rrc::Context context;
         if (!readRrcContext(slot, context) ||
-            (request.operation != Operation::RrcDraft && (!storage::decodeHex(request.peer, strnlen(request.peer, sizeof request.peer), peer, 16) ||
+            (!rrcCatalog(request.operation) && request.operation != Operation::RrcDraft && (!storage::decodeHex(request.peer, strnlen(request.peer, sizeof request.peer), peer, 16) ||
              memcmp(peer, context.conversation, 16))) ||
-            (request.operation != Operation::RrcHistoryPage && request.operation != Operation::RrcDraft && !request.argument) ||
+            (!rrcCatalog(request.operation) && request.operation != Operation::RrcHistoryPage && request.operation != Operation::RrcDraft && !request.argument) ||
             (request.operation == Operation::RrcHistoryStatus && request.incoming) ||
             (request.historyDirection != storage::HistoryDirection::Before && request.historyDirection != storage::HistoryDirection::After)) {
             complete(slot, Outcome::Invalid); return;
@@ -803,6 +806,7 @@ void DeviceService::pollHistory() {
     }
     const auto slot = _querySlot; _querySlot = ServiceMailbox::NoSlot;
     Result result; result.outcome = Outcome::Failed; result.storageError = storage::Error::Unavailable;
+    if (submitted.rejection==storage::Rejection::Fenced) { result.outcome=Outcome::Stale;result.storageError=storage::Error::Stale; }
     result.key = key; _mailbox.complete(slot, result);
 }
 

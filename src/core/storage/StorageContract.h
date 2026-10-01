@@ -25,7 +25,7 @@ enum class Operation : uint8_t {
     CreateIncoming, CreateOutgoing, UpdateStatus, MarkRead, DeleteConversation,
     ReadRecord, ReadHistoryPage, ReadPending, ReadConversationPage, ReadConversation, Trim,
     LoadPrepared, WritePrepared, LoadPurge, WritePurge, ClearPurge,
-    RrcRead, RrcAppend, RrcWrite, RrcStatus, RrcPage, RrcMarkRead, RrcClear
+    RrcRead, RrcAppend, RrcWrite, RrcStatus, RrcPage, RrcMarkRead, RrcClear, RrcSavedRooms
 };
 enum class Rejection : uint8_t {
     None, Busy, Invalid, TooLarge, NoMemory, Unavailable, Fenced, Exhausted

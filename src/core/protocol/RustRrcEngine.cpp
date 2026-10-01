@@ -186,20 +186,22 @@ size_t RustRrcEngine::rooms(RoomView* output, size_t capacity) const {
     return used;
 }
 size_t RustRrcEngine::channels(RoomView* output, size_t capacity, size_t offset) const {
-    if (!output || !capacity) return 0;
     size_t used=0,position=0;
     for (const auto& room:_rooms) if (room.used) {
         if (position++<offset) continue;
-        output[used++]=room.view;if (used==capacity) return used;
+        if (output && used<capacity) output[used++]=room.view;
     }
     DirectoryView listed;
     for (size_t n=0;_directory.at(n,listed);++n) {
-        if (findRoom(listed.name) || position++<offset) continue;
-        auto& row=output[used++];row={};strcpy(row.name,listed.name);strcpy(row.topic,listed.topic);
-        row.phase=RoomPhase::Available;
-        if (used==capacity) break;
+        uint8_t key[16];
+        if (findRoom(listed.name) || rs_handheld_rrc_storage_key(0,reinterpret_cast<const uint8_t*>(listed.name),strlen(listed.name),key)!=RS_HANDHELD_OK ||
+            _savedRooms.find(key)>=0 || position++<offset) continue;
+        if (output && used<capacity) {
+            auto& row=output[used++];row={};strcpy(row.name,listed.name);strcpy(row.topic,listed.topic);
+            memcpy(row.key,key,16);row.phase=RoomPhase::Available;
+        }
     }
-    return used;
+    return output ? used : position;
 }
 size_t RustRrcEngine::people(const char* name, PersonView* output, size_t capacity) const {
     const auto* room = name ? findRoom(name) : nullptr; const uint8_t mask = room ? uint8_t(1u << (room - _rooms)) : 0xff;
