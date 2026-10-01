@@ -23,6 +23,12 @@ struct ResourceBudget {
     static constexpr size_t RelayPreparation = 512; // One stamp owner plus metadata; no retained body.
     static constexpr size_t PropagationInbox = 256; // Journal and scalar state; shared codec/storage credits.
     static constexpr size_t RecipientStampCosts = 1344; // 32 bounded policy rows; codec reuses KeyMap's I/O buffer.
+    static constexpr size_t RrcSessionMicro = 8704;
+    static constexpr size_t RrcSessionSmall = 14336;
+    // Aggregate added fixed owners versus the pre-RRC candidate, including UI
+    // and Service copies. Dynamic SDK/LVGL and stack floors remain independent.
+    static constexpr size_t RrcIncrementMicro = 12288;
+    static constexpr size_t RrcIncrementSmall = 24576;
     static constexpr size_t CanvasHistoryText = 4096;
     static constexpr size_t CanvasHistoryRows = 1024;
     // Two independent 400-byte drafts, peer/identity bindings and editor state.

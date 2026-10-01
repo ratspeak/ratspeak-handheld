@@ -4,6 +4,7 @@
 #include "protocol/RrcDirectory.h"
 #include "protocol/RustLinkManager.h"
 #include "storage/RrcRecord.h"
+#include "runtime/ResourceBudget.h"
 
 class MessageStore;
 class RustClock;
@@ -157,5 +158,5 @@ private:
     uint8_t _interface = UINT8_MAX, _failures = 0;
     bool _stopped = true, _pathRequested = false, _directoryWanted = false;
 };
-static_assert(sizeof(RustRrcEngine) <= (STORAGE_ASYNC_WRITES ? 10240 : 18432),
+static_assert(sizeof(RustRrcEngine) <= (STORAGE_ASYNC_WRITES ? handheld::ResourceBudget::RrcSessionMicro : handheld::ResourceBudget::RrcSessionSmall),
               "Review session residency before adding RRC state");
