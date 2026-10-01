@@ -308,7 +308,11 @@ RustRrcEngine::Code RustRrcEngine::command(const Command& command, const uint8_t
         size_t joined = 0; for (const auto& row : _rooms) if (row.used && row.wanted) ++joined;
         if (item && (item->view.phase == RoomPhase::Joined || item->view.phase == RoomPhase::Joining)) return Code::Ok;
         if ((!item || !item->wanted) && joined >= _status.roomsLimit) return Code::Full;
-        if (!item) for (auto& row : _rooms) if (!row.used || !row.wanted) { item = &row; break; }
+        if (!item) for (auto& row : _rooms) if (!row.used || !row.wanted) {
+            bool owned=false;for(const auto& receive:_receive)
+                owned|=receive.room==size_t(&row-_rooms) && (receive.ticket.valid() || receive.statusPending || receive.proofPending);
+            if(!owned) {item=&row;break;}
+        }
         if (!item) return Code::Full;
         if (_control.length || _joinRoom < RoomCapacity) return Code::Busy;
         if (!item->used || strcmp(item->view.name, room)) { *item = {}; item->used = true; strcpy(item->view.name, room);
@@ -364,7 +368,7 @@ RustRrcEngine::Code RustRrcEngine::send(const Command& command, const uint8_t* b
     disk::Context scope; if (!context(_status.hub, pm ? nullptr : room->view.name, pm ? command.participant : nullptr, scope)) return Code::Invalid;
     Record record; Record::make(record, scope, disk::Kind::Message, _send.packet, count, disk::Status::Pending, now());
     const auto submitted = _d.store->requestRrc(store::Operation::RrcAppend, record, _send.file,0,0,
-        store::HistoryDirection::Before,pm ? command.participant : nullptr);
+        store::HistoryDirection::Before,pm ? command.participant : nullptr,pm?_observation:room->observation);
     if (!submitted.accepted()) { wipe(&_send, sizeof _send); _send = {}; return Code::Storage; }
     _send.ticket = submitted.ticket; _send.length = count; _send.token = ++_sequence;
     _send.born = now(); _send.deadline = now() + wait(8); memcpy(_send.conversation, scope.conversation, 16);
@@ -545,7 +549,7 @@ void RustRrcEngine::onRrcPacket(Handle handle, const uint8_t* data, size_t lengt
         const bool ours = !memcmp(view.meta.source, _d.identity, 16) && room && (kind == 20 || kind == 22);
         Record record; Record::make(record, scope, disk::Kind::Message, data, length, ours ? disk::Status::Confirmed : disk::Status::Received, now());
         const auto submitted = _d.store->requestRrc(store::Operation::RrcAppend, record, file,0,0,
-            store::HistoryDirection::Before,view.meta.has_destination ? view.meta.source : nullptr);
+            store::HistoryDirection::Before,view.meta.has_destination ? view.meta.source : nullptr,room?room->observation:_observation);
         if (!submitted.accepted()) { ++_status.dropped; notice("Storage busy: message not saved"); return; }
         *pending = {}; pending->ticket = submitted.ticket; pending->link = handle; pending->confirming = ours;
         pending->room = room ? uint8_t(room - _rooms) : UINT8_MAX;
@@ -590,7 +594,7 @@ void RustRrcEngine::pollReceive() {
             else {
                 item.statusPending = false; item.proofPending = true; remember(item.file);
                 if (item.confirming && _send.length && !memcmp(item.file, _send.file, 16)) _send.confirmed = true;
-                if (!result.duplicate && item.room < RoomCapacity) { auto& room = _rooms[item.room];
+                if (!result.duplicate && item.room < RoomCapacity && !memcmp(record.context().conversation,_rooms[item.room].view.key,16)) { auto& room = _rooms[item.room];
                     if (record.status() == disk::Status::Received && room.view.unread != UINT32_MAX) ++room.view.unread;
                     ++room.view.revision;
                 }
@@ -658,7 +662,7 @@ void RustRrcEngine::loop() {
             rs_handheld_rrc_hub_identity(_status.hub, key, _status.identity) == RS_HANDHELD_OK) {
             _interface = route.interface_id;
             _d.links->openRrc(_status.hub, key, route, _link);
-            if (_link.valid()) { _status.phase = Phase::Connecting; _deadline = time + wait(8); changed(); }
+            if (_link.valid()) { RustEntropy::fill(_observation,sizeof _observation);_status.phase = Phase::Connecting; _deadline = time + wait(8); changed(); }
         } else if (!_pathRequested) {
             uint8_t tag[16]; RustEntropy::fill(tag, sizeof tag);
             _pathRequested = rs_handheld_rns_request_path(_d.ctx, _status.hub, tag, 0, time) == RS_HANDHELD_OK;

@@ -129,7 +129,7 @@ MessageStore::Submission MessageStore::requestPurgeJournal(const uint8_t local[1
 
 MessageStore::Submission MessageStore::requestRrc(Operation operation, const rrc::Record& record,
     const uint8_t fileKey[16], uint32_t cursor, uint32_t expectedRevision, HistoryDirection direction,
-    const uint8_t privateParticipant[16]) {
+    const uint8_t privateParticipant[16], const uint8_t observation[16]) {
     if (!rrc::operation(operation) || !record.valid(record.length()) ||
         (direction != HistoryDirection::Before && direction != HistoryDirection::After) ||
         ((operation == Operation::RrcAppend || operation == Operation::RrcStatus ||
@@ -140,6 +140,10 @@ MessageStore::Submission MessageStore::requestRrc(Operation operation, const rrc
         if (operation!=Operation::RrcAppend && (operation!=Operation::RrcWrite || record.kind()!=rrc::Kind::Draft))
             return {{},Rejection::Invalid};
         memcpy(request.source,privateParticipant,16);
+    }
+    if (observation) {
+        if (operation!=Operation::RrcAppend && operation!=Operation::RrcObserve) return {{},Rejection::Invalid};
+        memcpy(request.destination,observation,16);
     }
     request.offset = expectedRevision;
     request.hasMessageId = fileKey != nullptr; request.historyDirection = direction;

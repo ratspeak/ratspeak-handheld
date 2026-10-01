@@ -61,6 +61,7 @@ RustRrcEngine::Code RustRrcEngine::startJoin(Room& room, const uint8_t* key, siz
     _joinPreferenceLength = uint16_t(roomPreference(_joinPreference, room.view.name, uint8_t(room.view.notifications), sealed, sealedLength));
     _joinRoom = uint8_t(&room - _rooms); _joinConfirmed = false; _control.room = _joinRoom;
     _joinFromStored = false;
+    RustEntropy::fill(room.observation,sizeof room.observation);room.observationPending=true;
     room.wanted = true; room.view.needsKey = length != 0; room.view.phase = RoomPhase::Joining;
     room.deadline = now() + wait(8); changed(); return Code::Ok;
 }
@@ -160,11 +161,23 @@ void RustRrcEngine::pollPreferences() {
             _preferences.record.valid(result.length) && _preferences.record.matches(originalContext);
         _d.store->releaseResult(_preferences.ticket); _preferences.ticket = {};
         if (!good) {
+            if(step==PreferenceStep::Observe && _preferences.room<RoomCapacity &&
+                !memcmp(_rooms[_preferences.room].observation,_preferences.participant,16))
+                _rooms[_preferences.room].observationPending=false;
             if (step == PreferenceStep::ReadRoot) { _preferences.ready = true; _preferences.corrupt = true; }
             if (step == PreferenceStep::ReadJoin && _preferences.room < RoomCapacity) _rooms[_preferences.room].view.phase = RoomPhase::Error;
             preferenceDone(result.error == store::Error::Stale ? Code::Stale : Code::Storage); return;
         }
-        if (step == PreferenceStep::ReadUnread) {
+        if (step == PreferenceStep::Observe) {
+            if(_preferences.room<RoomCapacity) {
+                auto& room=_rooms[_preferences.room];
+                if(!memcmp(room.observation,_preferences.participant,16) &&
+                    !memcmp(room.view.key,originalContext.conversation,16) && !memcmp(_status.hub,originalContext.hub,16)) {
+                    room.observationPending=false;++room.view.revision;
+                }
+            }
+            preferenceDone(Code::Ok);
+        } else if (step == PreferenceStep::ReadUnread) {
             if (_preferences.room < RoomCapacity) {
                 auto& room = _rooms[_preferences.room];
                 if (room.view.revision != _preferences.roomRevision) return; // retry a superseded count
@@ -281,6 +294,14 @@ void RustRrcEngine::pollPreferences() {
         const auto size=roomPreference(payload,_rooms[slot].view.name,0,nullptr,0);
         Record::make(_preferences.record,scope,disk::Kind::Preferences,payload,size);
     }
+    if(!_stopped && _status.phase==Phase::Online && _preferences.step==PreferenceStep::Idle) {
+        for(auto& room:_rooms) if(room.used && room.view.phase==RoomPhase::Joined && room.observationPending) {
+            disk::Context scope;context(_status.hub,room.view.name,nullptr,scope);
+            Record::make(_preferences.record,scope,disk::Kind::Observation,nullptr,0);
+            _preferences.step=PreferenceStep::Observe;_preferences.room=uint8_t(&room-_rooms);
+            memcpy(_preferences.participant,room.observation,16);break;
+        }
+    }
     if (_preferences.step != PreferenceStep::Idle && !_preferences.ticket.valid()) {
         auto operation = _preferences.write ? store::Operation::RrcWrite : store::Operation::RrcRead;
         if (_preferences.step == PreferenceStep::ReadUnread) {
@@ -288,10 +309,12 @@ void RustRrcEngine::pollPreferences() {
             if (_preferences.room < RoomCapacity) _preferences.roomRevision = _rooms[_preferences.room].view.revision;
         } else if (_preferences.step == PreferenceStep::MarkRead) operation = store::Operation::RrcMarkRead;
         else if (_preferences.step == PreferenceStep::ClearHistory) operation = store::Operation::RrcClear;
+        else if (_preferences.step == PreferenceStep::Observe) operation = store::Operation::RrcObserve;
         const auto submitted = _d.store->requestRrc(operation, _preferences.record, nullptr,
             operation == store::Operation::RrcMarkRead ? _preferences.record.counter() : 0,
             _preferences.step == PreferenceStep::WriteDraft && (_preferences.record.flags() & 1) ? _preferences.record.revision() : 0,
-            store::HistoryDirection::Before,_preferences.step==PreferenceStep::WriteDraft && nonzero(_preferences.participant) ? _preferences.participant : nullptr);
+            store::HistoryDirection::Before,_preferences.step==PreferenceStep::WriteDraft && nonzero(_preferences.participant) ? _preferences.participant : nullptr,
+            _preferences.step==PreferenceStep::Observe?_preferences.participant:nullptr);
         if (submitted.accepted()) _preferences.ticket = submitted.ticket;
         else if (submitted.rejection != store::Rejection::Busy) preferenceDone(Code::Storage);
     }

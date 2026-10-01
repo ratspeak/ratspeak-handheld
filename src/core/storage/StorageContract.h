@@ -25,7 +25,7 @@ enum class Operation : uint8_t {
     CreateIncoming, CreateOutgoing, UpdateStatus, MarkRead, DeleteConversation,
     ReadRecord, ReadHistoryPage, ReadPending, ReadConversationPage, ReadConversation, Trim,
     LoadPrepared, WritePrepared, LoadPurge, WritePurge, ClearPurge,
-    RrcRead, RrcAppend, RrcWrite, RrcStatus, RrcPage, RrcMarkRead, RrcClear, RrcSavedRooms, RrcPrivateInbox
+    RrcRead, RrcAppend, RrcWrite, RrcStatus, RrcPage, RrcMarkRead, RrcClear, RrcSavedRooms, RrcPrivateInbox, RrcObserve
 };
 enum class Rejection : uint8_t {
     None, Busy, Invalid, TooLarge, NoMemory, Unavailable, Fenced, Exhausted
@@ -63,6 +63,7 @@ struct Request {
     // RrcPage uses historyDirection and an exclusive local counter boundary.
     // RrcPrivateInbox uses the descriptor counter in the same way. Private
     // RrcAppend/RrcWrite(Draft) source holds the exact participant identity.
+    // RrcAppend/RrcObserve destination holds the local observation nonce.
     // They never participate in LXMF counts, deletion fences or history queries.
     // ReadPending: exclusive after (counter, peer), outgoing only.
     // ReadHistoryPage: peer plus exclusive (counter, incoming) in historyDirection.

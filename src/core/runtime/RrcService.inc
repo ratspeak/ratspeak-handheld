@@ -188,14 +188,8 @@ Result DeviceService::projectRrcRead(const storage::Result& stored) {
             if (!_mailbox.write(slot, &draft, sizeof draft)) return invalid();
             result.length = sizeof draft;
         } else {
-            rs_handheld_rrc_view_t view{};
-            if (!stored.length || !history::rrc::decode(record, context, view) || record.counter() != request.argument) return invalid();
             rrc::MessageDetail detail;
-            memcpy(detail.source, view.meta.source, 16); detail.counter = record.counter();
-            detail.timestamp = history::rrc::timestamp(view.meta.timestamp_ms);
-            detail.kind = uint8_t(view.meta.kind); detail.status = history::rrc::displayedStatus(record.status());
-            memcpy(detail.nickname, record.payload() + view.nickname.offset, std::min(size_t(32), size_t(view.nickname.length)));
-            detail.length = view.text.length; memcpy(detail.text, record.payload() + view.text.offset, detail.length);
+            if (!stored.length || !history::rrc::detail(record,context,detail) || record.counter()!=request.argument) return invalid();
             if (!_mailbox.write(slot, &detail, sizeof detail)) return invalid();
             result.length = sizeof detail;
         }

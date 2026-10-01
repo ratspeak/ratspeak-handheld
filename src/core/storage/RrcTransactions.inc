@@ -299,7 +299,7 @@ void MessageTransactions::rrcTransaction(const Request& request, uint8_t* bytes,
                 if (result.error != Error::None) return;
                 if (!present || !record.counter() || record.counter() <= deleted) continue;
                 ++result.total;
-                if (record.status() == rrc::Status::Received && record.counter() > readThrough) ++result.unreadDelta;
+                if (record.status() == rrc::Status::Received && !record.flags() && record.counter() > readThrough) ++result.unreadDelta;
                 if (request.key.counter && (before ? record.counter() >= request.key.counter :
                     record.counter() <= request.key.counter)) continue;
                 ++eligible; row.counter = record.counter(); row.revision = record.revision();
@@ -415,9 +415,13 @@ void MessageTransactions::rrcTransaction(const Request& request, uint8_t* bytes,
     }
 
     const bool append = request.operation == Operation::RrcAppend;
-    if ((!append && request.operation != Operation::RrcWrite) ||
-        (append && (kind != rrc::Kind::Message || !input.payloadLength())) ||
-        (!append && kind != rrc::Kind::Preferences && kind != rrc::Kind::Draft)) {
+    const bool observe = request.operation == Operation::RrcObserve;
+    bool observationRequested=false;for(auto byte:request.destination) observationRequested|=byte!=0;
+    if ((!append && !observe && request.operation != Operation::RrcWrite) ||
+        (append && (kind != rrc::Kind::Message || !input.payloadLength() || input.flags())) ||
+        (observe && (kind!=rrc::Kind::Observation || !observationRequested || input.flags() || input.payloadLength())) ||
+        (!append && !observe && kind != rrc::Kind::Preferences && kind != rrc::Kind::Draft) ||
+        (observationRequested && !append && !observe)) {
         result.error = Error::InvalidRecord; return;
     }
     rrc::Record previous; bool present = false;
@@ -426,9 +430,38 @@ void MessageTransactions::rrcTransaction(const Request& request, uint8_t* bytes,
     if (append && present) { finish(previous, true); return; } // exact local file identity is immutable
     if ((request.offset && (!present || request.offset != previous.revision())) ||
         (present && previous.revision() == UINT32_MAX)) { result.error = Error::Stale; return; }
+    const size_t previousBytes = present ? previous.length() : 0;
+    const auto previousRevision=present?previous.revision():0;
     // Draft bit 0 is an admission-only conditional replacement flag. The
     // worker checked the exact persisted revision above; never store the flag.
     if (kind == rrc::Kind::Draft) input.flags(0);
+    bool writeObservation=false,createBoundary=false;
+    uint32_t observationRevision=0,boundaryCounter=0;
+    char observationPath[RrcPath]{},boundaryPath[RrcPath]{};
+    size_t observationBytes=0;
+    if(observationRequested) {
+        rrcPath(context,rrc::Kind::Observation,nullptr,observationPath);bool exists=false;
+        result.error=rrcLoad(flash,observationPath,context,rrc::Kind::Observation,previous,exists,true);
+        if(result.error!=Error::None) return;
+        if(exists && !rrc::observation(previous)) {result.error=Error::InvalidRecord;return;}
+        observationRevision=exists?previous.revision():0;
+        observationBytes=exists?previous.length():0;
+        writeObservation=!exists || memcmp(previous.payload()+4,request.destination,16);
+        if(!writeObservation && observe) {finish(previous,true);return;}
+        if(writeObservation) {
+            if(observationRevision==UINT32_MAX) {result.error=Error::RevisionExhausted;return;}
+            rrcPath(context,rrc::Kind::Message,request.destination,boundaryPath);
+            result.error=rrcLoad(flash,boundaryPath,context,rrc::Kind::Message,previous,exists,true);
+            if(result.error!=Error::None) return;
+            if(exists && (!rrc::boundary(previous) || memcmp(previous.payload()+4,request.destination,16))) {
+                result.error=Error::InvalidRecord;return;
+            }
+            // A failed marker write can leave the boundary committed. Reuse it
+            // on retry, unless an explicit clear has already hidden that row.
+            createBoundary=!exists || previous.counter()<=deleted;
+            if(!createBoundary) boundaryCounter=previous.counter();
+        }
+    }
     bool privateConversation=false;for(auto byte:request.source) privateConversation|=byte!=0;
     bool createPrivate=false;rrc::Record descriptor;
     char privatePath[RrcPath]{};
@@ -455,15 +488,17 @@ void MessageTransactions::rrcTransaction(const Request& request, uint8_t* bytes,
         return rrcWalk(flash, context.local, [&](const rrc::Context& c, const char* name, size_t size) {
             if (size > RrcQuota || total > RrcQuota * 2 - size) return Error::InvalidRecord;
             total += size; uint8_t fileKey[16]; char canonical[RrcPath];
-            if (!strcmp(rrcBasename(name),"2.rrc") || !strcmp(rrcBasename(name),"2.rrc.bak")) {
+            const bool observationFile=!strcmp(rrcBasename(name),"6.rrc") || !strcmp(rrcBasename(name),"6.rrc.bak");
+            if (observationFile || !strcmp(rrcBasename(name),"2.rrc") || !strcmp(rrcBasename(name),"2.rrc.bak")) {
                 // Include private inbox cursors when recovering after NVS loss.
                 // A recovered descriptor must not reuse another inbox position.
-                rrcPath(c,rrc::Kind::Preferences,nullptr,canonical);
+                const auto metadataKind=observationFile?rrc::Kind::Observation:rrc::Kind::Preferences;
+                rrcPath(c,metadataKind,nullptr,canonical);
                 rrc::Record metadata;bool found=false;
-                const auto error=rrcLoad(flash,canonical,c,rrc::Kind::Preferences,metadata,found);
+                const auto error=rrcLoad(flash,canonical,c,metadataKind,metadata,found);
                 if(error!=Error::None) return error;
                 if(found && metadata.counter()) {
-                    if(!rrc::privateDescriptor(metadata)) return Error::InvalidRecord;
+                    if(!(observationFile?rrc::observation(metadata):rrc::privateDescriptor(metadata))) return Error::InvalidRecord;
                     highest=std::max(highest,metadata.counter());
                 }
                 return Error::None;
@@ -476,57 +511,59 @@ void MessageTransactions::rrcTransaction(const Request& request, uint8_t* bytes,
             highest = std::max(highest, record.counter());
             const bool sameRoom = !memcmp(&c, &context, sizeof c);
             if (sameRoom) ++roomCount;
-            if ((roomOnly && !sameRoom) || !strcmp(canonical, path) || record.status() == rrc::Status::Pending ||
+            if ((roomOnly && !sameRoom) || !strcmp(canonical, path) || (boundaryPath[0] && !strcmp(canonical,boundaryPath)) || record.status() == rrc::Status::Pending ||
                 record.status() == rrc::Status::Unconfirmed || !record.counter() || record.counter() >= oldestCounter) return Error::None;
             oldestCounter = record.counter(); snprintf(oldest, sizeof oldest, "%s", canonical); return Error::None;
         });
     };
     size_t total = 0, count = 0; char oldest[RrcPath];
     result.error = usage(total, count, oldest, false); if (result.error != Error::None) return;
-    const size_t previousBytes = present ? previous.length() : 0;
-    if (append && count >= RrcHistoryLimit) {
-        result.error = usage(total, count, oldest, true); if (result.error != Error::None) return;
-        if (!oldest[0]) { result.error = Error::Unavailable; return; }
+    const size_t newRows=(append?1:0)+(createBoundary?1:0);
+    const size_t newBytes=(observe?0:input.length()-std::min(input.length(),previousBytes))+
+        (createPrivate?descriptor.length():0)+(createBoundary?rrc::Header+20:0)+
+        (writeObservation?rrc::Header+20-observationBytes:0);
+    // Prepare the entire compound write before its first durable mutation.
+    // Pending/uncertain sends and drafts are never eviction candidates. Even a
+    // failure after the descriptor, boundary or marker leaves quotas satisfied.
+    for(unsigned n=0;total+newBytes>RrcQuota || count+newRows>RrcHistoryLimit;++n) {
+        const bool roomOnly=count+newRows>RrcHistoryLimit;
+        result.error=usage(total,count,oldest,roomOnly);if(result.error!=Error::None) return;
+        if(total+newBytes<=RrcQuota && count+newRows<=RrcHistoryLimit) break;
+        if(n==16 || !oldest[0] || !rrcRemove(flash,oldest)) {result.error=Error::Unavailable;return;}
+        result.error=usage(total,count,oldest,roomOnly);if(result.error!=Error::None) return;
     }
-    if (total > RrcQuota || ((total - std::min(total, previousBytes) + input.length() + (createPrivate?descriptor.length():0) > RrcQuota ||
-         (append && count >= RrcHistoryLimit)) && !oldest[0])) { result.error = Error::Unavailable; return; }
-    // If the second write fails, the descriptor alone must still fit. Otherwise
-    // a failed first message could strand the namespace over quota indefinitely.
-    for(unsigned n=0;createPrivate && total+descriptor.length()>RrcQuota;++n) {
-        if(n==8 || !oldest[0] || !rrcRemove(flash,oldest)) {result.error=Error::Unavailable;return;}
-        result.error=usage(total,count,oldest,false);if(result.error!=Error::None) return;
-    }
-    if (append || createPrivate) {
-        if (highest == UINT32_MAX) { result.error = Error::CounterExhausted; return; }
-        // Reconcile recovered RRC files after an NVS reset without making
-        // direct-message boot depend on the health of this separate namespace.
-        highest = std::max(highest, deleted);
-        uint32_t counter;
-        if (highest == UINT32_MAX || !reserveRrcCounter(counter, highest + 1)) { result.error = Error::CounterExhausted; return; }
+    highest=std::max(highest,deleted);
+    auto reserve=[&](uint32_t& counter) {
+        if(highest==UINT32_MAX || !reserveRrcCounter(counter,highest+1)) {result.error=Error::CounterExhausted;return false;}
+        highest=counter;return true;
+    };
+    if(createBoundary && !reserve(boundaryCounter)) return;
+    if(append || createPrivate) {
+        uint32_t counter;if(!reserve(counter)) return;
         if(append) input.counter(counter);
         if(createPrivate) {descriptor.counter(counter);descriptor.revision(1);descriptor.seal();}
     }
-    input.revision(present ? previous.revision() + 1 : 1); input.seal();
+    input.revision(previousRevision+1);input.seal();
     if (!rrcEnsure(flash, context)) { result.error = Error::Write; return; }
     if(createPrivate) {
-        // Persist the discovery descriptor before exposing a committed message
-        // or draft. A power loss between writes can leave an empty inbox entry,
-        // never a receipt for a message that did not commit.
         const MemorySource metadata(descriptor.bytes,descriptor.length());
         result.error=flash.write(privatePath,metadata);if(result.error!=Error::None) return;
     }
+    if(writeObservation) {
+        uint8_t payload[20];memcpy(payload+4,request.destination,16);
+        if(createBoundary) {
+            memcpy(payload,"HGB1",4);rrc::Record::make(previous,context,rrc::Kind::Message,payload,sizeof payload);
+            previous.flags(1);previous.counter(boundaryCounter);previous.revision(1);previous.seal();
+            const MemorySource boundary(previous.bytes,previous.length());
+            result.error=flash.write(boundaryPath,boundary);if(result.error!=Error::None) return;
+        }
+        memcpy(payload,"HGO1",4);rrc::Record::make(previous,context,rrc::Kind::Observation,payload,sizeof payload);
+        previous.counter(boundaryCounter);previous.revision(observationRevision+1);previous.seal();
+        const MemorySource observation(previous.bytes,previous.length());
+        result.error=flash.write(observationPath,observation);if(result.error!=Error::None) return;
+        if(observe) {result.flash={true,true,Error::None};finish(previous);return;}
+    }
     const MemorySource source(input.bytes, input.length());
     result.error = flash.write(path, source); if (result.error != Error::None) return;
-    result.flash = {true, true, Error::None};
-    if (append) ++count;
-    // A committed append remains committed if cleanup fails. Future new writes
-    // refuse an over-quota store until cleanup/recovery; no false message loss.
-    for (unsigned n = 0; n < 8; ++n) {
-        const auto error = usage(total, count, oldest, append && count > RrcHistoryLimit);
-        if (error != Error::None) { result.more = true; break; }
-        if (total <= RrcQuota && (!append || count <= RrcHistoryLimit)) break;
-        if (!oldest[0] || !rrcRemove(flash, oldest)) { result.more = true; break; }
-        if (n == 7) result.more = true;
-    }
-    finish(input);
+    result.flash = {true, true, Error::None};finish(input);
 }

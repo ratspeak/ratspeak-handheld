@@ -3,6 +3,7 @@
 #include "HistoryWindow.h"
 #include "storage/RrcRecord.h"
 #include "ratspeak_protocol.h"
+#include "protocol/RrcTypes.h"
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -28,7 +29,7 @@ inline bool fail(storage::Result& result, storage::Error error = storage::Error:
 }
 
 inline bool decode(const disk::Record& record, const disk::Context& context, rs_handheld_rrc_view_t& view) {
-    if (!record.valid(record.length()) || !record.matches(context) || record.kind() != disk::Kind::Message ||
+    if (!record.valid(record.length()) || !record.matches(context) || record.kind() != disk::Kind::Message || record.flags() ||
         rs_handheld_rrc_decode(record.payload(), record.payloadLength(), &view) != RS_HANDHELD_OK ||
         view.body_kind != 1 || (view.meta.kind != 20 && view.meta.kind != 21 && view.meta.kind != 22 && view.meta.kind != 40)) return false;
     const bool incoming = record.status() == disk::Status::Received;
@@ -67,6 +68,20 @@ inline const char* statusName(uint8_t status) {
     return "Unknown";
 }
 
+inline constexpr char ObservationText[]="Live observation started. Messages while away are unavailable.";
+inline bool detail(const disk::Record& record,const disk::Context& context,handheld::rrc::MessageDetail& out) {
+    if(!record.valid(record.length()) || !record.matches(context)) return false;
+    out={};out.counter=record.counter();out.status=displayedStatus(record.status());
+    if(disk::boundary(record)) {
+        std::memcpy(out.nickname,"Local history",14);out.length=sizeof ObservationText-1;
+        std::memcpy(out.text,ObservationText,sizeof ObservationText);return true;
+    }
+    rs_handheld_rrc_view_t view{};if(!decode(record,context,view)) return false;
+    std::memcpy(out.source,view.meta.source,16);out.timestamp=timestamp(view.meta.timestamp_ms);out.kind=uint8_t(view.meta.kind);
+    std::memcpy(out.nickname,record.payload()+view.nickname.offset,std::min(size_t(32),size_t(view.nickname.length)));
+    out.length=view.text.length;std::memcpy(out.text,record.payload()+view.text.offset,out.length);return true;
+}
+
 // Input/output share the caller's existing 512-byte read scratch. Only one
 // transient record copy is needed; no body or selector survives this call.
 inline bool project(const disk::Context& context, const HistoryWindow::Query& query,
@@ -94,7 +109,8 @@ inline bool project(const disk::Context& context, const HistoryWindow::Query& qu
     if (result.length < disk::Header || result.length > sizeof record) return fail(result, storage::Error::Stale);
     std::memcpy(record.bytes, bytes, result.length);
     rs_handheld_rrc_view_t view{};
-    if (!record.valid(result.length) || !decode(record, context, view) || record.counter() != query.cursor.counter ||
+    const bool boundary=disk::boundary(record);
+    if (!record.valid(result.length) || !record.matches(context) || (!boundary && !decode(record, context, view)) || record.counter() != query.cursor.counter ||
         (record.status() == disk::Status::Received) != query.cursor.incoming) return fail(result);
     result.key.counter = record.counter(); result.key.incoming = query.cursor.incoming;
     if (query.kind == HistoryWindow::Kind::Status) {
@@ -114,11 +130,13 @@ inline bool project(const disk::Context& context, const HistoryWindow::Query& qu
     // message details; a short suffix distinguishes equal visible nicknames.
     std::snprintf(title, sizeof title, "%s%.*s%s%s", view.meta.kind == 22 ? "* " : "",
         int(nickLength), reinterpret_cast<const char*>(record.payload() + view.nickname.offset), nickLength ? " / " : "", id);
+    if(boundary) std::snprintf(title,sizeof title,"Local history");
+    const auto* body=boundary?reinterpret_cast<const uint8_t*>(ObservationText):record.payload()+view.text.offset;
     storage::StoredRecordHeader header;
     std::memcpy(header.source, context.conversation, 16); std::memcpy(header.destination, context.conversation, 16);
     header.counter = record.counter(); header.revision = record.revision(); header.timestamp = timestamp(view.meta.timestamp_ms);
     header.incoming = query.cursor.incoming; header.status = displayedStatus(record.status());
-    header.titleLength = std::strlen(title); header.contentLength = view.text.length;
+    header.titleLength = std::strlen(title); header.contentLength = boundary?sizeof ObservationText-1:view.text.length;
     const size_t total = header.titleLength + header.contentLength;
     if (query.offset > total) return fail(result, storage::Error::Stale);
     const size_t copied = std::min(total - query.offset, std::min(capacity, size_t(query.capacity)) - sizeof header);
@@ -126,7 +144,7 @@ inline bool project(const disk::Context& context, const HistoryWindow::Query& qu
     for (size_t n = 0; n < copied; ++n) {
         const auto offset = query.offset + n;
         bytes[sizeof header + n] = offset < header.titleLength ? uint8_t(title[offset]) :
-            record.payload()[view.text.offset + offset - header.titleLength];
+            body[offset - header.titleLength];
     }
     result.revision = header.revision; result.total = total; result.nextOffset = query.offset + copied;
     result.more = result.nextOffset < total; result.length = uint16_t(sizeof header + copied); return true;

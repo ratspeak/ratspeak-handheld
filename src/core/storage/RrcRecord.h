@@ -7,7 +7,7 @@ namespace handheld::storage::rrc {
 // RRC CBOR envelope (at most one Link MDU), never an LXMF record or message ID.
 // Explicit little-endian fields avoid compiler padding and board ABI changes.
 constexpr size_t Header = 80, Payload = 431, Maximum = Header + Payload;
-enum class Kind : uint8_t { Message = 1, Preferences, Draft, ReadMarker, Tombstone };
+enum class Kind : uint8_t { Message = 1, Preferences, Draft, ReadMarker, Tombstone, Observation };
 enum class Status : uint8_t { Received, Pending, Unconfirmed, Confirmed, Transmitted, Failed };
 inline bool transition(Status from, Status to) {
     if (from == to) return true;
@@ -47,7 +47,7 @@ struct Record {
     void flags(uint8_t value) { bytes[6] = value; }
     bool valid(size_t size) const {
         return size >= Header && size <= Maximum && !std::memcmp(bytes, "HRC1", 4) &&
-            bytes[4] >= uint8_t(Kind::Message) && bytes[4] <= uint8_t(Kind::Tombstone) &&
+            bytes[4] >= uint8_t(Kind::Message) && bytes[4] <= uint8_t(Kind::Observation) &&
             bytes[5] <= uint8_t(Status::Failed) && !(bytes[6] & ~1u) && !bytes[7] &&
             !bytes[74] && !bytes[75] && length() == size && prepared::read32(bytes + 76) ==
             ~prepared::checksum(prepared::checksum(UINT32_MAX, bytes, 76), payload(), payloadLength());
@@ -64,6 +64,17 @@ struct Record {
         out.seal(); return true;
     }
 };
+// These local-only records cannot be manufactured by a wire CBOR envelope.
+// The durable observation cursor prevents a trimmed/cleared boundary from being
+// recreated by every subsequent message in the same live session.
+inline bool observation(const Record& record) {
+    return record.kind()==Kind::Observation && record.status()==Status::Received && !record.flags() &&
+        record.counter() && record.payloadLength()==20 && !std::memcmp(record.payload(),"HGO1",4);
+}
+inline bool boundary(const Record& record) {
+    return record.kind()==Kind::Message && record.status()==Status::Received && record.flags()==1 &&
+        record.counter() && record.payloadLength()==20 && !std::memcmp(record.payload(),"HGB1",4);
+}
 // A worker page contains metadata only. Keys are local conversation identities,
 // never RNS destinations. The transcript is not counted by this metadata query.
 struct SavedRoom {
@@ -84,7 +95,7 @@ inline bool privateDescriptor(const Record& record) {
         std::memcmp(record.payload(),"HRN1",4) || !record.counter()) return false;
     uint8_t any=0;for(size_t n=4;n<20;++n) any|=record.payload()[n];return any!=0;
 }
-inline bool operation(Operation op) { return op >= Operation::RrcRead && op <= Operation::RrcPrivateInbox; }
+inline bool operation(Operation op) { return op >= Operation::RrcRead && op <= Operation::RrcObserve; }
 static_assert(SavedPageCapacity * sizeof(SavedRoom) <= Budget::SmallPayload, "Saved channels share one metadata credit");
 static_assert(sizeof(Context) == 48 && sizeof(Record) <= Budget::SmallPayload && sizeof(Selector) <= 28,
               "RRC records and pages must fit existing small storage credits");
