@@ -26,7 +26,7 @@ void MessagesScreen::pollRrc() {
     if (!_rrc.completeRows(view,true)) return;
     switch (_rrc.navigation.page()) {
     case Page::Hubs: { HubView rows[HubViewCapacity]; const auto count = _backend->rrcHubs(rows,HubViewCapacity); _rrc.rows(rows,count); break; }
-    case Page::Channels: { RoomView rows[RoomCapacity]; const auto count = _backend->rrcRooms(rows,RoomCapacity); _rrc.rows(rows,count); break; }
+    case Page::Channels: { RoomView rows[5]; const auto count = _backend->rrcChannels(rows,5,_rrc.navigation.offset()); _rrc.rows(rows,count,false,true); break; }
     case Page::People: { PersonView rows[PeopleCapacity]; const auto count = _backend->rrcPeople(_rrc.navigation.conversation().room,rows,PeopleCapacity); _rrc.rows(rows,count); break; }
     case Page::Directory: { DirectoryView rows[5]; const auto count = _backend->rrcDirectory(rows,5,_rrc.navigation.offset()); _rrc.rows(rows,count,false,true); break; }
     default: break;

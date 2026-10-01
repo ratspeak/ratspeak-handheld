@@ -85,6 +85,12 @@ void DeviceService::executeRrc(uint8_t slot) {
         const size_t count = _backend.rrcRooms(rows, rrc::RoomCapacity);
         if (count > rrc::RoomCapacity) { complete(slot, Outcome::Invalid); return; }
         publish(rows, count, sizeof rows[0]);
+    } else if (request.operation == Operation::RrcChannels) {
+        rrc::RoomView rows[4]{};
+        const auto count=_backend.rrcChannels(rows,4,request.offset);
+        if (count>4) {complete(slot,Outcome::Invalid);return;}
+        rrc::RoomView next;result.more=_backend.rrcChannels(&next,1,request.offset+count)!=0;
+        result.next=request.offset+count;publish(rows,count,sizeof rows[0]);
     } else if (request.operation == Operation::RrcPeople) {
         char room[65]{};
         if (_mailbox.length(slot) >= sizeof room || !_mailbox.read(slot, room, _mailbox.length(slot))) { complete(slot, Outcome::Invalid); return; }

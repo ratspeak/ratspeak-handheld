@@ -96,6 +96,7 @@ public:
     bool rrcDrained() const override { return _rrc.drained(); }
     size_t rrcHubs(handheld::rrc::HubView* out, size_t capacity) const override { return _rrc.hubs(out, capacity); }
     size_t rrcRooms(handheld::rrc::RoomView* out, size_t capacity) const override { return _rrc.rooms(out, capacity); }
+    size_t rrcChannels(handheld::rrc::RoomView* out, size_t capacity, size_t offset = 0) const override { return _rrc.channels(out, capacity, offset); }
     size_t rrcPeople(const char* room, handheld::rrc::PersonView* out, size_t capacity) const override { return _rrc.people(room, out, capacity); }
     size_t rrcDirectory(handheld::rrc::DirectoryView* out, size_t capacity, size_t offset = 0) const override { return _rrc.directory(out, capacity, offset); }
     handheld::rrc::Code rrcCommand(const handheld::rrc::Command& command, const uint8_t* text, size_t length) override { return _rrc.command(command, text, length); }

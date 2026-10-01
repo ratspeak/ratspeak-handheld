@@ -140,6 +140,7 @@ public:
                 const auto& row = _rows[dataIndex];
                 if (page == Page::Channels) {
                     const char* state = row.flags == uint8_t(rrc::RoomPhase::Joined) ? "" :
+                        row.flags == uint8_t(rrc::RoomPhase::Available) ? " [available]" :
                         row.flags == uint8_t(rrc::RoomPhase::NeedsKey) ? " [key needed]" :
                         row.flags == uint8_t(rrc::RoomPhase::Joining) ? " [joining]" :
                         row.flags == uint8_t(rrc::RoomPhase::Recovering) ? " [reconnecting]" : " [saved]";
@@ -153,6 +154,11 @@ public:
             dataIndex -= _count;
             if (navigation.offset()) { if (!dataIndex) { copy(out, size, "< Previous"); return; } --dataIndex; }
             if (_more) { if (!dataIndex) { copy(out, size, "Next >"); return; } --dataIndex; }
+            if (page == Page::Channels && dataIndex == 1) {
+                copy(out,size,status.directoryPending?"Public channels: loading...":status.directoryStale?"Public channels: stale; refresh":
+                    status.directoryFailed?"Public channels: unavailable; retry":!status.directoryKnown?"Browse public channels":
+                    status.directoryPartial?"Public channels: partial list":!status.directoryCount?"No public channels; refresh":"Refresh public channels");return;
+            }
             copy(out, size, dataIndex == 0 ? page == Page::Hubs ? "Enter hub address" : page == Page::Channels ? "Join by name" : "Refresh" :
                  page == Page::Channels ? "Browse public channels" : "Back"); return;
         }
@@ -163,8 +169,9 @@ public:
         if (page == Page::Identity || page == Page::HubInfo) {
             const uint8_t* address = page == Page::Identity ? navigation.person() : _browsedInfo ? navigation.selectedHub() : status.hub;
             if (index < 2) { for (size_t n = 0; n < 8 && n * 2 + 2 < size; ++n) std::snprintf(out + n*2, size - n*2, "%02x", address[index*8+n]); return; }
-            if (page == Page::HubInfo && index == 2) { copy(out,size,rrc::phaseName(status.phase)); return; }
-            if (page == Page::HubInfo && index == 3) { std::snprintf(out,size,"Text limit: %u bytes",status.bodyLimit); return; }
+            if (page == Page::HubInfo && index == 2) { copy(out,size,_browsedInfo && std::memcmp(navigation.selectedHub(),status.hub,16)?"Not connected to this hub":rrc::phaseName(status.phase)); return; }
+            if (page == Page::HubInfo && index == 3) { if (_browsedInfo && std::memcmp(navigation.selectedHub(),status.hub,16)) copy(out,size,"Connect to read hub limits");
+                else std::snprintf(out,size,"Text limit: %u bytes",status.bodyLimit); return; }
         }
         if (page == Page::Help) {
             static constexpr const char* items[] = {"One live hub; browsing keeps it", "Private notices stay in this hub", "Room echo confirms hub receipt", "Unconfirmed sends are not retried", "Back"}; copy(out,size,items[index]); return;

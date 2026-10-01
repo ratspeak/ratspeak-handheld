@@ -22,6 +22,11 @@ uint32_t ServiceClient::requestRrcRooms(RrcCompletion<rrc::RoomView> completion)
     Request request; request.operation = Operation::RrcRooms;
     return rrcQuery<rrc::RoomView, rrc::RoomCapacity>(request, nullptr, 0, std::move(completion));
 }
+uint32_t ServiceClient::requestRrcChannels(size_t offset, RrcCompletion<rrc::RoomView> completion) {
+    if (offset>UINT32_MAX) return 0;
+    Request request;request.operation=Operation::RrcChannels;request.offset=offset;
+    return rrcQuery<rrc::RoomView,4>(request,nullptr,0,std::move(completion));
+}
 uint32_t ServiceClient::requestRrcPeople(const char* room, RrcCompletion<rrc::PersonView> completion) {
     const size_t length = room ? strnlen(room, 65) : 0;
     if (length > 64) return 0;

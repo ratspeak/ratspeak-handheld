@@ -11,7 +11,7 @@ constexpr size_t HubCapacity = 16, RoomCapacity = 8, PeopleCapacity = 64, DedupC
 constexpr size_t PacketCapacity = 431, DraftCapacity = 400, KeyCapacity = 160;
 constexpr size_t HubViewCapacity = HubCapacity * 2;
 enum class Phase : uint8_t { Disconnected, Finding, Connecting, Identifying, Greeting, Online, Recovering };
-enum class RoomPhase : uint8_t { Saved, Joining, Joined, Leaving, Recovering, NeedsKey, Error };
+enum class RoomPhase : uint8_t { Saved, Joining, Joined, Leaving, Recovering, NeedsKey, Error, Available };
 enum class Code : uint8_t { Ok, Busy, Stale, Offline, Invalid, TooLong, Unsupported, Full, Storage, NotJoined };
 enum class SendPhase : uint8_t { Idle, Saving, Sending, Awaiting, Confirmed, Transmitted, NotSent, Unconfirmed };
 enum class Action : uint8_t { Connect, Disconnect, Join, Leave, Message, PrivateNotice, Emote,
@@ -88,6 +88,8 @@ struct Status {
     Phase phase = Phase::Disconnected;
     SendPhase sending = SendPhase::Idle;
     bool busy = false, directoryPending = false, directoryPartial = false;
+    bool directoryKnown = false, directoryStale = false, directoryFailed = false;
+    uint8_t directoryCount = 0;
     bool sendSaved = false, sendSettled = true;
     uint32_t preferenceRevision = 0;
     uint32_t preferenceRecordRevision = 0;

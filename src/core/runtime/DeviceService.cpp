@@ -471,7 +471,7 @@ void DeviceService::execute(uint8_t slot) {
     if (!_mailbox.read(slot, _scratch, length)) { complete(slot, Outcome::Invalid); return; }
     _scratch[length] = 0;
     switch (request.operation) {
-    case Operation::RrcHubs: case Operation::RrcRooms: case Operation::RrcPeople: case Operation::RrcDirectory:
+    case Operation::RrcHubs: case Operation::RrcRooms: case Operation::RrcChannels: case Operation::RrcPeople: case Operation::RrcDirectory:
     case Operation::RrcContext: case Operation::RrcCommand:
         executeRrc(slot); break;
     case Operation::Send: {

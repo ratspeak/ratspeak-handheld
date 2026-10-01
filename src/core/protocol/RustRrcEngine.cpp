@@ -83,7 +83,8 @@ void RustRrcEngine::disconnect() {
     const auto old = _link; _link = {};
     if (_d.links && old.valid()) _d.links->closeRrc(old);
     wipeControl(); _pong = {}; _status.phase = Phase::Disconnected;
-    _status.directoryPending = false; _directoryDeadline = 0;
+    _status.directoryPending = false; _directoryDeadline = 0; _directoryWanted = false;
+    _status.directoryStale = _status.directoryKnown;
     if (!_joinConfirmed) { _joinRoom = UINT8_MAX; _joinPreferenceLength = 0; }
     for (auto& room : _rooms) if (room.used) { room.wanted = false; room.view.phase = RoomPhase::Saved; }
     for (auto& person : _people) person = {};
@@ -98,7 +99,8 @@ void RustRrcEngine::recover(const char* reason) {
     if (_stopped || _status.phase == Phase::Disconnected) return;
     const auto old = _link; _link = {}; if (old.valid()) _d.links->closeRrc(old);
     wipeControl(); _pong = {}; _status.phase = Phase::Recovering;
-    _status.directoryPending = false; _directoryDeadline = 0;
+    _status.directoryPending = false; _directoryDeadline = 0; _directoryWanted = false;
+    _status.directoryStale = _status.directoryKnown;
     if (_failures < 8) ++_failures;
     const uint32_t backoff = std::min(uint32_t(300000), uint32_t(2000) << (_failures - 1));
     uint8_t random[2]; RustEntropy::fill(random, sizeof random);
@@ -183,6 +185,22 @@ size_t RustRrcEngine::rooms(RoomView* output, size_t capacity) const {
     size_t used = 0; if (output) for (const auto& room : _rooms) if (room.used && used < capacity) output[used++] = room.view;
     return used;
 }
+size_t RustRrcEngine::channels(RoomView* output, size_t capacity, size_t offset) const {
+    if (!output || !capacity) return 0;
+    size_t used=0,position=0;
+    for (const auto& room:_rooms) if (room.used) {
+        if (position++<offset) continue;
+        output[used++]=room.view;if (used==capacity) return used;
+    }
+    DirectoryView listed;
+    for (size_t n=0;_directory.at(n,listed);++n) {
+        if (findRoom(listed.name) || position++<offset) continue;
+        auto& row=output[used++];row={};strcpy(row.name,listed.name);strcpy(row.topic,listed.topic);
+        row.phase=RoomPhase::Available;
+        if (used==capacity) break;
+    }
+    return used;
+}
 size_t RustRrcEngine::people(const char* name, PersonView* output, size_t capacity) const {
     const auto* room = name ? findRoom(name) : nullptr; const uint8_t mask = room ? uint8_t(1u << (room - _rooms)) : 0xff;
     size_t used = 0; if (output) for (const auto& person : _people) if ((person.rooms & mask) && used < capacity) output[used++] = person;
@@ -261,6 +279,7 @@ RustRrcEngine::Code RustRrcEngine::command(const Command& command, const uint8_t
         memset(_rooms, 0, sizeof _rooms); memset(_people, 0, sizeof _people);
         _recentCount = _recentNext = 0; _status.phase = Phase::Finding; _status.notice[0] = 0;
         _directory = {}; _status.directoryPartial = false;
+        _status.directoryKnown = _status.directoryStale = _status.directoryFailed = false; _status.directoryCount = 0;
         _savedRooms = {};
         disk::Context scope; context(_status.hub, nullptr, nullptr, scope);
         loadPreferences(PreferenceStep::ReadHub, scope);
@@ -305,7 +324,8 @@ RustRrcEngine::Code RustRrcEngine::command(const Command& command, const uint8_t
     case Action::Directory: {
         if (_status.directoryPending) return Code::Busy;
         const auto result = control(20, nullptr, reinterpret_cast<const uint8_t*>("/list"), 5);
-        if (result == Code::Ok) { _status.directoryPending = true; _directoryDeadline = now() + wait(8); } return result;
+        if (result == Code::Ok) { _directoryWanted = false; _status.directoryPending = true;
+            _status.directoryFailed = false; _status.directoryStale = _status.directoryKnown; _directoryDeadline = now() + wait(8); } return result;
     }
     case Action::Who: case Action::Topic: {
         if (!item || item->view.phase != RoomPhase::Joined) return Code::NotJoined;
@@ -492,7 +512,7 @@ void RustRrcEngine::onRrcPacket(Handle handle, const uint8_t* data, size_t lengt
         if (welcome.limits_present & 4) _status.bodyLimit = uint16_t(std::min(uint32_t(350), welcome.limits[2]));
         if (welcome.limits_present & 8) _status.roomsLimit = uint8_t(std::min(uint32_t(RoomCapacity), welcome.limits[3]));
         _rateLimit = welcome.limits_present & 16 ? welcome.limits[4] : 0;
-        _status.phase = Phase::Online; _onlineAt = now(); notice("Connected");
+        _status.phase = Phase::Online; _onlineAt = now(); _directoryWanted = true; notice("Connected");
     } else if (kind == 30) {
         if (_pong.length || _sequence == UINT32_MAX) return;
         if (!encode(31, nullptr, data + view.body.offset, view.body.length, view.body.length ? 2 : 0,
@@ -557,9 +577,10 @@ void RustRrcEngine::pollReceive() {
                         const auto result = _directory.apply(record.payload() + view.text.offset, view.text.length, _status.roomLimit);
                         if (result == Directory::Result::Applied) {
                             _status.directoryPending = false; _status.directoryPartial = _directory.omitted() != 0;
+                            _status.directoryKnown = true; _status.directoryStale = _status.directoryFailed = false; _status.directoryCount = _directory.count();
                             notice(_status.directoryPartial ? "Partial channel list; join by name is available" : "Channel list updated");
                         } else if (result == Directory::Result::Invalid && _status.directoryPending) {
-                            _status.directoryPending = false; notice("Hub channel list was invalid");
+                            _status.directoryPending = false; _status.directoryFailed = true; notice("Hub channel list was invalid");
                         }
                     }
                     if (view.meta.kind == 21 && item.room < RoomCapacity && roomStatus(_rooms[item.room], record.payload() + view.text.offset, view.text.length))
@@ -642,7 +663,7 @@ void RustRrcEngine::loop() {
         control(1, nullptr, Version, sizeof Version - 1, 3);
     }
     if (_failures && time - _onlineAt >= 120000) _failures = 0;
-    if (_status.directoryPending && time >= _directoryDeadline) { _status.directoryPending = false; notice("Channel list timed out; join by name is available"); }
+    if (_status.directoryPending && time >= _directoryDeadline) { _status.directoryPending = false; _status.directoryFailed = true; notice("Channel list timed out; join by name is available"); }
     for (auto& room : _rooms) {
         if (!room.used) continue;
         if (room.view.phase == RoomPhase::Recovering && !_control.length && _preferences.step == PreferenceStep::Idle && _joinRoom == UINT8_MAX) {
@@ -653,6 +674,19 @@ void RustRrcEngine::loop() {
         if ((room.view.phase == RoomPhase::Joining || room.view.phase == RoomPhase::Leaving) && time >= room.deadline) {
             room.view.phase = RoomPhase::Error; notice("Channel request timed out");
             if (_joinRoom == size_t(&room - _rooms) && !_joinConfirmed) { _joinRoom = UINT8_MAX; _joinPreferenceLength = 0; }
+        }
+    }
+    // One optional directory request after each authenticated welcome, behind
+    // greeting/nickname traffic, room rejoin and user sends. UI navigation never
+    // schedules background refreshes, and an unsupported dialect is not polled.
+    bool joining=false;
+    for (const auto& room:_rooms) joining |= room.used &&
+        (room.view.phase==RoomPhase::Recovering || room.view.phase==RoomPhase::Joining || room.view.phase==RoomPhase::Leaving);
+    if (_directoryWanted && !joining && !_control.length && !_send.length && _preferences.step==PreferenceStep::Idle && !_joinConfirmed) {
+        Command request;request.action=Action::Directory;request.generation=_status.generation;memcpy(request.hub,_status.hub,16);
+        const auto result=command(request,nullptr,0);
+        if (result!=Code::Ok && result!=Code::Busy) {
+            _directoryWanted=false;_status.directoryFailed=true;notice("Channel list unavailable; join by name is available");
         }
     }
 }

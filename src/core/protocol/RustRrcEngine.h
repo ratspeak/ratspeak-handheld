@@ -31,6 +31,7 @@ public:
     handheld::rrc::Status status() const;
     size_t hubs(handheld::rrc::HubView*, size_t capacity) const;
     size_t rooms(handheld::rrc::RoomView*, size_t capacity) const;
+    size_t channels(handheld::rrc::RoomView*, size_t capacity, size_t offset = 0) const;
     size_t people(const char* room, handheld::rrc::PersonView*, size_t capacity) const;
     size_t directory(handheld::rrc::DirectoryView*, size_t capacity, size_t offset = 0) const;
     handheld::rrc::Code command(const handheld::rrc::Command&, const uint8_t* text, size_t length);
@@ -147,7 +148,7 @@ private:
     uint32_t _sequence = 0, _rateCount = 0, _rateLimit = 0;
     uint64_t _rateWindow = 0;
     uint8_t _interface = UINT8_MAX, _failures = 0;
-    bool _stopped = true, _pathRequested = false;
+    bool _stopped = true, _pathRequested = false, _directoryWanted = false;
 };
 static_assert(sizeof(RustRrcEngine) <= (STORAGE_ASYNC_WRITES ? 10240 : 18432),
               "Review session residency before adding RRC state");

@@ -35,14 +35,14 @@ void LvMessagesScreen::pollRrc() {
         const bool current=_active && !_rrc.navigation.direct() && identity==_service->status().generation &&
             session==_service->status().rrc.generation && page==_rrc.navigation.page();
         if (_rrc.completeRows(view,current && result.outcome==handheld::Outcome::Ok))
-            _rrc.rows(rows,count,result.more,page==handheld::ui::RrcNavigation::Page::Directory);
+            _rrc.rows(rows,count,result.more,page==handheld::ui::RrcNavigation::Page::Directory || page==handheld::ui::RrcNavigation::Page::Channels);
         _rrcRetryAt=millis()+500;
     };
     uint32_t request=0;
     using Page=handheld::ui::RrcNavigation::Page;
     switch (page) {
     case Page::Hubs: request=_service->requestRrcHubs(completion);break;
-    case Page::Channels: request=_service->requestRrcRooms(completion);break;
+    case Page::Channels: request=_service->requestRrcChannels(_rrc.navigation.offset(),completion);break;
     case Page::People: request=_service->requestRrcPeople(_rrc.navigation.conversation().room,completion);break;
     case Page::Directory: request=_service->requestRrcDirectory(_rrc.navigation.offset(),completion);break;
     default: break;
