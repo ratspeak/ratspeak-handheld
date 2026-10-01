@@ -4,6 +4,7 @@
 #include "PageNavigation.h"
 #include "reticulum/AnnounceManager.h"
 #include "protocol/ProtocolBackend.h"
+#include "ui/RrcCommandId.h"
 
 namespace {
 constexpr int NavigationHeight = 18;
@@ -94,7 +95,8 @@ void MessagesScreen::onEnter() {
     _rrc.send = [this](const handheld::rrc::Command& value, const uint8_t* body, size_t length) {
         if (!_backend) return handheld::rrc::Code::Offline;
         auto command = value;
-        command.revision = ++_rrcCommand;
+        command.revision = handheld::ui::nextCardRrcCommand();
+        if (!command.revision) return handheld::rrc::Code::Full;
         return _backend->rrcCommand(command,body,length);
     };
     // Cardputer identity switches commit through an orderly restart.

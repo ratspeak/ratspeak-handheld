@@ -1,5 +1,7 @@
 #include "TextInput.h"
 #include <new>
+#include <algorithm>
+#include <cstring>
 
 bool TextInput::reserveTextCapacity(size_t capacity) {
     if (_text.size() > capacity) return false;
@@ -10,12 +12,23 @@ bool TextInput::reserveTextCapacity(size_t capacity) {
 }
 
 bool TextInput::setText(const std::string& text) {
-    if (_capacityLimit && text.size() > _capacityLimit) return false;
-    const bool changed = _text != text;
-    _text = text;
+    return setText(text.data(), text.size());
+}
+
+bool TextInput::setText(const char* text, size_t length) {
+    if ((!text && length) || (_capacityLimit && length > _capacityLimit)) return false;
+    const bool changed = _text.size() != length || (length && _text.compare(0, length, text, length));
+    _text.assign(text ? text : "", length);
     if (changed && _revision != UINT64_MAX) ++_revision;
     _cursorPos = _text.length();
     return true;
+}
+
+bool TextInput::appendText(const char* text, size_t length) {
+    if ((!text && length) || (_capacityLimit && length > _capacityLimit - _text.size()) ||
+        length + _text.size() > size_t(_maxLength)) return false;
+    if (length) { _text.append(text, length); if (_revision != UINT64_MAX) ++_revision; }
+    _cursorPos = _text.length(); return true;
 }
 
 void TextInput::clear() {
@@ -37,21 +50,23 @@ bool TextInput::handleKey(const KeyEvent& event) {
     }
 
     if (event.left) {
-        if (_cursorPos > 0) _cursorPos--;
+        if (_cursorPos > 0) { --_cursorPos; while (_cursorPos && (uint8_t(_text[_cursorPos]) & 0xc0) == 0x80) --_cursorPos; }
         return true;
     }
 
     if (event.right) {
-        if (_cursorPos < (int)_text.length()) _cursorPos++;
+        if (_cursorPos < (int)_text.length()) { ++_cursorPos; while (_cursorPos < int(_text.size()) && (uint8_t(_text[_cursorPos]) & 0xc0) == 0x80) ++_cursorPos; }
         return true;
     }
 
     // Backspace removes the character before the cursor.
     if (event.backspace) {
         if (_cursorPos > 0 && !_text.empty()) {
-            _text.erase(_cursorPos - 1, 1);
+            int start = _cursorPos - 1;
+            while (start && (uint8_t(_text[start]) & 0xc0) == 0x80) --start;
+            _text.erase(start, _cursorPos - start);
             if (_revision != UINT64_MAX) ++_revision;
-            _cursorPos--;
+            _cursorPos = start;
         }
         return true;
     }
@@ -59,7 +74,9 @@ bool TextInput::handleKey(const KeyEvent& event) {
     // Fn+Backspace is the printed forward-Delete action.
     if (event.forwardDelete) {
         if (_cursorPos < (int)_text.length()) {
-            _text.erase(_cursorPos, 1);
+            size_t end = _cursorPos + 1;
+            while (end < _text.size() && (uint8_t(_text[end]) & 0xc0) == 0x80) ++end;
+            _text.erase(_cursorPos, end - _cursorPos);
             if (_revision != UINT64_MAX) ++_revision;
         }
         return true;
@@ -109,16 +126,17 @@ void TextInput::render(M5Canvas& canvas, int x, int y, int w) {
     int maxChars = textAreaW / Theme::CHAR_W;
     int textX = x + 2 + 2 * Theme::CHAR_W;
 
-    canvas.setTextColor(Theme::TEXT_PRIMARY);
-    if ((int)_text.length() > maxChars) {
-        int start = _cursorPos - maxChars + 1;
-        if (start < 0) start = 0;
-        canvas.setCursor(textX, y + 2);
-        canvas.print(_text.substr(start, maxChars).c_str());
-    } else {
-        canvas.setCursor(textX, y + 2);
-        canvas.print(_text.c_str());
-    }
+    // Byte-bounded viewport with complete UTF-8 scalars, including drafts and
+    // nickname insertions that were not typed on the ASCII hardware keyboard.
+    char visible[96]{};
+    maxChars = std::max(0, std::min(maxChars, int(sizeof visible - 1)));
+    size_t start = _text.size() > size_t(maxChars) ? size_t(std::max(0, _cursorPos - maxChars + 1)) : 0;
+    start = std::min(start, _text.size());
+    while (start < _text.size() && (uint8_t(_text[start]) & 0xc0) == 0x80) ++start;
+    size_t end = std::min(_text.size(), start + size_t(maxChars));
+    while (end > start && end < _text.size() && (uint8_t(_text[end]) & 0xc0) == 0x80) --end;
+    memcpy(visible, _text.data() + start, end - start);
+    canvas.setTextColor(Theme::TEXT_PRIMARY);canvas.setCursor(textX, y + 2);canvas.print(visible);
 
     // Cursor blink
     if (_active) {
@@ -128,12 +146,9 @@ void TextInput::render(M5Canvas& canvas, int x, int y, int w) {
             _lastBlink = now;
         }
         if (_cursorVisible) {
-            int cursorX = textX + _cursorPos * Theme::CHAR_W;
-            if ((int)_text.length() > maxChars) {
-                int start = _cursorPos - maxChars + 1;
-                if (start < 0) start = 0;
-                cursorX = textX + (_cursorPos - start) * Theme::CHAR_W;
-            }
+            const size_t cursor = size_t(_cursorPos) > start ? std::min(size_t(_cursorPos) - start, end - start) : 0;
+            visible[cursor] = 0;
+            const int cursorX = textX + canvas.textWidth(visible);
             canvas.fillRect(cursorX, y + 1, Theme::CHAR_W, Theme::CHAR_H + 2, Theme::PRIMARY);
         }
     }

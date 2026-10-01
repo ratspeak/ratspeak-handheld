@@ -773,7 +773,7 @@ void setup() {
     });
     nodesScreen.setAnnounceManager(announceManager);
     nodesScreen.setNodeSelectedCallback([](const std::string& peerHex) {
-        messageView.setPeerHex(peerHex);
+        if (!messageView.setPeerHex(peerHex)) return;
         ui.tabBar().setActiveTab(TabBar::TAB_MSGS);
         ui.setScreen(&messageView);
     });
@@ -785,12 +785,16 @@ void setup() {
     messagesScreen.setAnnounceManager(announceManager);
     messagesScreen.setBackend(backend);
     messagesScreen.setOpenCallback([](const std::string& peerHex) {
-        messageView.setPeerHex(peerHex);
+        if (!messageView.setPeerHex(peerHex)) return;
         ui.setScreen(&messageView);
     });
     messagesScreen.setAddContactCallback([](const std::string& peerHex) {
         if (announceManager) announceManager->saveNode(peerHex);
     });
+    messagesScreen.setRrcOpenCallback([](const handheld::rrc::Conversation& binding,const char* insert) {
+        if (messageView.setRrcConversation(binding,insert)) ui.setScreen(&messageView);
+    });
+    messageView.setMessageStore(&messageStore);
     messageView.setLXMFManager(&lxmf);
     messageView.setBackend(backend);
     messageView.setAnnounceManager(announceManager);
@@ -982,6 +986,7 @@ void loop() {
         rnsDuration = millis() - rnsStart;
     }
     if (backend->pollRadioBeforeBlockingWork() || messageStore.deferredIO()) {
+        if (messageView.pollRrc(maintenance.accepting())) ui.markContentDirty();
         if (messageView.pollSubmission()) ui.markContentDirty();
         if (messageView.pollReadMarker()) ui.markContentDirty();
         if (settingsScreen.pollNetworkResults()) ui.markContentDirty();

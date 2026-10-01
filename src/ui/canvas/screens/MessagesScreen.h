@@ -44,7 +44,7 @@ private:
     void prepareRrcForm();
     handheld::ui::RrcBrowser _rrc;
     TextInput _rrcInput;
-    uint32_t _rrcFormView = 0, _rrcCommand = 0;
+    uint32_t _rrcFormView = 0;
     bool _rememberKey = false;
     using Conversations = handheld::history::ConversationList;
     std::string peerHex(size_t index) const;

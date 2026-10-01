@@ -17,6 +17,8 @@ public:
     const std::string& getText() const { return _text; }
     uint64_t revision() const { return _revision; }
     bool setText(const std::string& text);
+    bool setText(const char* text, size_t length);
+    bool appendText(const char* text, size_t length);
     void clear();
     void clearSensitive() {
         volatile char* bytes = _text.empty() ? nullptr : &_text[0];

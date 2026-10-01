@@ -1,5 +1,6 @@
 #include "MessageView.h"
 #include "StorageWindowAdapter.h"
+#include "ui/RrcCompose.h"
 #include "reticulum/MessageStatusDetail.h"
 #include "Theme.h"
 #include "reticulum/AnnounceManager.h"
@@ -14,8 +15,8 @@ using History = handheld::history::HistoryWindow;
 constexpr int CHAT_HEADER_H = Theme::SECTION_HEADER_H;
 constexpr int CHAT_INPUT_H = Theme::CHAR_H + 4;
 
-int visibleChatLines() {
-    int chatH = Theme::CONTENT_H - CHAT_HEADER_H - CHAT_INPUT_H - 4;
+int visibleChatLines(bool rrc = false) {
+    int chatH = Theme::CONTENT_H - (CHAT_HEADER_H + (rrc ? Theme::CHAR_H + 2 : 0)) - CHAT_INPUT_H - 4;
     return chatH > 0 ? chatH / Theme::CHAR_H : 1;
 }
 
@@ -42,7 +43,7 @@ void drawFittedHeader(M5Canvas& canvas, const std::string& text, int x, int y, i
 // Walk only the fixed published text arena. No wrapped-line vector or complete
 // message string is retained. Sanitized UTF-8 scalars stay intact at every wrap.
 template <typename Visitor>
-int visitChatLines(const History& history, Visitor visit) {
+int visitChatLines(const History& history, bool rrc, Visitor visit) {
     constexpr size_t width = (Theme::CONTENT_W - 4) / Theme::CHAR_W;
     int line = 0;
     auto emit = [&](size_t row, const char* text, uint16_t color) { visit(row, line++, text, color); };
@@ -60,13 +61,13 @@ int visitChatLines(const History& history, Visitor visit) {
             else if (ago < 86400) snprintf(timestamp, sizeof(timestamp), "%luh", ago / 3600);
         }
         const char* phase = !row.incoming() && !row.unavailable() && history.statusReady() ?
-            messageStatusLabel(static_cast<LXMFStatus>(row.status)) : nullptr;
-        snprintf(heading, sizeof(heading), "%s %s%s%s%s%s", timestamp, row.incoming() ? "them" : "you",
+            (rrc ? handheld::history::rrc::statusName(row.status) : messageStatusLabel(static_cast<LXMFStatus>(row.status))) : nullptr;
+        snprintf(heading, sizeof(heading), "%s %s%s%s%s%s", timestamp, rrc ? "" : row.incoming() ? "them" : "you",
                  phase ? " [" : "", phase ? phase : "", phase ? "]" : "",
                  history.focusedSpan() == index ? "  >" : "");
         emit(index, heading, Theme::TEXT_SECONDARY);
-        const auto color = row.unavailable() || (history.statusReady() && row.status == uint8_t(LXMFStatus::FAILED)) ? Theme::ERROR :
-            history.statusReady() && row.status == uint8_t(LXMFStatus::UNCONFIRMED) ? Theme::WARNING : Theme::PRIMARY;
+        const auto color = row.unavailable() || (history.statusReady() && row.status == (rrc ? uint8_t(handheld::storage::rrc::Status::Failed) : uint8_t(LXMFStatus::FAILED))) ? Theme::ERROR :
+            history.statusReady() && row.status == (rrc ? uint8_t(handheld::storage::rrc::Status::Unconfirmed) : uint8_t(LXMFStatus::UNCONFIRMED)) ? Theme::WARNING : Theme::PRIMARY;
         const char* source = history.text(index);
         size_t at = 0;
         do {
@@ -85,7 +86,7 @@ int visitChatLines(const History& history, Visitor visit) {
                 break;
             }
         } while (true);
-        if (!row.incoming() && !row.unavailable()) {
+        if (!rrc && !row.incoming() && !row.unavailable()) {
             const char* detail = !history.statusReady() || (row.flags & History::Span::StatusUnavailable) ? nullptr :
                 messageStatusDetail(LXMFStatus(row.status), row.flags & History::Span::StatusPending,
                                     row.statusError, row.flags & History::Span::TxSuppressed);
@@ -96,8 +97,8 @@ int visitChatLines(const History& history, Visitor visit) {
     return line;
 }
 
-int totalChatLines(const History& history) {
-    return visitChatLines(history, [](size_t, int, const char*, uint16_t) {});
+int totalChatLines(const History& history, bool rrc) {
+    return visitChatLines(history, rrc, [](size_t, int, const char*, uint16_t) {});
 }
 }
 
@@ -106,7 +107,7 @@ bool MessageView::prepareDraft(String& identity) {
     static_assert(2 * (DraftLength + 1) + 2 * 33 + sizeof(TextInput) +
                   3 * sizeof(std::string) + 32 <= Budget::CanvasDraft,
                   "Review complete Canvas draft ownership");
-    if (!_backend || _peerHex.size() != 32 || _input.getText().size() > DraftLength ||
+    if (!_backend || (!_rrcMode && _peerHex.size() != 32) || _input.getText().size() > DraftLength ||
         _retainedDraft.size() > DraftLength || _retainedPeer.size() > 32 ||
         _retainedIdentity.size() > 32) return false;
     const bool allocating = _input.textCapacity() < DraftLength ||
@@ -127,6 +128,22 @@ bool MessageView::prepareDraft(String& identity) {
     } catch (const std::bad_alloc&) { return false; }
 }
 
+#include "RrcChat.inc"
+
+bool MessageView::setPeerHex(const std::string& peerHex) {
+    if (!leaveRrcDraft()) return false;
+    if (_rrcMode || _peerHex!=peerHex) _history.close();
+    _rrcMode=false;++_rrcView;_peerHex=peerHex;
+    return true;
+}
+void MessageView::onExit() {
+    if (_rrcMode) saveRrcDraft(true);
+    else if (_backend && (!_sendTicket.valid() || _retainedPeer==_peerHex)) {
+        _retainedDraft=_input.getText();_retainedPeer=_peerHex;
+        _retainedIdentity=_backend->destinationHashHex().c_str();
+    }
+    _visible=false;_readRequested=false;_input.setActive(false);_history.close();
+}
 void MessageView::onEnter() {
     _visible = true; _readRequested = true; _readRetryAt = millis();
     String identity;
@@ -136,6 +153,13 @@ void MessageView::onEnter() {
         _sendNotice = "Draft unavailable; Enter retries";
         refreshMessages();
         return;
+    }
+    _rrcClient.bind(_backend,_store,&_readTicket);
+    _input.setMaxLength(DraftLength);
+    _input.setSubmitCallback([this](const std::string&) { sendCurrentInput(); });
+    if (_rrcMode) {
+        _input.setActive(_rrcLoaded && rrcWritable());_readRequested=false;
+        enterRrcHistory();loadRrcDraft();return;
     }
     _input.setActive(true);
     _sendNotice = _sendTicket.valid() && _retainedPeer == _peerHex &&
@@ -154,6 +178,7 @@ void MessageView::onEnter() {
 }
 
 void MessageView::refreshMessages() {
+    if (_rrcMode) {if (_history.mode()==History::Mode::Closed) enterRrcHistory();else _history.refresh();_needsRefresh=false;return;}
     if (!_lxmf || _peerHex.empty()) return;
     rs::Bytes peer; peer.assignHex(_peerHex.c_str());
     if (peer.size() != 16) return;
@@ -168,10 +193,12 @@ void MessageView::refreshMessages() {
 
 void MessageView::render(M5Canvas& canvas) {
     int baseY = Theme::CONTENT_Y;
+    const int headerH=CHAT_HEADER_H+(_rrcMode?Theme::CHAR_H+2:0);
 
     // Header: peer name or hash.
     std::string header;
-    if (_am) {
+    if (_rrcMode) header=_rrcBinding.room[0]?_rrcBinding.room:_rrcBinding.privateNotice()?"Private hub message":"Hub notices";
+    else if (_am) {
         const DiscoveredNode* node = _am->findNodeByHex(_peerHex);
         if (node && !node->name.empty()) header = node->name;
         if (header.empty()) header = _am->lookupName(_peerHex);
@@ -183,8 +210,8 @@ void MessageView::render(M5Canvas& canvas) {
             header = _peerHex;
         }
     }
-    canvas.fillRect(0, baseY, Theme::CONTENT_W, CHAT_HEADER_H, Theme::BG_SURFACE);
-    canvas.fillRect(0, baseY + 2, 3, CHAT_HEADER_H - 4, Theme::PRIMARY);
+    canvas.fillRect(0, baseY, Theme::CONTENT_W, headerH, Theme::BG_SURFACE);
+    canvas.fillRect(0, baseY + 2, 3, headerH - 4, Theme::PRIMARY);
     Theme::useUiFont(canvas);
     canvas.setTextColor(Theme::TEXT_PRIMARY);
     drawFittedHeader(canvas, _sendNotice ? _sendNotice : !_history.freshnessAvailable() ? "History needs manual refresh" :
@@ -192,22 +219,41 @@ void MessageView::render(M5Canvas& canvas) {
                         (_history.mode() == History::Mode::Full || _history.focusedSpan() < _history.spanCount() ?
                             "Status delayed; R retries" : "Status delayed; Tab, R") : header,
                     8, baseY + 2, Theme::CONTENT_W - 16);
-    canvas.drawFastHLine(0, baseY + CHAT_HEADER_H, Theme::CONTENT_W, Theme::DIVIDER);
+    if (_rrcMode && _backend) {
+        const auto status=_backend->rrcStatus();
+        const auto action=_rrcBinding.privateNotice()?handheld::rrc::Action::PrivateNotice:_rrcEmote?handheld::rrc::Action::Emote:handheld::rrc::Action::Message;
+        const auto limit=handheld::ui::rrc_input::preview(status,_rrcBinding,action,nullptr,0);
+        char metadata[90];
+        const char* phase=memcmp(status.hub,_rrcBinding.hub,16)?"Offline":handheld::rrc::phaseName(status.phase);
+        snprintf(metadata,sizeof metadata,"%02x%02x%02x %s  %u/%u%s",_rrcBinding.hub[0],_rrcBinding.hub[1],_rrcBinding.hub[2],
+            phase,unsigned(_input.getText().size()),limit.maximum,_rrcEmote?" ACTION":" bytes");
+        Theme::useSmallFont(canvas);canvas.setTextColor(Theme::TEXT_SECONDARY);
+        drawFittedHeader(canvas,metadata,8,baseY+CHAT_HEADER_H,Theme::CONTENT_W-16);
+    }
+    canvas.drawFastHLine(0, baseY + headerH, Theme::CONTENT_W, Theme::DIVIDER);
 
     Theme::useSmallFont(canvas);
-    const int chatY = baseY + CHAT_HEADER_H + 2;
+    const int chatY = baseY + headerH + 2;
     const int inputY = baseY + Theme::CONTENT_H - CHAT_INPUT_H;
-    const int visible = visibleChatLines();
-    const int maximum = std::max(0, totalChatLines(_history) - visible);
+    const int visible = visibleChatLines(_rrcMode);
+    const int maximum = std::max(0, totalChatLines(_history, _rrcMode) - visible);
     _history.setScrollOffset(_history.mode() == History::Mode::Chat && _history.followsNewest() ?
         uint32_t(maximum) : std::min(_history.scrollOffset(), uint32_t(maximum)));
-    visitChatLines(_history, [&](size_t row, int line, const char* text, uint16_t color) {
+    size_t previousRow=SIZE_MAX;int previousLine=-1;
+    auto viewedEnd=[&] {
+        if (!_rrcMode || previousRow==SIZE_MAX || previousLine<int(_history.scrollOffset()) || previousLine>=int(_history.scrollOffset())+visible) return;
+        const auto* row=_history.span(previousRow);
+        if (row && !row->unavailable() && !row->more()) _rrcVisibleThrough=std::max(_rrcVisibleThrough,row->counter);
+    };
+    visitChatLines(_history, _rrcMode, [&](size_t row, int line, const char* text, uint16_t color) {
+        if (row!=previousRow) viewedEnd();previousRow=row;previousLine=line;
         if (line < int(_history.scrollOffset()) || line >= int(_history.scrollOffset()) + visible) return;
         const int y = chatY + (line - _history.scrollOffset()) * Theme::CHAR_H;
         if (_history.focusedSpan() == row && _history.mode() == History::Mode::Chat)
             canvas.fillRect(0, y, Theme::CONTENT_W, Theme::CHAR_H, Theme::SELECTION_BG);
         canvas.setTextColor(color); canvas.drawString(text, 2, y);
     });
+    viewedEnd();
     if (!_history.spanCount()) {
         canvas.setTextColor(Theme::TEXT_SECONDARY);
         const char* text = _history.state() == History::State::Retrying ? "Read failed; retrying..." :
@@ -226,6 +272,9 @@ void MessageView::render(M5Canvas& canvas) {
     } else if (_history.focusedSpan() < _history.spanCount()) {
         canvas.setTextColor(Theme::TEXT_SECONDARY);
         canvas.drawString("Enter: read  R: refresh", 2, inputY + 2);
+    } else if (_rrcMode && (!rrcWritable() || !_rrcLoaded)) {
+        canvas.setTextColor(Theme::TEXT_SECONDARY);
+        canvas.drawString(!rrcWritable()?"Hub notices are read-only":"Loading draft...",2,inputY+2);
     } else if (_draftReady) {
         _input.render(canvas, 0, inputY, Theme::CONTENT_W);
     } else {
@@ -256,15 +305,15 @@ bool MessageView::handleKey(const KeyEvent& event) {
             focus < _history.spanCount() ? focus + 1 : 0);
         _input.setActive(_history.focusedSpan() == History::VisibleSpans);
         bool located = false;
-        visitChatLines(_history, [&](size_t row, int line, const char*, uint16_t) {
+        visitChatLines(_history, _rrcMode, [&](size_t row, int line, const char*, uint16_t) {
             if (!located && row == _history.focusedSpan()) { _history.setScrollOffset(line); located = true; }
         });
-        const uint32_t maximum = std::max(0, totalChatLines(_history) - visibleChatLines());
+        const uint32_t maximum = std::max(0, totalChatLines(_history, _rrcMode) - visibleChatLines(_rrcMode));
         _history.setViewportAtNewest(_history.scrollOffset() >= maximum);
         return true;
     }
     if (event.up || event.down || (full && (event.left || event.right))) {
-        const uint32_t maximum = std::max(0, totalChatLines(_history) - visibleChatLines());
+        const uint32_t maximum = std::max(0, totalChatLines(_history, _rrcMode) - visibleChatLines(_rrcMode));
         const uint32_t offset = std::min(_history.scrollOffset(), maximum);
         if (event.up && offset) {
             _history.setScrollOffset(offset - 1); _history.setViewportAtNewest(false);
@@ -294,10 +343,17 @@ bool MessageView::handleKey(const KeyEvent& event) {
         if (!event.repeat && _backCb) _backCb();
         return true;
     }
-    if (!_draftReady) return true;
+    if (!_draftReady || (_rrcMode && (!_rrcLoaded || !rrcWritable()))) return true;
+    if (_rrcMode && event.ctrl && !event.repeat && (event.character=='e' || event.character=='E')) {
+        if (_rrcBinding.privateNotice()) rrcNotice("Actions belong in channels");
+        else { _rrcEmote=!_rrcEmote;rrcNotice(_rrcEmote?"ACTION mode; Ctrl+E returns to chat":"Message mode"); }
+        return true;
+    }
+    if (event.enter && event.repeat) return true; // Sending requires a new, explicit key press.
     const auto revision = _input.revision();
     if (_input.handleKey(event)) {
-        if (_input.revision() != revision && _peerHex == _retainedPeer && _backend &&
+        if (_rrcMode && _input.revision()!=revision) rrcEdited();
+        if (!_rrcMode && _input.revision() != revision && _peerHex == _retainedPeer && _backend &&
             _backend->destinationHashHex().c_str() == _retainedIdentity) {
             _submissionEdited = true; _retainedDraft = _input.getText();
         }
@@ -308,10 +364,11 @@ bool MessageView::handleKey(const KeyEvent& event) {
 }
 
 void MessageView::notifyStatusChange(const std::string& peerHex, uint32_t, LXMFStatus) {
-    if (_peerHex == peerHex && _backend) _history.observeStatusRevision(_backend->lxmfStatusRevision());
+    if (!_rrcMode && _peerHex == peerHex && _backend) _history.observeStatusRevision(_backend->lxmfStatusRevision());
 }
 
 void MessageView::notifyNewMessage(const handheld::storage::RecordKey& key) {
+    if (_rrcMode) return;
     rs::Bytes peer; peer.assignHex(_peerHex.c_str());
     if (peer.size() != sizeof(key.peer) || memcmp(peer.data(), key.peer, sizeof(key.peer)) != 0) return;
     _history.notifyArrival();
@@ -324,12 +381,12 @@ bool MessageView::pollHistory(bool allowAdmission) {
     const auto publication = _history.revision(), statusPublication = _history.statusRevision();
     const auto state = _history.state();
     const auto error = _history.error();
-    if (allowAdmission) {
+    if (allowAdmission && !_rrcMode) {
         if (_visible && _needsRefresh) refreshMessages();
         _history.observeHistoryRevision(_lxmf->historyRevision());
         if (_backend) _history.observeStatusRevision(_backend->lxmfStatusRevision());
     }
-    handheld::canvas::pollStorageWindow(_history, *_lxmf, _backend, _visible, allowAdmission,
+    if (!_rrcHistory.pending()) handheld::canvas::pollStorageWindow(_history, *_lxmf, _backend, _visible && !_rrcMode, allowAdmission && !_rrcMode,
         [](const History::Query& query) {
             RecordKey key; memcpy(key.peer, query.peer, 16);
             key.counter = query.cursor.counter; key.incoming = query.cursor.incoming;
@@ -340,6 +397,15 @@ bool MessageView::pollHistory(bool allowAdmission) {
                 _lxmf->requestHistoryPage(_peerHex, query.cursor, query.direction) :
                 _lxmf->requestRecord(key, query.offset, query.capacity);
         });
+    if (_store) {
+        handheld::storage::rrc::Context context;const auto rrcStatus=_backend?_backend->rrcStatus():handheld::rrc::Status{};
+        const bool rrcVisible=_rrcMode && _visible && _backend && _backend->rrcContext(_rrcBinding.hub,_rrcBinding.room,
+            _rrcBinding.privateNotice()?_rrcBinding.participant:nullptr,context);
+        if (rrcVisible && allowAdmission) {
+            _history.observeHistoryRevision(rrcStatus.revision);_history.observeStatusRevision(rrcStatus.revision);
+        }
+        _rrcHistory.poll(_history,*_store,rrcVisible?&context:nullptr,rrcStatus.revision,millis(),allowAdmission);
+    }
     // The previous bank also retains known delivery facts until the first
     // status projection/fallback finishes. Abandoned views can release now;
     // same-view bodies must keep that fallback even without text pointers.
@@ -350,6 +416,7 @@ bool MessageView::pollHistory(bool allowAdmission) {
 }
 
 bool MessageView::pollReadMarker() {
+    if (_rrcClient.readingDraft()) return false;
     if (!_lxmf) return false;
     bool changed = false;
     if (_readTicket.valid()) {
@@ -367,7 +434,7 @@ bool MessageView::pollReadMarker() {
     }
     // One ordered marker at a time. A new arrival during an outstanding marker
     // requests another pass; leaving the conversation stops new admission.
-    if (_visible && _readRequested && !_peerHex.empty() &&
+    if (!_rrcMode && _visible && _readRequested && !_peerHex.empty() &&
         int32_t(uint32_t(millis()) - _readRetryAt) >= 0) {
         const auto submitted = _lxmf->requestMarkRead(_peerHex);
         if (submitted.accepted()) {
@@ -400,7 +467,7 @@ bool MessageView::pollSubmission() {
     _sendTicket = {};
     const bool saved = state == handheld::outgoing::Poll::Ready &&
                        result.outcome == handheld::storage::Outcome::Committed;
-    const bool sameConversation = _peerHex == _retainedPeer &&
+    const bool sameConversation = !_rrcMode && _peerHex == _retainedPeer &&
         _backend->destinationHashHex().c_str() == _retainedIdentity;
     const bool sameDraft = sameConversation &&
         !_submissionEdited && _input.revision() == _submittedRevision &&
@@ -419,6 +486,7 @@ bool MessageView::pollSubmission() {
 }
 
 void MessageView::sendCurrentInput() {
+    if (_rrcMode) {sendRrcMessage();return;}
     if (!_backend || !_lxmf || _peerHex.empty() || _sendTicket.valid() ||
         _input.revision() == UINT64_MAX) return;
     const auto& text = _input.getText();

@@ -5,6 +5,8 @@
 #include "reticulum/LXMFManager.h"
 #include "protocol/OutgoingContract.h"
 #include "history/HistoryWindow.h"
+#include "RrcClient.h"
+#include "RrcHistoryAdapter.h"
 #include <string>
 
 class AnnounceManager;
@@ -16,12 +18,15 @@ public:
     bool handleKey(const KeyEvent& event) override;
     const char* title() const override { return "Chat"; }
     void onEnter() override;
-    void onExit() override { _visible = false; _readRequested = false; _history.close(); }
+    void onExit() override;
 
     void setLXMFManager(LXMFManager* lxmf) { _lxmf = lxmf; }
     void setBackend(ProtocolBackend* backend) { _backend = backend; }
+    void setMessageStore(MessageStore* store) { _store = store; }
     void setAnnounceManager(AnnounceManager* am) { _am = am; }
-    void setPeerHex(const std::string& peerHex) { _peerHex = peerHex; }
+    bool setPeerHex(const std::string& peerHex);
+    bool setRrcConversation(const handheld::rrc::Conversation&, const char* insert = nullptr);
+    bool pollRrc(bool allowAdmission = true);
     void notifyNewMessage(const handheld::storage::RecordKey&);
     // App-owned polling continues while this screen is hidden or powered off.
     bool pollSubmission();
@@ -40,6 +45,29 @@ public:
     void setUnreadUpdateCallback(UnreadUpdateCb cb) { _unreadCb = cb; }
 
 private:
+    bool leaveRrcDraft();
+    bool sameRrcIdentity(const handheld::rrc::Conversation&, const uint8_t[16]) const;
+    void loadRrcDraft();
+    void saveRrcDraft(bool immediate = false);
+    void clearConfirmedRrcDraft();
+    void enterRrcHistory();
+    void sendRrcMessage();
+    void rrcNotice(const char*);
+    void rrcEdited();
+    handheld::rrc::Command rrcCommand(handheld::rrc::Action) const;
+    bool rrcWritable() const { return _rrcBinding.room[0] || _rrcBinding.privateNotice(); }
+    MessageStore* _store = nullptr;
+    handheld::canvas::RrcClient _rrcClient;
+    handheld::canvas::RrcHistoryAdapter _rrcHistory;
+    handheld::rrc::Conversation _rrcBinding, _rrcSendingBinding;
+    char _rrcInsert[36]{};
+    uint8_t _rrcIdentity[16]{}, _rrcSendIdentity[16]{};
+    uint64_t _rrcSavedRevision = 0, _rrcRequestedRevision = 0, _rrcClearEditorRevision = 0;
+    uint32_t _rrcView = 0, _rrcSentView = 0, _rrcSendId = 0, _rrcRetryAt = 0, _rrcEditAt = 0;
+    uint32_t _rrcStorageRevision = 0, _rrcSentStorageRevision = 0, _rrcClearView = 0, _rrcReadThrough = 0, _rrcVisibleThrough = 0, _rrcObservedRevision = 0;
+    bool _rrcMode = false, _rrcLoaded = false, _rrcLoading = false, _rrcSaving = false;
+    bool _rrcEmote = false, _rrcUncertain = false, _rrcResendConfirmed = false;
+    bool _rrcSendRequested = false, _rrcRequestedEmote = false, _rrcClearPending = false, _rrcClearing = false;
     void refreshMessages();
     void sendCurrentInput();
     bool prepareDraft(String& identity);
