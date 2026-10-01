@@ -21,7 +21,8 @@ namespace handheld {
 
 namespace {
 bool rrcCatalog(Operation operation) { return operation==Operation::RrcChannels || operation==Operation::RrcSavedRooms; }
-bool rrcRead(Operation operation) { return rrcCatalog(operation) || (operation >= Operation::RrcHistoryPage && operation <= Operation::RrcDetail); }
+bool rrcMetadata(Operation operation) { return rrcCatalog(operation) || operation==Operation::RrcInbox; }
+bool rrcRead(Operation operation) { return rrcMetadata(operation) || (operation >= Operation::RrcHistoryPage && operation <= Operation::RrcDetail); }
 history::HistoryWindow::Query rrcHistoryQuery(const Request& request, const storage::rrc::Context& context) {
     history::HistoryWindow::Query query;
     query.kind = request.operation == Operation::RrcHistoryPage ? history::HistoryWindow::Kind::Page :
@@ -44,6 +45,7 @@ size_t queryCapacity(Operation operation) {
         case Operation::RrcDraft: return sizeof(rrc::DraftView);
         case Operation::RrcDetail: return sizeof(rrc::MessageDetail);
         case Operation::RrcChannels: case Operation::RrcSavedRooms: return 4*sizeof(rrc::RoomView);
+        case Operation::RrcInbox: return 4*sizeof(rrc::PrivateView);
         default: return 0;
     }
 }
@@ -134,7 +136,7 @@ bool DeviceService::readyForCommand() {
         case Operation::ConversationPage: case Operation::ConversationDetail:
         case Operation::HistoryPage: case Operation::ReadRecord: case Operation::HistoryStatus:
         case Operation::RrcHistoryPage: case Operation::RrcHistoryRecord: case Operation::RrcHistoryStatus:
-        case Operation::RrcDraft: case Operation::RrcDetail: case Operation::RrcCommand: case Operation::RrcChannels: case Operation::RrcSavedRooms:
+        case Operation::RrcDraft: case Operation::RrcDetail: case Operation::RrcCommand: case Operation::RrcChannels: case Operation::RrcSavedRooms: case Operation::RrcInbox:
             return true; // Typed worker submissions and result copies only.
         default: return false; // Settings, contacts and callbacks may write inline.
     }
@@ -634,7 +636,7 @@ void DeviceService::execute(uint8_t slot) {
     case Operation::ConversationPage: case Operation::ConversationDetail:
     case Operation::HistoryPage: case Operation::ReadRecord: case Operation::HistoryStatus:
     case Operation::RrcHistoryPage: case Operation::RrcHistoryRecord: case Operation::RrcHistoryStatus:
-    case Operation::RrcDraft: case Operation::RrcDetail: case Operation::RrcChannels: case Operation::RrcSavedRooms:
+    case Operation::RrcDraft: case Operation::RrcDetail: case Operation::RrcChannels: case Operation::RrcSavedRooms: case Operation::RrcInbox:
         history(slot); break;
     case Operation::Identities: {
         JsonDocument doc; auto rows = doc.to<JsonArray>();
@@ -673,9 +675,9 @@ void DeviceService::history(uint8_t slot) {
     if (rrcRead(request.operation)) {
         storage::rrc::Context context;
         if (!readRrcContext(slot, context) ||
-            (!rrcCatalog(request.operation) && request.operation != Operation::RrcDraft && (!storage::decodeHex(request.peer, strnlen(request.peer, sizeof request.peer), peer, 16) ||
+            (!rrcMetadata(request.operation) && request.operation != Operation::RrcDraft && (!storage::decodeHex(request.peer, strnlen(request.peer, sizeof request.peer), peer, 16) ||
              memcmp(peer, context.conversation, 16))) ||
-            (!rrcCatalog(request.operation) && request.operation != Operation::RrcHistoryPage && request.operation != Operation::RrcDraft && !request.argument) ||
+            (!rrcMetadata(request.operation) && request.operation != Operation::RrcHistoryPage && request.operation != Operation::RrcDraft && !request.argument) ||
             (request.operation == Operation::RrcHistoryStatus && request.incoming) ||
             (request.historyDirection != storage::HistoryDirection::Before && request.historyDirection != storage::HistoryDirection::After)) {
             complete(slot, Outcome::Invalid); return;

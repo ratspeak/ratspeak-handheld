@@ -107,6 +107,13 @@ storage::Submission DeviceService::submitRrcRead(uint8_t slot) {
     storage::rrc::Context context;
     if (!readRrcContext(slot, context)) return {{}, storage::Rejection::Invalid};
     const auto& request = _mailbox.request(slot);
+    if(request.operation==Operation::RrcInbox) {
+        for(auto byte:context.conversation) if(byte) return {{},storage::Rejection::Invalid};
+        if(request.revision!=_backend.rrcStatus().generation) return {{},storage::Rejection::Fenced};
+        storage::rrc::Record record;
+        storage::rrc::Record::make(record,context,storage::rrc::Kind::Preferences,reinterpret_cast<const uint8_t*>("HQN1"),4);
+        return _messages.requestRrc(storage::Operation::RrcPrivateInbox,record,nullptr,request.offset,0,request.historyDirection);
+    }
     if (rrcCatalog(request.operation)) {
         for (auto byte:context.conversation) if (byte) return {{},storage::Rejection::Invalid};
         const auto status=_backend.rrcStatus();
@@ -135,6 +142,14 @@ Result DeviceService::projectRrcRead(const storage::Result& stored) {
     }
     if (stored.outcome != storage::Outcome::Committed) return result;
     auto invalid = [&]() { result.storageError = storage::Error::InvalidRecord; return result; };
+    if(request.operation==Operation::RrcInbox) {
+        if(request.revision!=_backend.rrcStatus().generation) {result.outcome=Outcome::Stale;result.storageError=storage::Error::Stale;return result;}
+        rrc::PrivateView rows[history::rrc_catalog::Capacity];size_t count=0;
+        if(!history::rrc_catalog::privateRows(stored,reinterpret_cast<const uint8_t*>(_scratch),rows,count) ||
+            !_mailbox.write(slot,rows,count*sizeof rows[0])) return invalid();
+        result.length=count*sizeof rows[0];result.more=stored.more;result.next=stored.key.counter;result.total=stored.total;
+        result.outcome=Outcome::Ok;return result;
+    }
     if (rrcCatalog(request.operation)) {
         const auto status=_backend.rrcStatus();
         if (request.revision!=status.generation || (request.operation==Operation::RrcChannels && request.statusRevision!=status.revision)) {

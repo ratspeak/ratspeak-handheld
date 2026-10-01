@@ -48,9 +48,11 @@ public:
     const char* personName() const { return _personName; }
     const uint8_t* person() const { return _person; }
     size_t offset() const { return _offset; }
+    bool after() const { return _after; }
     size_t selected() const { return _selected; }
     void select(size_t index) { _selected = index; }
-    void pageOffset(size_t offset) { _offset = offset; _selected = 0; changed(); }
+    void pageOffset(size_t offset) { _offset = offset; _selected = 0; _after=false; changed(); }
+    void pageCursor(uint32_t cursor,bool after) { _offset=cursor;_selected=0;_after=after;changed(); }
     void direct(bool value) { if (_direct != value) { _direct = value; changed(); } }
     // Identity changes clear every browse target. A reconnect only updates the
     // active state; it cannot move the user out of a browser or open a dialog.
@@ -69,18 +71,19 @@ public:
     }
     void root() {
         _page = connected() ? Page::Channels : Page::Hubs;
-        _depth = 0; _offset = 0; _selected = 0; changed();
+        _depth = 0; _offset = 0; _selected = 0; _after=false; changed();
     }
     bool push(Page page) {
         if (_depth == sizeof _back / sizeof _back[0] || _revision == UINT32_MAX) return false;
         if (_offset>UINT32_MAX || (_selected!=SIZE_MAX && _selected>=UINT16_MAX)) return false;
-        _back[_depth++] = {uint32_t(_offset), uint16_t(_selected), _page};
-        _page = page; _offset = _selected = 0; changed(); return true;
+        _back[_depth++] = {uint32_t(_offset), uint16_t(_selected), _page, _after};
+        _page = page; _offset = _selected = 0; _after=false; changed(); return true;
     }
     void back() {
         if (!_depth) { root(); return; }
         const auto frame = _back[--_depth]; _page = frame.page; _offset = frame.offset;
         _selected = frame.selected==UINT16_MAX ? SIZE_MAX : frame.selected;
+        _after=frame.after;
         if (!_depth && (_page == Page::Hubs || _page == Page::Channels)) _page = connected() ? Page::Channels : Page::Hubs;
         changed();
     }
@@ -102,6 +105,11 @@ public:
     }
     bool savedRooms(bool selectedHub=false) {
         if (!push(Page::SavedRooms)) return false;
+        _conversation={};std::memcpy(_conversation.hub,selectedHub?_selectedHub:_activeHub,16);
+        _conversationSession=_session;return true;
+    }
+    bool inbox(bool selectedHub=false) {
+        if(!push(Page::Inbox)) return false;
         _conversation={};std::memcpy(_conversation.hub,selectedHub?_selectedHub:_activeHub,16);
         _conversationSession=_session;return true;
     }
@@ -139,7 +147,7 @@ private:
         std::memset(out, 0, N); if (n) std::memcpy(out, in, n);
     }
     void changed() { if (_revision != UINT32_MAX) ++_revision; }
-    struct Frame { uint32_t offset = 0; uint16_t selected = 0; Page page = Page::Hubs; };
+    struct Frame { uint32_t offset = 0; uint16_t selected = 0; Page page = Page::Hubs; bool after=false; };
     Frame _back[8]{};
     rrc::Conversation _conversation;
     uint8_t _activeHub[16]{}, _selectedHub[16]{}, _person[16]{};
@@ -149,7 +157,7 @@ private:
     Page _page = Page::Hubs;
     rrc::Phase _phase = rrc::Phase::Disconnected;
     uint8_t _depth = 0;
-    bool _direct = true;
+    bool _direct = true, _after=false;
 };
 static_assert(sizeof(RrcNavigation) <= 384, "Navigation retains bindings, never message bodies or node snapshots");
 }

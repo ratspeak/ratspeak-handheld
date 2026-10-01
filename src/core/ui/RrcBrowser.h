@@ -21,7 +21,7 @@ public:
         uint8_t id[16]{};
         char name[65]{};
         uint32_t unread = 0;
-        uint8_t flags = 0;
+        uint32_t state = 0; // Row phase/flags, or the private inbox cursor.
     };
     RrcNavigation navigation;
     Send send;
@@ -42,7 +42,7 @@ public:
     bool needsRows() const {
         const auto page = navigation.page();
         return _visible && !navigation.direct() && !_pending && _dirty &&
-            (page == Page::Hubs || page == Page::Channels || page == Page::Directory || page == Page::People || page == Page::SavedRooms);
+            (page == Page::Hubs || page == Page::Channels || page == Page::Directory || page == Page::People || page == Page::SavedRooms || page == Page::Inbox);
     }
     uint32_t beginRows() { _pending = navigation.revision(); _dirty = false; return _pending; }
     // The host also fences session and local identity before calling this.
@@ -74,6 +74,11 @@ public:
             navigation.select(SIZE_MAX);
         }
         ++_renderRevision;
+    }
+    void rows(const rrc::PrivateView* values,size_t count,bool following=false,bool =true) {
+        rows<rrc::PrivateView>(values,count,false,true);
+        _newer=navigation.after()?following:navigation.offset()!=0;
+        _more=count && (navigation.after()?navigation.offset()!=0:following);
     }
     bool ready() const { return !dataPage() || _rowsView == navigation.revision(); }
     bool form() const {
@@ -119,11 +124,11 @@ public:
         case Page::Hubs: return _count + 2 + pagerCount(); // address, back
         case Page::Channels: return 1 + _count + 2 + pagerCount(); // hub, join, directory
         case Page::Directory: case Page::People: return _count + 2 + pagerCount(); // refresh, back
-        case Page::SavedRooms: return _count+2+pagerCount();
+        case Page::SavedRooms: case Page::Inbox: return _count+2+pagerCount();
         case Page::ActiveHub: return sizeof RrcNavigation::HubActions / sizeof(RrcNavigation::Item);
         case Page::Room: return sizeof RrcNavigation::RoomActions / sizeof(RrcNavigation::Item);
         case Page::Person: return sizeof RrcNavigation::PersonActions / sizeof(RrcNavigation::Item);
-        case Page::Hub: return 6;
+        case Page::Hub: return 7;
         case Page::SwitchHub: case Page::Disconnect: case Page::Leave: case Page::ClearHistory: return 2;
         case Page::Identity: return 3;
         case Page::HubInfo: return 5;
@@ -144,20 +149,21 @@ public:
             if (dataIndex < _count) {
                 const auto& row = _rows[dataIndex];
                 if (page == Page::Channels) {
-                    const char* state = row.flags == uint8_t(rrc::RoomPhase::Joined) ? "" :
-                        row.flags == uint8_t(rrc::RoomPhase::Available) ? " [available]" :
-                        row.flags == uint8_t(rrc::RoomPhase::NeedsKey) ? " [key needed]" :
-                        row.flags == uint8_t(rrc::RoomPhase::Joining) ? " [joining]" :
-                        row.flags == uint8_t(rrc::RoomPhase::Recovering) ? " [reconnecting]" : " [saved]";
+                    const char* state = row.state == uint8_t(rrc::RoomPhase::Joined) ? "" :
+                        row.state == uint8_t(rrc::RoomPhase::Available) ? " [available]" :
+                        row.state == uint8_t(rrc::RoomPhase::NeedsKey) ? " [key needed]" :
+                        row.state == uint8_t(rrc::RoomPhase::Joining) ? " [joining]" :
+                        row.state == uint8_t(rrc::RoomPhase::Recovering) ? " [reconnecting]" : " [saved]";
                     if (row.unread) std::snprintf(out, size, "%s [%lu]%s", row.name, static_cast<unsigned long>(row.unread), state);
                     else std::snprintf(out, size, "%s%s", row.name, state);
-                } else if (page == Page::Hubs) std::snprintf(out, size, "%s%s", row.name, row.flags & 1 ? " [saved]" : "");
+                } else if (page == Page::Hubs) std::snprintf(out, size, "%s%s", row.name, row.state & 1 ? " [saved]" : "");
+                else if(page==Page::Inbox && row.unread) std::snprintf(out,size,"%s [%lu]",row.name,static_cast<unsigned long>(row.unread));
                 else if (page == Page::People) std::snprintf(out, size, "%s [%02x%02x%02x]", row.name, row.id[0], row.id[1], row.id[2]);
                 else copy(out, size, row.name);
                 return;
             }
             dataIndex -= _count;
-            if (navigation.offset()) { if (!dataIndex) { copy(out, size, "< Previous"); return; } --dataIndex; }
+            if (previousPage()) { if (!dataIndex) { copy(out, size, "< Previous"); return; } --dataIndex; }
             if (_more) { if (!dataIndex) { copy(out, size, "Next >"); return; } --dataIndex; }
             if (page == Page::Channels && dataIndex == 1) {
                 copy(out,size,status.directoryPending?"Public channels: loading...":status.directoryStale?"Public channels: stale; refresh":
@@ -170,7 +176,7 @@ public:
         if (page == Page::ActiveHub) { copy(out, size, RrcNavigation::HubActions[index].label); return; }
         if (page == Page::Room) { copy(out, size, RrcNavigation::RoomActions[index].label); return; }
         if (page == Page::Person) { copy(out, size, RrcNavigation::PersonActions[index].label); return; }
-        if (page == Page::Hub) { static constexpr const char* items[] = {"Connect", "Save hub", "Forget bookmark", "Full address", "Saved channels", "Back"}; copy(out,size,items[index]); return; }
+        if (page == Page::Hub) { static constexpr const char* items[] = {"Connect", "Save hub", "Forget bookmark", "Full address", "Saved channels", "Private notices", "Back"}; copy(out,size,items[index]); return; }
         if (page == Page::Identity || page == Page::HubInfo) {
             const uint8_t* address = page == Page::Identity ? navigation.person() : _browsedInfo ? navigation.selectedHub() : status.hub;
             if (index < 2) { for (size_t n = 0; n < 8 && n * 2 + 2 < size; ++n) std::snprintf(out + n*2, size - n*2, "%02x", address[index*8+n]); return; }
@@ -197,17 +203,28 @@ public:
             size_t n = index - (page == Page::Channels ? 1 : 0);
             if (n < _count) {
                 const auto row = _rows[n]; // immutable across navigation/callbacks
+                if(page==Page::Inbox) {
+                    rrc::Conversation binding;std::memcpy(binding.hub,navigation.conversation().hub,16);
+                    std::memcpy(binding.participant,row.id,16);if(open) open(binding,nullptr);return;
+                }
                 if (page == Page::Hubs) { rrc::HubView hub; std::memcpy(hub.address,row.id,16); copy(hub.name,sizeof hub.name,row.name); navigation.chooseHub(hub); }
                 else if (page == Page::People) { rrc::PersonView person; std::memcpy(person.identity,row.id,16); copy(person.nickname,sizeof person.nickname,row.name); navigation.choosePerson(person); }
                 else navigation.chooseRoom(page==Page::SavedRooms?navigation.conversation().hub:status.hub,row.name);
                 changed(); return;
             }
             n -= _count;
-            if (navigation.offset()) { if (!n) { navigation.pageOffset(navigation.offset()-Capacity); changed(); return; } --n; }
-            if (_more) { if (!n) { navigation.pageOffset(navigation.offset()+Capacity); changed(); return; } --n; }
+            if (previousPage()) { if (!n) {
+                if (page==Page::Inbox) navigation.pageCursor(_count?_rows[0].state:0,_count!=0);
+                else navigation.pageOffset(navigation.offset()-Capacity);changed();return;
+            } --n; }
+            if (_more) { if (!n) {
+                if (page==Page::Inbox && _count) navigation.pageCursor(_rows[_count-1].state,false);
+                else navigation.pageOffset(navigation.offset()+Capacity);changed();return;
+            } --n; }
             if (page == Page::Hubs) { if (!n) navigation.push(Page::Address); else navigation.back(); }
             else if (page == Page::Channels) { navigation.push(n ? Page::Directory : Page::RoomName); if (n) execute(navigation.command(rrc::Action::Directory)); }
-            else if (!n) { if (page!=Page::SavedRooms) execute(navigation.command(page == Page::People ? rrc::Action::Who : rrc::Action::Directory)); }
+            else if (!n) { if(page==Page::Inbox) navigation.pageCursor(0,false);
+                else if (page!=Page::SavedRooms) execute(navigation.command(page == Page::People ? rrc::Action::Who : rrc::Action::Directory)); }
             else navigation.back();
             changed(); return;
         }
@@ -221,6 +238,7 @@ public:
             } else if (index == 1 || index == 2) execute(navigation.command(index == 1 ? rrc::Action::SaveHub : rrc::Action::ForgetHub,true));
             else if (index == 3) { _browsedInfo = true; navigation.push(Page::HubInfo); }
             else if (index == 4) navigation.savedRooms(true);
+            else if (index == 5) navigation.inbox(true);
             else navigation.back();
         } else if (page == Page::SwitchHub || page == Page::Disconnect || page == Page::Leave || page == Page::ClearHistory) {
             if (index) navigation.back();
@@ -279,7 +297,7 @@ private:
             if (open) open(navigation.conversation(),mention); break;
         }
         case Choice::Mute: navigation.push(Page::RoomInfo); tell("Notification choices are loading"); break;
-        case Choice::Inbox: navigation.push(Page::Inbox); break;
+        case Choice::Inbox: navigation.inbox(); break;
         case Choice::OpenDirect: tell("LXMF requires this person's delivery address"); break;
         case Choice::MarkRead: tell("Open the conversation to mark visible messages read"); break;
         default: break;
@@ -291,24 +309,29 @@ private:
         if (code != rrc::Code::Ok) tell(rrc::codeName(code));
         return code == rrc::Code::Ok;
     }
-    bool dataPage() const { const auto p = navigation.page(); return p == Page::Hubs || p == Page::Channels || p == Page::People || p == Page::Directory || p == Page::SavedRooms; }
+    bool dataPage() const { const auto p = navigation.page(); return p == Page::Hubs || p == Page::Channels || p == Page::People || p == Page::Directory || p == Page::SavedRooms || p == Page::Inbox; }
     bool failed() const { return dataPage() && _failed && _rowsView==navigation.revision(); }
-    size_t pagerCount() const { return (navigation.offset() ? 1 : 0) + (_more ? 1 : 0); }
+    bool previousPage() const { return navigation.page()==Page::Inbox ? _newer : navigation.offset()!=0; }
+    size_t pagerCount() const { return (previousPage() ? 1 : 0) + (_more ? 1 : 0); }
     void changed() { _count = 0; _more = false; _dirty = true; _failed=false; ++_renderRevision; }
     void tell(const char* text) { if (notice) notice(text); }
     static void copy(char* out, size_t capacity, const char* text) { if (capacity) std::snprintf(out,capacity,"%s",text ? text : ""); }
     void append(const rrc::HubView& value) {
         auto& row = _rows[_count++]; row = {}; std::memcpy(row.id,value.address,16);
-        copy(row.name,sizeof row.name,value.name); row.flags = value.saved;
+        copy(row.name,sizeof row.name,value.name); row.state = value.saved;
         if (!row.name[0]) std::snprintf(row.name,sizeof row.name,"Hub %02x%02x%02x",row.id[0],row.id[1],row.id[2]);
     }
-    void append(const rrc::RoomView& value) { auto& row = _rows[_count++]; row = {}; copy(row.name,sizeof row.name,value.name); row.unread = value.unread; row.flags = uint8_t(value.phase); }
+    void append(const rrc::RoomView& value) { auto& row = _rows[_count++]; row = {}; copy(row.name,sizeof row.name,value.name); row.unread = value.unread; row.state = uint8_t(value.phase); }
     void append(const rrc::DirectoryView& value) { auto& row = _rows[_count++]; row = {}; copy(row.name,sizeof row.name,value.name); }
     void append(const rrc::PersonView& value) { auto& row = _rows[_count++]; row = {}; copy(row.name,sizeof row.name,value.nickname); std::memcpy(row.id,value.identity,16); }
+    void append(const rrc::PrivateView& value) {
+        auto& row=_rows[_count++];row={};std::memcpy(row.id,value.identity,16);row.state=value.counter;row.unread=value.unread;
+        std::snprintf(row.name,sizeof row.name,"%02x%02x%02x%02x:%02x%02x%02x%02x",row.id[0],row.id[1],row.id[2],row.id[3],row.id[4],row.id[5],row.id[6],row.id[7]);
+    }
     Row _rows[Capacity]{};
     uint32_t _pending = 0, _rowsView = 0, _status = 0, _renderRevision = 1;
     uint8_t _count = 0, _previousCount = 0;
-    bool _dirty = true, _visible = false, _more = false, _browsedInfo = false, _advancedRoom = false, _failed=false;
+    bool _dirty = true, _visible = false, _more = false, _browsedInfo = false, _advancedRoom = false, _failed=false, _newer=false;
 };
 static_assert(sizeof(RrcBrowser) <= 1024, "One bounded metadata page and navigation bindings");
 }

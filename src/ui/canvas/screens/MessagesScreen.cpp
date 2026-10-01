@@ -26,15 +26,23 @@ void MessagesScreen::pollRrc() {
     using namespace handheld::rrc;
     const auto view = _rrc.beginRows();
     const auto page=_rrc.navigation.page();
-    if (page==Page::Channels || page==Page::SavedRooms) {
+    if (page==Page::Channels || page==Page::SavedRooms || page==Page::Inbox) {
         if (_deleteTicket.valid()) { _rrc.cancelRows(view);return; }
         const auto status=_backend->rrcStatus();
         const auto* hub=page==Page::Channels?status.hub:_rrc.navigation.conversation().hub;
         handheld::storage::rrc::Record record;uint32_t cursor=0;
-        if (!_store || !handheld::history::rrc_catalog::prepare(*_backend,hub,page==Page::Channels,_rrc.navigation.offset(),record,cursor)) {
+        bool prepared=false;
+        if(page==Page::Inbox) {
+            handheld::storage::rrc::Context context;
+            prepared=_backend->rrcContext(hub,nullptr,nullptr,context) &&
+                handheld::storage::rrc::Record::make(record,context,handheld::storage::rrc::Kind::Preferences,reinterpret_cast<const uint8_t*>("HQN1"),4);
+            cursor=uint32_t(_rrc.navigation.offset());
+        } else prepared=handheld::history::rrc_catalog::prepare(*_backend,hub,page==Page::Channels,_rrc.navigation.offset(),record,cursor);
+        if (!_store || !prepared) {
             _rrc.completeRows(view,false);return;
         }
-        const auto submitted=_store->requestRrc(handheld::storage::Operation::RrcSavedRooms,record,nullptr,cursor);
+        const auto submitted=_store->requestRrc(page==Page::Inbox?handheld::storage::Operation::RrcPrivateInbox:handheld::storage::Operation::RrcSavedRooms,
+            record,nullptr,cursor,0,_rrc.navigation.after()?handheld::storage::HistoryDirection::After:handheld::storage::HistoryDirection::Before);
         if (!submitted.accepted()) {
             if (submitted.rejection==handheld::storage::Rejection::Busy) _rrc.cancelRows(view);
             else _rrc.completeRows(view,false);
@@ -42,7 +50,7 @@ void MessagesScreen::pollRrc() {
         }
         _deleteTicket=submitted.ticket;_deleteSettled=false;memcpy(_deletePeer,hub,16);
         _rrcQueryView=view;_rrcQuerySession=status.generation;_rrcQueryRevision=status.revision;
-        _rrcQueryOffset=_rrc.navigation.offset();_rrcQueryMerged=page==Page::Channels;return;
+        _rrcQueryOffset=_rrc.navigation.offset();_rrcQueryPage=page;return;
     }
     if (page==Page::People && !_rrc.navigation.conversationCurrent()) { _rrc.completeRows(view,false);return; }
     if (!_rrc.completeRows(view,true)) return;
@@ -57,12 +65,22 @@ bool MessagesScreen::pollRrcCatalog() {
     if (!_rrcQueryView || !_deleteTicket.valid() || !_store || !_backend) return false;
     handheld::storage::Result result;if (!_store->peekResult(_deleteTicket,result)) return false;
     const auto status=_backend->rrcStatus();
+    const bool merged=_rrcQueryPage==handheld::ui::RrcNavigation::Page::Channels;
     const bool current=_visible && !_rrc.navigation.direct() && _rrcQuerySession==status.generation &&
-        (!_rrcQueryMerged || _rrcQueryRevision==status.revision);
+        (!merged || _rrcQueryRevision==status.revision);
     uint8_t bytes[handheld::storage::Budget::SmallPayload];
+    const bool read=current && result.length<=sizeof bytes && _store->readPayload(_deleteTicket,bytes,result.length);
+    if(_rrcQueryPage==handheld::ui::RrcNavigation::Page::Inbox) {
+        handheld::rrc::PrivateView rows[handheld::history::rrc_catalog::Capacity];size_t count=0;
+        const bool ok=read && handheld::history::rrc_catalog::privateRows(result,bytes,rows,count);
+        if(!_store->releaseResult(_deleteTicket)) return false;
+        const auto view=_rrcQueryView;_rrcQueryView=0;_deleteTicket={};
+        if(!current) _rrc.cancelRows(view);
+        else if(_rrc.completeRows(view,ok)) _rrc.rows(rows,count,result.more,true);
+        return true;
+    }
     handheld::rrc::RoomView rows[handheld::history::rrc_catalog::Capacity];size_t count=0;bool more=false;
-    const bool ok=current && result.length<=sizeof bytes && _store->readPayload(_deleteTicket,bytes,result.length) &&
-        handheld::history::rrc_catalog::project(*_backend,_deletePeer,_rrcQueryMerged,_rrcQueryOffset,result,bytes,rows,count,more);
+    const bool ok=read && handheld::history::rrc_catalog::project(*_backend,_deletePeer,merged,_rrcQueryOffset,result,bytes,rows,count,more);
     if (!_store->releaseResult(_deleteTicket)) return false;
     const auto view=_rrcQueryView;_rrcQueryView=0;_deleteTicket={};
     if (!current) _rrc.cancelRows(view);

@@ -49,7 +49,7 @@ private:
     TextInput _rrcInput;
     uint32_t _rrcFormView = 0;
     uint32_t _rrcQueryView = 0, _rrcQuerySession = 0, _rrcQueryRevision = 0, _rrcQueryOffset = 0;
-    bool _rrcQueryMerged = false;
+    handheld::ui::RrcNavigation::Page _rrcQueryPage = handheld::ui::RrcNavigation::Page::Channels;
     bool _rememberKey = false;
     using Conversations = handheld::history::ConversationList;
     std::string peerHex(size_t index) const;

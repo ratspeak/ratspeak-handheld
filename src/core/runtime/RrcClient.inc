@@ -35,6 +35,12 @@ uint32_t ServiceClient::requestRrcSavedRooms(const uint8_t hub[16],size_t offset
     rrc::Conversation binding;memcpy(binding.hub,hub,16);
     return rrcQuery<rrc::RoomView,4>(request,&binding,sizeof binding,std::move(completion));
 }
+uint32_t ServiceClient::requestRrcInbox(const uint8_t hub[16],uint32_t cursor,storage::HistoryDirection direction,RrcCompletion<rrc::PrivateView> completion) {
+    if(!hub || (direction!=storage::HistoryDirection::Before && direction!=storage::HistoryDirection::After)) return 0;
+    Request request;request.operation=Operation::RrcInbox;request.offset=cursor;request.historyDirection=direction;
+    rrc::Conversation binding;memcpy(binding.hub,hub,16);
+    return rrcQuery<rrc::PrivateView,4>(request,&binding,sizeof binding,std::move(completion));
+}
 uint32_t ServiceClient::requestRrcPeople(const char* room, RrcCompletion<rrc::PersonView> completion) {
     const size_t length = room ? strnlen(room, 65) : 0;
     if (length > 64) return 0;
