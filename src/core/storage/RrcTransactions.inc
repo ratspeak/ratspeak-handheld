@@ -463,21 +463,17 @@ void MessageTransactions::rrcTransaction(const Request& request, uint8_t* bytes,
         }
     }
     bool privateConversation=false;for(auto byte:request.source) privateConversation|=byte!=0;
-    bool createPrivate=false;rrc::Record descriptor;
+    bool createPrivate=false;uint32_t privateCounter=0;
     char privatePath[RrcPath]{};
     if (privateConversation) {
         if (!append && kind!=rrc::Kind::Draft) {result.error=Error::InvalidRecord;return;}
         rrcPath(context,rrc::Kind::Preferences,nullptr,privatePath);bool exists=false;
-        result.error=rrcLoad(flash,privatePath,context,rrc::Kind::Preferences,descriptor,exists,true);
+        result.error=rrcLoad(flash,privatePath,context,rrc::Kind::Preferences,previous,exists,true);
         if(result.error!=Error::None) return;
-        if(exists && (!rrc::privateDescriptor(descriptor) || memcmp(descriptor.payload()+4,request.source,16))) {
+        if(exists && (!rrc::privateDescriptor(previous) || memcmp(previous.payload()+4,request.source,16))) {
             result.error=Error::InvalidRecord;return;
         }
         createPrivate=!exists;
-        if(createPrivate) {
-            uint8_t metadata[20];memcpy(metadata,"HRN1",4);memcpy(metadata+4,request.source,16);
-            rrc::Record::make(descriptor,context,rrc::Kind::Preferences,metadata,sizeof metadata);
-        }
     }
     // Quota and retention are worker work. No directory IO reaches the protocol
     // or UI owner. A new private conversation reserves its 100-byte descriptor
@@ -488,6 +484,9 @@ void MessageTransactions::rrcTransaction(const Request& request, uint8_t* bytes,
         return rrcWalk(flash, context.local, [&](const rrc::Context& c, const char* name, size_t size) {
             if (size > RrcQuota || total > RrcQuota * 2 - size) return Error::InvalidRecord;
             total += size; uint8_t fileKey[16]; char canonical[RrcPath];
+            // The prior revision/length have already been saved. Reuse that
+            // record for the scan rather than nesting another 512-byte body.
+            auto& record=previous; bool exists=false;
             const auto* basename=rrcBasename(name);
             const bool tombstoneFile=!strcmp(basename,"5.rrc") || !strcmp(basename,"5.rrc.bak");
             const bool readMarkerFile=!strcmp(basename,"4.rrc") || !strcmp(basename,"4.rrc.bak");
@@ -495,12 +494,12 @@ void MessageTransactions::rrcTransaction(const Request& request, uint8_t* bytes,
                 // Cleared or fully trimmed histories can retain only cursors.
                 // NVS recovery must stay above those counters in every room.
                 const auto markerKind=tombstoneFile?rrc::Kind::Tombstone:rrc::Kind::ReadMarker;
-                rrcPath(c,markerKind,nullptr,canonical);rrc::Record marker;bool found=false;
-                const auto error=rrcLoad(flash,canonical,c,markerKind,marker,found);
+                rrcPath(c,markerKind,nullptr,canonical);
+                const auto error=rrcLoad(flash,canonical,c,markerKind,record,exists);
                 if(error!=Error::None) return error;
-                if(found) {
-                    if(marker.payloadLength() || marker.flags() || marker.status()!=rrc::Status::Received) return Error::InvalidRecord;
-                    highest=std::max(highest,marker.counter());
+                if(exists) {
+                    if(record.payloadLength() || record.flags() || record.status()!=rrc::Status::Received) return Error::InvalidRecord;
+                    highest=std::max(highest,record.counter());
                 }
                 return Error::None;
             }
@@ -510,17 +509,15 @@ void MessageTransactions::rrcTransaction(const Request& request, uint8_t* bytes,
                 // A recovered descriptor must not reuse another inbox position.
                 const auto metadataKind=observationFile?rrc::Kind::Observation:rrc::Kind::Preferences;
                 rrcPath(c,metadataKind,nullptr,canonical);
-                rrc::Record metadata;bool found=false;
-                const auto error=rrcLoad(flash,canonical,c,metadataKind,metadata,found);
+                const auto error=rrcLoad(flash,canonical,c,metadataKind,record,exists);
                 if(error!=Error::None) return error;
-                if(found && metadata.counter()) {
-                    if(!(observationFile?rrc::observation(metadata):rrc::privateDescriptor(metadata))) return Error::InvalidRecord;
-                    highest=std::max(highest,metadata.counter());
+                if(exists && record.counter()) {
+                    if(!(observationFile?rrc::observation(record):rrc::privateDescriptor(record))) return Error::InvalidRecord;
+                    highest=std::max(highest,record.counter());
                 }
                 return Error::None;
             }
             if (!rrcEnumerate(flash, c, name, fileKey, canonical)) return Error::None;
-            rrc::Record record; bool exists = false;
             const auto error = rrcLoad(flash, canonical, c, rrc::Kind::Message, record, exists);
             if (error != Error::None) return error;
             if (!exists) return Error::None;
@@ -536,7 +533,7 @@ void MessageTransactions::rrcTransaction(const Request& request, uint8_t* bytes,
     result.error = usage(total, count, oldest, false); if (result.error != Error::None) return;
     const size_t newRows=(append?1:0)+(createBoundary?1:0);
     const size_t newBytes=(observe?0:input.length()-std::min(input.length(),previousBytes))+
-        (createPrivate?descriptor.length():0)+(createBoundary?rrc::Header+20:0)+
+        (createPrivate?rrc::Header+20:0)+(createBoundary?rrc::Header+20:0)+
         (writeObservation?rrc::Header+20-observationBytes:0);
     // Prepare the entire compound write before its first durable mutation.
     // Pending/uncertain sends and drafts are never eviction candidates. Even a
@@ -557,12 +554,15 @@ void MessageTransactions::rrcTransaction(const Request& request, uint8_t* bytes,
     if(append || createPrivate) {
         uint32_t counter;if(!reserve(counter)) return;
         if(append) input.counter(counter);
-        if(createPrivate) {descriptor.counter(counter);descriptor.revision(1);descriptor.seal();}
+        if(createPrivate) privateCounter=counter;
     }
     input.revision(previousRevision+1);input.seal();
     if (!rrcEnsure(flash, context)) { result.error = Error::Write; return; }
     if(createPrivate) {
-        const MemorySource metadata(descriptor.bytes,descriptor.length());
+        uint8_t payload[20];memcpy(payload,"HRN1",4);memcpy(payload+4,request.source,16);
+        rrc::Record::make(previous,context,rrc::Kind::Preferences,payload,sizeof payload);
+        previous.counter(privateCounter);previous.revision(1);previous.seal();
+        const MemorySource metadata(previous.bytes,previous.length());
         result.error=flash.write(privatePath,metadata);if(result.error!=Error::None) return;
     }
     if(writeObservation) {

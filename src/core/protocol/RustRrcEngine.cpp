@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstring>
 #include <cstdio>
+#include <new>
 
 using namespace handheld::rrc;
 namespace store = handheld::storage;
@@ -77,7 +78,11 @@ void RustRrcEngine::end() {
     // The runtime's lifecycle barrier consumes owned storage completions first.
     if (!drained()) return;
     const auto generation = _status.generation, sequence = _sequence;
-    *this = RustRrcEngine{}; _status.generation = generation; _sequence = sequence;
+    // Reconstruct in owned storage: assignment materializes the whole session
+    // on the task stack (over 13 KiB on SMALL). The drain barrier above is kept.
+    this->~RustRrcEngine();
+    new (this) RustRrcEngine{};
+    _status.generation = generation; _sequence = sequence;
 }
 void RustRrcEngine::wipeControl() { wipe(&_control, sizeof _control); _control = {}; }
 void RustRrcEngine::disconnect() {
