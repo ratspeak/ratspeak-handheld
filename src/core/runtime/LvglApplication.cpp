@@ -300,8 +300,8 @@ void onHotkeyHelp() {
     lvHelpOverlay.toggle();
 }
 void onHotkeyMessages() {
-    ui.lvTabBar().setActiveTab(LvTabBar::TAB_MSGS);
-    ui.setScreen(&lvMessagesScreen);
+    ::ui.lvTabBar().setActiveTab(LvTabBar::TAB_MSGS);
+    ::ui.setScreen(&lvMessagesScreen);
 }
 void onHotkeyNewMsg() {
     bool hasContacts = false;
@@ -311,17 +311,17 @@ void onHotkeyNewMsg() {
         }
     }
     if (hasContacts) {
-        ui.lvTabBar().setActiveTab(LvTabBar::TAB_CONTACTS);
-        ui.setScreen(&lvContactsScreen);
+        ::ui.lvTabBar().setActiveTab(LvTabBar::TAB_CONTACTS);
+        ::ui.setScreen(&lvContactsScreen);
     } else {
-        ui.lvTabBar().setActiveTab(LvTabBar::TAB_NODES);
-        ui.setScreen(&lvNodesScreen);
-        ui.lvStatusBar().showToast("Pick a peer to message", 1200);
+        ::ui.lvTabBar().setActiveTab(LvTabBar::TAB_NODES);
+        ::ui.setScreen(&lvNodesScreen);
+        ::ui.lvStatusBar().showToast("Pick a peer to message", 1200);
     }
 }
 void onHotkeySettings() {
-    ui.lvTabBar().setActiveTab(LvTabBar::TAB_SETTINGS);
-    ui.setScreen(&lvSettingsScreen);
+    ::ui.lvTabBar().setActiveTab(LvTabBar::TAB_SETTINGS);
+    ::ui.setScreen(&lvSettingsScreen);
 }
 void onHotkeyAnnounce() {
     serviceClient.action(handheld::Operation::Announce);
@@ -551,7 +551,7 @@ void handheld::lvgl_application::setup() {
     // return ESP_ERR_INVALID_STATE (bus already owned by SPIClass) and
     // then spi_bus_add_device() to join the existing bus. Both LGFX and
     // SPIClass get valid device handles on the same SPI2_HOST bus.
-    if (!display.begin()) {
+    if (!::display.begin()) {
         // The shared display bus is unavailable; do not draw through it.
         Serial.println("[BOOT] Display initialization failed; restart to retry");
         while (true) delay(1000);
@@ -560,11 +560,11 @@ void handheld::lvgl_application::setup() {
     bootTraceStage("display-init");
 
     // Step 5.5: Initialize LVGL display driver
-    if (!display.beginLVGL()) {
-        display.gfx().fillScreen(TFT_BLACK);
-        display.gfx().setTextColor(TFT_RED, TFT_BLACK);
-        display.gfx().drawString("LVGL/PSRAM failed", 24, 106);
-        display.setBrightness(160);
+    if (!::display.beginLVGL()) {
+        ::display.gfx().fillScreen(TFT_BLACK);
+        ::display.gfx().setTextColor(TFT_RED, TFT_BLACK);
+        ::display.gfx().drawString("LVGL/PSRAM failed", 24, 106);
+        ::display.setBrightness(160);
         while (true) delay(1000);
     }
     Serial.println("[BOOT] LVGL initialized");
@@ -581,16 +581,16 @@ void handheld::lvgl_application::setup() {
 #endif
 
     // Step 6: UI manager (initializes both legacy and LVGL UI layers)
-    ui.begin();
-    ui.setBootMode(true);
-    ui.setScreen(&lvBootScreen);
-    ui.lvStatusBar().setLoRaOnline(radioOnline);
+    ::ui.begin();
+    ::ui.setBootMode(true);
+    ::ui.setScreen(&lvBootScreen);
+    ::ui.lvStatusBar().setLoRaOnline(radioOnline);
     lvBootScreen.setProgress(0.45f, radioOnline ? "Radio online" : "Radio FAILED");
 
     // Display::begin() left the backlight at 0 to hide an unpainted
     // framebuffer; the setProgress() above has now flushed the boot screen.
     // powerMgr at step 24 overrides with the user's configured value.
-    display.setBrightness(128);
+    ::display.setBrightness(128);
     bootTraceStage("boot-screen-painted");
 
     // Step 7: Touch HAL — GT911 I2C
@@ -623,7 +623,7 @@ void handheld::lvgl_application::setup() {
 
     // A reset intent is checked before early config load. Display and input
     // are now ready; recover explicitly before any config/identity import.
-    handheld::factoryResetRecovery(flash, sdStore, keyboard, display.gfx(), []() { ESP.restart(); });
+    handheld::factoryResetRecovery(flash, sdStore, keyboard, ::display.gfx(), []() { ESP.restart(); });
 
     // Refuse a known SD initialization failure before dependent imports/writes.
     if (sdInitializationFailed) {
@@ -642,9 +642,9 @@ void handheld::lvgl_application::setup() {
     hotkeys.registerHotkey('t', "Radio Test", onHotkeyRadioTest);
     hotkeys.registerHotkey('r', "RSSI Monitor", onHotkeyRssiMonitor);
     hotkeys.setTabCycleCallback([](int dir) {
-        ui.lvTabBar().cycleTab(dir);
-        int tab = ui.lvTabBar().getActiveTab();
-        if (lvTabScreens[tab]) ui.setScreen(lvTabScreens[tab]);
+        ::ui.lvTabBar().cycleTab(dir);
+        int tab = ::ui.lvTabBar().getActiveTab();
+        if (lvTabScreens[tab]) ::ui.setScreen(lvTabScreens[tab]);
     });
     lvBootScreen.setProgress(0.58f, "Hotkeys registered");
     // (LVGL boot renders via lv_timer_handler in setProgress)
@@ -716,7 +716,7 @@ void handheld::lvgl_application::setup() {
     // An SD recovery on first boot may supply the palette; re-sync it.
     {
         Theme::Scheme want = userConfig.settings().themeLight ? Theme::Scheme::LIGHT : Theme::Scheme::DARK;
-        if (want != Theme::scheme()) { Theme::setScheme(want); ui.applyTheme(); }
+        if (want != Theme::scheme()) { Theme::setScheme(want); ::ui.applyTheme(); }
     }
 #if HAS_TRACKBALL
     inputManager.setTrackballSpeed(userConfig.settings().trackballSpeed);
@@ -794,10 +794,10 @@ void handheld::lvgl_application::setup() {
     // Step 21: Apply radio config
     if (radioOnline && userConfig.settings().loraEnabled) {
         applyRadioSettingsToHardware(userConfig.settings(), "BOOT");
-        ui.lvStatusBar().setLoRaOnline(true);
+        ::ui.lvStatusBar().setLoRaOnline(true);
     } else if (radioOnline) {
         radio.sleep();
-        ui.lvStatusBar().setLoRaOnline(false);
+        ::ui.lvStatusBar().setLoRaOnline(false);
         Serial.println("[BOOT] LoRa disabled by config");
     }
     lvBootScreen.setProgress(0.84f, "Radio configured");
@@ -806,11 +806,11 @@ void handheld::lvgl_application::setup() {
 
     // Step 22: WiFi start
     RatWiFiMode wifiMode = userConfig.settings().wifiMode;
-    ui.lvStatusBar().setWiFiEnabled(wifiMode != RAT_WIFI_OFF);
+    ::ui.lvStatusBar().setWiFiEnabled(wifiMode != RAT_WIFI_OFF);
     lvBootScreen.setProgress(0.87f, wifiMode == RAT_WIFI_AP ? "Starting WiFi AP..." :
         wifiMode == RAT_WIFI_STA ? "WiFi STA starting..." : "WiFi disabled");
     if (!network.begin(userConfig.settings())) Serial.println("[WIFI] Selected mode could not start");
-    ui.lvStatusBar().setWiFiActive(network.accessPoint() && network.accessPoint()->isAPActive());
+    ::ui.lvStatusBar().setWiFiActive(network.accessPoint() && network.accessPoint()->isAPActive());
     bootTraceStage("wifi-start");
 
     // Step 23: BLE stays disabled in default builds.
@@ -858,7 +858,7 @@ void handheld::lvgl_application::setup() {
 
 
     // Step 26: Battery init
-    ui.lvStatusBar().setBatteryDisplay(userConfig.settings().batteryDisplay);
+    ::ui.lvStatusBar().setBatteryDisplay(userConfig.settings().batteryDisplay);
 #if HAS_BATTERY_MODEL
     powerMgr.setBatteryModel(userConfig.settings().batteryModel);
     powerMgr.setChargeThreshold(userConfig.settings().chargeThresholdV);
@@ -894,7 +894,7 @@ void handheld::lvgl_application::setup() {
     radio.setYieldCallback([]() { yield(); });
 
     serviceClient.onNotice = [](const char* message) {
-        ui.lvStatusBar().showToast(message, 2000);
+        ::ui.lvStatusBar().showToast(message, 2000);
         if (strcmp(message, "New message") == 0 || strcmp(message,"New hub message")==0) audio.requestMessage();
     };
     serviceClient.onConfigApplied = applyUiSettings;
@@ -988,7 +988,7 @@ void handheld::lvgl_application::setup() {
         auto& s = serviceClient.config.settings();
         s.loraEnabled = !s.loraEnabled;
         serviceClient.applySettings([](const handheld::Result& result) {
-            if (result.outcome == handheld::Outcome::Ok) ui.lvStatusBar().showToast("Saved; reboot to apply", 2500);
+            if (result.outcome == handheld::Outcome::Ok) ::ui.lvStatusBar().showToast("Saved; reboot to apply", 2500);
         }, false);
     });
     lvHomeScreen.setTCPToggleCallback([]() {
@@ -1014,11 +1014,11 @@ void handheld::lvgl_application::setup() {
                 prepared.push_back(std::move(ep));
                 s.tcpConnections.swap(prepared);
             } catch (const std::bad_alloc&) {
-                ui.lvStatusBar().showToast("Settings memory unavailable; retry", 2000); return;
+                ::ui.lvStatusBar().showToast("Settings memory unavailable; retry", 2000); return;
             }
         }
         serviceClient.applySettings([](const handheld::Result& result) {
-            if (result.outcome == handheld::Outcome::Ok) ui.lvStatusBar().showToast("Saved; reboot to apply", 2500);
+            if (result.outcome == handheld::Outcome::Ok) ::ui.lvStatusBar().showToast("Saved; reboot to apply", 2500);
         }, false);
     });
     lvHomeScreen.setWiFiToggleCallback([]() {
@@ -1028,11 +1028,11 @@ void handheld::lvgl_application::setup() {
             if (restoreMode == RAT_WIFI_STA) {
                 size_t slot = s.wifiSTASelected < s.wifiSTANetworks.size() ? s.wifiSTASelected : 0;
                 if (slot >= s.wifiSTANetworks.size() || s.wifiSTANetworks[slot].ssid.isEmpty()) {
-                    ui.lvStatusBar().showToast("Add WiFi in Settings", 2000);
+                    ::ui.lvStatusBar().showToast("Add WiFi in Settings", 2000);
                     return;
                 }
             } else if (restoreMode != RAT_WIFI_AP) {
-                ui.lvStatusBar().showToast("Add WiFi in Settings", 2000);
+                ::ui.lvStatusBar().showToast("Add WiFi in Settings", 2000);
                 return;
             }
             s.wifiMode = restoreMode;
@@ -1041,7 +1041,7 @@ void handheld::lvgl_application::setup() {
             s.wifiMode = RAT_WIFI_OFF;
         }
         serviceClient.applySettings([](const handheld::Result& result) {
-            if (result.outcome == handheld::Outcome::Ok) ui.lvStatusBar().showToast("Saved; reboot to apply", 2500);
+            if (result.outcome == handheld::Outcome::Ok) ::ui.lvStatusBar().showToast("Saved; reboot to apply", 2500);
         }, false);
     });
 #if HAS_GPS
@@ -1052,68 +1052,68 @@ void handheld::lvgl_application::setup() {
     });
 #else
     lvHomeScreen.setGPSToggleCallback([]() {
-        ui.lvStatusBar().showToast("GPS unavailable", 1500);
+        ::ui.lvStatusBar().showToast("GPS unavailable", 1500);
     });
 #endif
     lvHomeScreen.setPeersCallback([]() {
-        ui.lvTabBar().setActiveTab(LvTabBar::TAB_NODES);
-        ui.setScreen(&lvNodesScreen);
+        ::ui.lvTabBar().setActiveTab(LvTabBar::TAB_NODES);
+        ::ui.setScreen(&lvNodesScreen);
     });
 
     lvContactsScreen.setAnnounceManager(&serviceClient.nodes);
-    lvContactsScreen.setUIManager(&ui);
+    lvContactsScreen.setUIManager(&::ui);
     lvContactsScreen.setNodeSelectedCallback([](const std::string& peerHex) {
         if (!lvMessageView.setPeerHex(peerHex)) return;
-        ui.lvTabBar().setActiveTab(LvTabBar::TAB_MSGS);
-        ui.setScreen(&lvMessageView);
+        ::ui.lvTabBar().setActiveTab(LvTabBar::TAB_MSGS);
+        ::ui.setScreen(&lvMessageView);
     });
 
     lvNodesScreen.setAnnounceManager(&serviceClient.nodes);
-    lvNodesScreen.setUIManager(&ui);
+    lvNodesScreen.setUIManager(&::ui);
     lvNodesScreen.setUserConfig(&serviceClient.config);
     lvNodesScreen.setNodeSelectedCallback([](const std::string& peerHex) {
         if (!lvMessageView.setPeerHex(peerHex)) return;
-        ui.lvTabBar().setActiveTab(LvTabBar::TAB_MSGS);
-        ui.setScreen(&lvMessageView);
+        ::ui.lvTabBar().setActiveTab(LvTabBar::TAB_MSGS);
+        ::ui.setScreen(&lvMessageView);
     });
 
     lvMessagesScreen.setAnnounceManager(&serviceClient.nodes);
     lvMessagesScreen.setBackend(&serviceClient.protocol);
-    lvMessagesScreen.setUIManager(&ui);
+    lvMessagesScreen.setUIManager(&::ui);
     lvMessagesScreen.setOpenCallback([](const std::string& peerHex) {
         if (!lvMessageView.setPeerHex(peerHex)) return;
-        ui.setScreen(&lvMessageView);
+        ::ui.setScreen(&lvMessageView);
     });
 
     lvMessagesScreen.setRrcOpenCallback([](const handheld::rrc::Conversation& binding,const char* insert) {
-        if (lvMessageView.setRrcConversation(binding,insert)) ui.setScreen(&lvMessageView);
+        if (lvMessageView.setRrcConversation(binding,insert)) ::ui.setScreen(&lvMessageView);
     });
     lvMessageView.setBackend(&serviceClient.protocol);
     lvMessageView.setAnnounceManager(&serviceClient.nodes);
-    lvMessageView.setUIManager(&ui);
+    lvMessageView.setUIManager(&::ui);
     lvMessageView.setBackCallback([]() {
-        ui.setScreen(&lvMessagesScreen);
+        ::ui.setScreen(&lvMessagesScreen);
     });
 
     lvSettingsScreen.setUserConfig(&serviceClient.config);
     lvSettingsScreen.setAudio(&audio);
     lvSettingsScreen.setPower(&powerMgr);
     lvSettingsScreen.setBackend(&serviceClient.protocol);
-    lvSettingsScreen.setUIManager(&ui);
+    lvSettingsScreen.setUIManager(&::ui);
     lvSettingsScreen.setIdentityHash(serviceClient.protocol.identityHash());
     lvSettingsScreen.setDestinationHash(serviceClient.protocol.destinationHashHex());
 
     auto showQr = []() {
         // Honest gate: flips with serviceClient.protocol.protocolReady().
         if (!serviceClient.protocol.protocolReady()) {
-            ui.lvStatusBar().showToast("QR not available: network not ready", 1500);
+            ::ui.lvStatusBar().showToast("QR not available: network not ready", 1500);
             return;
         }
         // Share the public Ratspeak contact card; the overlay retains legacy QR.
         if (!lvQrOverlay.show(serviceClient.config.settings().displayName,
                 serviceClient.protocol.destinationHashHex(), serviceClient.protocol.identityHashHex(),
                 serviceClient.protocol.publicKeyHex()))
-            ui.lvStatusBar().showToast("Contact card unavailable", 2000);
+            ::ui.lvStatusBar().showToast("Contact card unavailable", 2000);
     };
     lvSettingsScreen.setShowQrCallback(showQr);
     lvSettingsScreen.setShowHelpCallback(onHotkeyHelp);
@@ -1130,8 +1130,8 @@ void handheld::lvgl_application::setup() {
     lvTabScreens[LvTabBar::TAB_NODES]    = &lvNodesScreen;
     lvTabScreens[LvTabBar::TAB_SETTINGS] = &lvSettingsScreen;
 
-    ui.lvTabBar().setTabCallback([](int tab) {
-        if (lvTabScreens[tab]) ui.setScreen(lvTabScreens[tab]);
+    ::ui.lvTabBar().setTabCallback([](int tab) {
+        if (lvTabScreens[tab]) ::ui.setScreen(lvTabScreens[tab]);
     });
     bootTraceStage("screen-wiring");
 
@@ -1144,9 +1144,9 @@ void handheld::lvgl_application::setup() {
     // --- Boot flow helpers ---
     // Transition to home screen (shared by name input, timezone, and normal boot)
     auto goHome = []() {
-        ui.setBootMode(false);
-        ui.setScreen(&lvHomeScreen);
-        ui.lvTabBar().setActiveTab(LvTabBar::TAB_HOME);
+        ::ui.setBootMode(false);
+        ::ui.setScreen(&lvHomeScreen);
+        ::ui.lvTabBar().setActiveTab(LvTabBar::TAB_HOME);
         homeAnnounceRequested = true;
         Serial.println("[BOOT] Home ready; startup announce scheduled");
     };
@@ -1155,7 +1155,7 @@ void handheld::lvgl_application::setup() {
     auto showTimezone = [goHome]() {
         if (!serviceClient.config.settings().timezoneSet) {
             lvTimezoneScreen.setSelectedIndex(serviceClient.config.settings().timezoneIdx);
-            ui.setScreen(&lvTimezoneScreen);
+            ::ui.setScreen(&lvTimezoneScreen);
             Serial.println("[BOOT] Showing timezone selection");
         } else {
             goHome();
@@ -1173,7 +1173,7 @@ void handheld::lvgl_application::setup() {
             if (result.outcome != handheld::Outcome::Ok) return;
             goHome();
             if (TIMEZONE_TABLE[tzIdx].radioRegion != serviceClient.config.settings().radioRegion)
-                ui.lvStatusBar().showToast("Check radio region in Settings", 3000);
+                ::ui.lvStatusBar().showToast("Check radio region in Settings", 3000);
         }, false)) lvTimezoneScreen.setSaving(false);
     });
 
@@ -1185,7 +1185,7 @@ void handheld::lvgl_application::setup() {
         const char* value = name.isEmpty() ? fallback : name.c_str();
         const size_t length = name.isEmpty() ? strlen(fallback) : name.length();
         if (!UserConfig::trySetString(serviceClient.config.settings().displayName, value, length)) {
-            ui.lvStatusBar().showToast("Settings memory unavailable; retry", 2000); return;
+            ::ui.lvStatusBar().showToast("Settings memory unavailable; retry", 2000); return;
         }
         serviceClient.config.settings().nameComplete = true;
         lvNameInputScreen.setSaving(true);
@@ -1196,16 +1196,16 @@ void handheld::lvgl_application::setup() {
     });
 
     if (sdHadExistingData && !serviceClient.config.settings().sdStorageEnabled) {
-        ui.setScreen(&lvDataCleanScreen);
+        ::ui.setScreen(&lvDataCleanScreen);
         Serial.println("[BOOT] Existing SD data found; waiting for user choice");
     } else if (!serviceClient.config.settings().nameComplete) {
         // First boot — go to name input
-        ui.setScreen(&lvNameInputScreen);
+        ::ui.setScreen(&lvNameInputScreen);
         Serial.println("[BOOT] Showing name input screen");
     } else if (!serviceClient.config.settings().timezoneSet) {
         // Name set but timezone not — show timezone picker
         lvTimezoneScreen.setSelectedIndex(serviceClient.config.settings().timezoneIdx);
-        ui.setScreen(&lvTimezoneScreen);
+        ::ui.setScreen(&lvTimezoneScreen);
         Serial.println("[BOOT] Showing timezone selection (name already set)");
     } else {
         // Everything configured — go straight to home
@@ -1235,7 +1235,7 @@ void handheld::lvgl_application::setup() {
 static void applyUiSettings() {
     const auto& s = serviceClient.config.settings();
     const auto scheme = s.themeLight ? Theme::Scheme::LIGHT : Theme::Scheme::DARK;
-    if (scheme != Theme::scheme()) { Theme::setScheme(scheme); ui.applyTheme(); }
+    if (scheme != Theme::scheme()) { Theme::setScheme(scheme); ::ui.applyTheme(); }
     powerMgr.setBrightness(s.brightness);
     powerMgr.setDimTimeout(s.screenDimTimeout);
     powerMgr.setOffTimeout(s.screenOffTimeout);
@@ -1271,30 +1271,30 @@ static void dispatchKey(const KeyEvent& evt) {
     else {
         // Screen-local input owns the keyboard. This keeps message and
         // settings text entry from being preempted by global shortcuts.
-        bool consumed = ui.handleKey(evt);
+        bool consumed = ::ui.handleKey(evt);
         if (!consumed) {
-            bool hotkeyAllowed = !ui.isBootMode() || (evt.ctrl && evt.character == 'h');
+            bool hotkeyAllowed = !::ui.isBootMode() || (evt.ctrl && evt.character == 'h');
             bool hotkeyConsumed = hotkeyAllowed && hotkeys.process(evt);
             if (!hotkeyConsumed) {
 
                 // Feed to LVGL input system only if the screen didn't consume it
-                const bool tabNavigation = !evt.ctrl && !ui.isBootMode() &&
+                const bool tabNavigation = !evt.ctrl && !::ui.isBootMode() &&
                     (evt.character == ',' || evt.character == '/' || evt.left || evt.right);
                 if (!tabNavigation) LvInput::feedKey(evt);
 
                 // Tab cycling: ,=left /=right OR trackball left/right (only if screen didn't consume)
-                if (!evt.ctrl && !ui.isBootMode()) {
+                if (!evt.ctrl && !::ui.isBootMode()) {
                     bool tabLeft  = (evt.character == ',') || evt.left;
                     bool tabRight = (evt.character == '/') || evt.right;
                     if (tabLeft) {
-                        ui.lvTabBar().cycleTab(-1);
-                        int tab = ui.lvTabBar().getActiveTab();
-                        if (lvTabScreens[tab]) ui.setScreen(lvTabScreens[tab]);
+                        ::ui.lvTabBar().cycleTab(-1);
+                        int tab = ::ui.lvTabBar().getActiveTab();
+                        if (lvTabScreens[tab]) ::ui.setScreen(lvTabScreens[tab]);
                     }
                     if (tabRight) {
-                        ui.lvTabBar().cycleTab(1);
-                        int tab = ui.lvTabBar().getActiveTab();
-                        if (lvTabScreens[tab]) ui.setScreen(lvTabScreens[tab]);
+                        ::ui.lvTabBar().cycleTab(1);
+                        int tab = ::ui.lvTabBar().getActiveTab();
+                        if (lvTabScreens[tab]) ::ui.setScreen(lvTabScreens[tab]);
                     }
                 }
             }
@@ -1305,7 +1305,7 @@ static void dispatchKey(const KeyEvent& evt) {
 // Both input sources use the screen's existing hold action. QR keeps ownership;
 // an unconsumed hold blanks the screen, as the trackball hold always has.
 static void dispatchLongPress() {
-    if (lvQrOverlay.isVisible() || !ui.handleLongPress()) {
+    if (lvQrOverlay.isVisible() || !::ui.handleLongPress()) {
         powerMgr.forceScreenOff();
     }
 }
@@ -1333,10 +1333,10 @@ static KeyEvent remoteKey(const handheld::diagnostics::RemoteUiRequest& request)
 
 static void finishRemoteUi(const handheld::diagnostics::RemoteUiRequest& request, bool wokeOnly) {
     handheld::diagnostics::LvglUiState state;
-    state.title = ui.getScreen() ? ui.getScreen()->title() : "";
-    state.tab = ui.lvTabBar().getActiveTab();
+    state.title = ::ui.getScreen() ? ::ui.getScreen()->title() : "";
+    state.tab = ::ui.lvTabBar().getActiveTab();
     state.asleep = !powerMgr.isScreenOn();
-    state.boot = ui.isBootMode();
+    state.boot = ::ui.isBootMode();
     state.overlay = lvHelpOverlay.isVisible() ? "help" : lvQrOverlay.isVisible() ? "qr" : "none";
     state.focus = LvInput::group() ? lv_group_get_focused(LvInput::group()) : nullptr;
     lv_obj_update_layout(lv_scr_act());
@@ -1459,7 +1459,7 @@ void handheld::lvgl_application::loop() {
     }
     if (serviceClient.lifecycleStarted && !serviceClient.lifecycleFailed &&
         millis() - serviceClient.lifecycleStarted > 5000) {
-        ui.lvStatusBar().showToast("Still finishing; wait or hold power", 3000);
+        ::ui.lvStatusBar().showToast("Still finishing; wait or hold power", 3000);
         serviceClient.lifecycleStarted = millis();
     }
 
@@ -1532,22 +1532,22 @@ void handheld::lvgl_application::loop() {
     if (millis() - lastStatusUpdate >= 100) {
         lastStatusUpdate = millis();
         const auto& status = serviceClient.status();
-        ui.lvTabBar().setUnreadCount(LvTabBar::TAB_MSGS, status.unread);
-        ui.lvStatusBar().setLoRaOnline(status.lora);
-        ui.lvStatusBar().setWiFiEnabled(status.wifiEnabled);
-        ui.lvStatusBar().setWiFiActive(status.wifi || status.ap);
-        ui.lvStatusBar().setTCPConnected(status.tcpUp != 0);
-        ui.lvStatusBar().setAutoIfacePeers(status.autoPeers);
+        ::ui.lvTabBar().setUnreadCount(LvTabBar::TAB_MSGS, status.unread);
+        ::ui.lvStatusBar().setLoRaOnline(status.lora);
+        ::ui.lvStatusBar().setWiFiEnabled(status.wifiEnabled);
+        ::ui.lvStatusBar().setWiFiActive(status.wifi || status.ap);
+        ::ui.lvStatusBar().setTCPConnected(status.tcpUp != 0);
+        ::ui.lvStatusBar().setAutoIfacePeers(status.autoPeers);
         if (powerMgr.isScreenOn()) {
-            ui.lvStatusBar().setBatteryPercent(powerMgr.batteryPercent());
-            ui.lvStatusBar().setCharging(powerMgr.isCharging());
-            ui.lvStatusBar().setBatteryDisplay(serviceClient.config.settings().batteryDisplay);
-            ui.lvStatusBar().setUse24Hour(serviceClient.config.settings().use24HourTime);
-            ui.lvStatusBar().updateTime();
+            ::ui.lvStatusBar().setBatteryPercent(powerMgr.batteryPercent());
+            ::ui.lvStatusBar().setCharging(powerMgr.isCharging());
+            ::ui.lvStatusBar().setBatteryDisplay(serviceClient.config.settings().batteryDisplay);
+            ::ui.lvStatusBar().setUse24Hour(serviceClient.config.settings().use24HourTime);
+            ::ui.lvStatusBar().updateTime();
 #if HAS_GPS
-            ui.lvStatusBar().setGPSFix(status.gpsFix);
+            ::ui.lvStatusBar().setGPSFix(status.gpsFix);
 #endif
-            ui.update();
+            ::ui.update();
         }
     }
     if (remotePending) finishRemoteUi(remoteRequest, remoteWokeOnly);
