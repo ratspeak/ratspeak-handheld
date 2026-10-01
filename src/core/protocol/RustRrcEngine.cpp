@@ -556,6 +556,25 @@ void RustRrcEngine::onRrcPacket(Handle handle, const uint8_t* data, size_t lengt
     remember(file); _d.links->proveRrc(handle, packetHash);
 }
 
+void RustRrcEngine::alert(const Record& record,const rs_handheld_rrc_view_t& view,uint8_t slot) {
+    if(record.status()!=disk::Status::Received || !memcmp(view.meta.source,_d.identity,16) ||
+        (view.meta.kind!=20 && view.meta.kind!=21 && view.meta.kind!=22)) return;
+    const auto context=record.context();
+    if(memcmp(context.local,_d.identity,16) || memcmp(context.hub,_status.hub,16)) return;
+    const auto* room=slot<RoomCapacity && !memcmp(_rooms[slot].view.key,context.conversation,16)?&_rooms[slot]:nullptr;
+    if(!room && !(view.meta.kind==21 && !view.room.length && view.meta.has_destination &&
+        !memcmp(view.meta.destination,_d.identity,16))) return; // roomless hub output stays quiet
+    if(room && room->view.notifications==Notifications::Muted) return;
+    if(room && room->view.notifications==Notifications::Mentions) {
+        uint8_t mentioned=0;
+        if((view.meta.kind!=20 && view.meta.kind!=22) || rs_handheld_rrc_mentions(record.payload()+view.text.offset,view.text.length,
+            reinterpret_cast<const uint8_t*>(_status.nickname),strlen(_status.nickname),_d.identity,&mentioned)!=RS_HANDHELD_OK || !mentioned) return;
+    }
+    // Commit-time coalescing never queues a replay burst or changes raw unread.
+    if(now()<_nextAlertAt || _status.alertRevision==UINT32_MAX) return;
+    _nextAlertAt=now()+5000;++_status.alertRevision;
+}
+
 void RustRrcEngine::pollReceive() {
     if (!_d.store) return;
     for (auto& item : _receive) {
@@ -576,7 +595,11 @@ void RustRrcEngine::pollReceive() {
                     ++room.view.revision;
                 }
                 rs_handheld_rrc_view_t view{};
-                if (!result.duplicate && rs_handheld_rrc_decode(record.payload(), record.payloadLength(), &view) == RS_HANDHELD_OK &&
+                const bool decoded=rs_handheld_rrc_decode(record.payload(),record.payloadLength(),&view)==RS_HANDHELD_OK;
+                if(!result.duplicate && decoded && live(item.link)) alert(record,view,item.room);
+                // A durable completion from a lost Link may update history,
+                // but cannot apply control observations to its replacement.
+                if (!result.duplicate && decoded && live(item.link) &&
                     !memcmp(view.meta.source, _status.identity, 16) && view.body_kind == 1) {
                     text(_status.notice, sizeof _status.notice, record.payload() + view.text.offset, view.text.length);
                     if (view.meta.kind == 21 && !view.room.length && !view.meta.has_destination) {

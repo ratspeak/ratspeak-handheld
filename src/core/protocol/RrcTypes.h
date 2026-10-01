@@ -90,7 +90,7 @@ struct PrivateView {
 };
 struct DirectoryView { char name[65]{}, topic[97]{}; };
 struct Status {
-    uint32_t generation = 0, revision = 0, dropped = 0, sendRevision = 0;
+    uint32_t generation = 0, revision = 0, dropped = 0, sendRevision = 0, alertRevision = 0;
     uint8_t hub[16]{}, identity[16]{};
     char name[33]{}, nickname[33]{}, notice[129]{};
     uint16_t bodyLimit = 350, roomLimit = 64;

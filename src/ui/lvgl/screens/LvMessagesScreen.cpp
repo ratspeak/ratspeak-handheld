@@ -165,6 +165,7 @@ void LvMessagesScreen::onEnter() {
     _active=true;
     _rrc.visible(true);
     _rrc.notice=[this](const char* text) { notice(text); };
+    _rrc.openDirect=[this](const char* peer) {if(_onOpen) _onOpen(peer);};
     _rrc.send=[this](const handheld::rrc::Command& command,const uint8_t* body,size_t length) {
         return _service && _service->rrcCommand(command,body,length) ? handheld::rrc::Code::Ok : handheld::rrc::Code::Busy;
     };

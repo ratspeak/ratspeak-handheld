@@ -26,6 +26,7 @@ public:
     RrcNavigation navigation;
     Send send;
     Open open;
+    std::function<void(const char*)> openDirect;
     std::function<void(const char*)> notice;
     uint32_t revision() const { return _renderRevision; }
 
@@ -352,12 +353,20 @@ private:
         case Choice::PrivateNotice: if (open) open(navigation.privateConversation(),nullptr); break;
         case Choice::Notices: { rrc::Conversation hub; std::memcpy(hub.hub,status.hub,16); if (open) open(hub,nullptr); break; }
         case Choice::Mention: {
-            char mention[36]; std::snprintf(mention,sizeof mention,"@%s ",navigation.personName());
+            char mention[36];
+            if(navigation.personName()[0]) std::snprintf(mention,sizeof mention,"@%s ",navigation.personName());
+            else {mention[0]='@';for(size_t n=0;n<16;++n) std::snprintf(mention+1+n*2,sizeof mention-1-n*2,"%02x",navigation.person()[n]);mention[33]=' ';mention[34]=0;}
             if (open) open(navigation.conversation(),mention); break;
         }
         case Choice::Mute: navigation.push(Page::Notifications); break;
         case Choice::Inbox: navigation.inbox(); break;
-        case Choice::OpenDirect: tell("LXMF requires this person's delivery address"); break;
+        case Choice::OpenDirect: {
+            uint8_t destination[16];
+            if(rs_handheld_lxmf_destination_for_identity(navigation.person(),destination)==RS_HANDHELD_OK && openDirect) {
+                char hex[33];for(size_t n=0;n<16;++n) std::snprintf(hex+n*2,sizeof hex-n*2,"%02x",destination[n]);openDirect(hex);
+            }
+            else tell("Could not open this participant");break;
+        }
         case Choice::MarkRead: if(open) open(navigation.conversation(),nullptr); break;
         default: break;
         }
@@ -376,7 +385,7 @@ private:
         for(size_t n=0;begin<length;++n) {
             size_t end=std::min(begin+size_t(32),length);
             while(end<length && end>begin && (uint8_t(text[end])&0xc0)==0x80) --end;
-            if(n==line) {if(out && capacity) {const auto bytes=std::min(end-begin,capacity-1);std::memcpy(out,text+begin,bytes);out[bytes]=0;}return end;}
+            if(n==line) {if(out && capacity) {const auto bytes=std::min(end-begin,capacity-1);std::memcpy(out,text+begin,bytes);for(size_t i=0;i<bytes;++i) if(out[i]=='\n' || out[i]=='\r') out[i]=' ';out[bytes]=0;}return end;}
             begin=end;
         }
         return 0;

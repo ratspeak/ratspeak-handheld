@@ -30,6 +30,28 @@ pub unsafe extern "C" fn rs_handheld_rrc_hub_identity(
     })
 }
 
+/// Canonical LXMF delivery destination for a hub-attested participant identity.
+/// This derives an address; it does not authenticate an LXMF recipient key.
+/// # Safety
+/// identity readable for 16 bytes, out writable for 16 bytes; both nonnull.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rs_handheld_lxmf_destination_for_identity(
+    identity_hash: *const [u8; 16],
+    out: *mut [u8; 16],
+) -> RsHandheldStatus {
+    guard(|| {
+        if identity_hash.is_null() || out.is_null() {
+            return RsHandheldStatus::ErrInvalidArg;
+        }
+        let hash =
+            identity::destination_hash_from_name("lxmf.delivery", Some(unsafe { &*identity_hash }));
+        unsafe {
+            *out = hash;
+        }
+        RsHandheldStatus::Ok
+    })
+}
+
 fn canonical(room: &[u8]) -> bool {
     let mut normalized = [0; 64];
     let mut length = 0;

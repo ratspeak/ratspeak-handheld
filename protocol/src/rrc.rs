@@ -442,6 +442,107 @@ fn status(error: Error) -> RsHandheldStatus {
     }
 }
 
+// Same contextual lowercasing as the trusted desktop str::to_lowercase, streamed
+// to avoid allocating either a transcript copy or an expanded nickname.
+fn context_is_cased(mut chars: impl Iterator<Item = char>) -> bool {
+    chars
+        .find(|c| {
+            if c.is_ascii() {
+                !matches!(c, '\'' | '.' | ':' | '^' | '`')
+            } else {
+                !unicode::case_ignorable::lookup(*c)
+            }
+        })
+        .is_some_and(|c| {
+            if c.is_ascii() {
+                c.is_ascii_alphabetic()
+            } else {
+                unicode::cased::lookup(c)
+            }
+        })
+}
+
+fn lower_chars(text: &str) -> impl Iterator<Item = char> + Clone + '_ {
+    text.char_indices().flat_map(move |(index, ch)| {
+        let mapped = if ch == 'Σ' {
+            let final_sigma = context_is_cased(text[..index].chars().rev())
+                && !context_is_cased(text[index + ch.len_utf8()..].chars());
+            if final_sigma { 'ς' } else { 'σ' }
+        } else {
+            ch
+        };
+        mapped.to_lowercase()
+    })
+}
+
+fn contains_exact_mention(text: &str, target: &str) -> bool {
+    if target.is_empty() {
+        return false;
+    }
+    let continuation = |ch: char| ch.is_alphanumeric() || matches!(ch, '_' | '-');
+    let mut chars = lower_chars(text);
+    let mut before = None;
+    while let Some(ch) = chars.next() {
+        if ch == '@' && before.is_none_or(|previous| !continuation(previous)) {
+            let mut candidate = chars.clone();
+            if lower_chars(target).all(|wanted| candidate.next() == Some(wanted))
+                && candidate.next().is_none_or(|after| !continuation(after))
+            {
+                return true;
+            }
+        }
+        before = Some(ch);
+    }
+    false
+}
+
+/// Desktop literal, case-insensitive nickname/full-identity mention matching.
+/// Text <=431 bytes and nickname <=32 bytes, valid UTF-8. No allocation.
+/// # Safety
+/// All pointers nonnull/readable for declared lengths; out writable, disjoint.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rs_handheld_rrc_mentions(
+    data: *const u8,
+    length: usize,
+    nickname: *const u8,
+    nickname_length: usize,
+    identity: *const [u8; 16],
+    out: *mut u8,
+) -> RsHandheldStatus {
+    guard(|| {
+        if data.is_null()
+            || nickname.is_null()
+            || identity.is_null()
+            || out.is_null()
+            || length > MDU
+            || nickname_length > 32
+        {
+            return RsHandheldStatus::ErrInvalidArg;
+        }
+        let Ok(text) = core::str::from_utf8(unsafe { core::slice::from_raw_parts(data, length) })
+        else {
+            return RsHandheldStatus::ErrInvalidArg;
+        };
+        let Ok(nickname) =
+            core::str::from_utf8(unsafe { core::slice::from_raw_parts(nickname, nickname_length) })
+        else {
+            return RsHandheldStatus::ErrInvalidArg;
+        };
+        let mut hex = [0u8; 32];
+        for (n, byte) in unsafe { &*identity }.iter().enumerate() {
+            hex[n * 2] = b"0123456789abcdef"[(byte >> 4) as usize];
+            hex[n * 2 + 1] = b"0123456789abcdef"[(byte & 15) as usize];
+        }
+        let identity = core::str::from_utf8(&hex).unwrap_or("");
+        unsafe {
+            *out = u8::from(
+                contains_exact_mention(text, nickname) || contains_exact_mention(text, identity),
+            );
+        }
+        RsHandheldStatus::Ok
+    })
+}
+
 /// Trim a nickname or trim/lowercase a room with the desktop client's Unicode
 /// rules. Output excludes a NUL terminator. No normalization of '#' or spaces.
 /// # Safety
@@ -476,23 +577,6 @@ pub unsafe extern "C" fn rs_handheld_rrc_normalize(
             used = text.len();
             normalized[..used].copy_from_slice(text.as_bytes());
         } else {
-            fn context_is_cased(mut chars: impl Iterator<Item = char>) -> bool {
-                chars
-                    .find(|c| {
-                        if c.is_ascii() {
-                            !matches!(c, '\'' | '.' | ':' | '^' | '`')
-                        } else {
-                            !unicode::case_ignorable::lookup(*c)
-                        }
-                    })
-                    .is_some_and(|c| {
-                        if c.is_ascii() {
-                            c.is_ascii_alphabetic()
-                        } else {
-                            unicode::cased::lookup(c)
-                        }
-                    })
-            }
             let mut emit = |ch: char| {
                 let mut utf8 = [0u8; 4];
                 let encoded = ch.encode_utf8(&mut utf8).as_bytes();
@@ -503,21 +587,9 @@ pub unsafe extern "C" fn rs_handheld_rrc_normalize(
                 used += encoded.len();
                 true
             };
-            for (i, ch) in text.char_indices() {
-                if ch == 'Σ' {
-                    // Same contextual Final_Sigma rule as Rust str::to_lowercase,
-                    // used by the trusted desktop normalize_room implementation.
-                    let final_sigma = context_is_cased(&mut text[..i].chars().rev())
-                        && !context_is_cased(&mut text[i + ch.len_utf8()..].chars());
-                    if !emit(if final_sigma { 'ς' } else { 'σ' }) {
-                        return RsHandheldStatus::ErrCapacity;
-                    }
-                } else {
-                    for lowered in ch.to_lowercase() {
-                        if !emit(lowered) {
-                            return RsHandheldStatus::ErrCapacity;
-                        }
-                    }
+            for ch in lower_chars(text) {
+                if !emit(ch) {
+                    return RsHandheldStatus::ErrCapacity;
                 }
             }
         }

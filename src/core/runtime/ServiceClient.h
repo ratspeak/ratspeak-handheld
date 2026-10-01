@@ -146,7 +146,7 @@ private:
     bool _configReady = false, _settingsRefresh = false;
     uint32_t _lastSettingsQuery = 0;
     uint32_t _configRevision = 1;
-    uint32_t _noticeRevision = 0, _incomingRevision = 0;
+    uint32_t _noticeRevision = 0, _incomingRevision = 0, _rrcAlertRevision = 0;
     bool _unhealthy = false;
     uint32_t _nodeCursorRevision = 0, _nodeOffset = 0;
     bool _nodesPending = false;

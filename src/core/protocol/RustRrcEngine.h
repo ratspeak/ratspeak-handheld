@@ -105,6 +105,7 @@ private:
     Code send(const handheld::rrc::Command&, const uint8_t*, size_t);
     void pollSend();
     void pollReceive();
+    void alert(const Record&, const rs_handheld_rrc_view_t&, uint8_t room);
     void applyRoomControl(const uint8_t*, size_t, const rs_handheld_rrc_view_t&, Room&);
     bool roomStatus(Room&, const uint8_t*, size_t);
     void wipeControl();
@@ -149,7 +150,7 @@ private:
     Handle _link;
     uint64_t _deadline = 0, _retryAt = 0, _onlineAt = 0, _directoryDeadline = 0, _identifyBorn = 0;
     uint32_t _sequence = 0, _rateCount = 0, _rateLimit = 0;
-    uint64_t _rateWindow = 0;
+    uint64_t _rateWindow = 0, _nextAlertAt = 0;
     uint8_t _interface = UINT8_MAX, _failures = 0;
     bool _stopped = true, _pathRequested = false, _directoryWanted = false;
 };

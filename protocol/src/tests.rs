@@ -1894,6 +1894,13 @@ fn lxmf_build_byte_exact_with_python() {
     assert_eq!(st, RsHandheldStatus::Ok);
     assert_eq!(to_hex(&out[..out_len]), LXMF_ECIES_DET);
     assert_eq!(to_hex(&dest), LXMF_DEST_HASH);
+    let peer = rns_lite_core::identity::identity_hash(&unhex::<64>(LXMF_RECIPIENT_PUB));
+    let mut derived = [0; 16];
+    assert_eq!(
+        unsafe { rs_handheld_lxmf_destination_for_identity(&peer, &mut derived) },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!(to_hex(&derived), LXMF_DEST_HASH);
     assert_eq!(to_hex(&mid), LXMF_MESSAGE_ID);
     unsafe { rs_handheld_rns_shutdown(ctx) };
 }
@@ -3357,6 +3364,13 @@ fn lxmf_build_link_and_parse_link_roundtrip() {
         RsHandheldStatus::Ok
     );
     assert_eq!(to_hex(&dest), LXMF_DEST_HASH);
+    let peer = rns_lite_core::identity::identity_hash(&unhex::<64>(LXMF_RECIPIENT_PUB));
+    let mut derived = [0; 16];
+    assert_eq!(
+        unsafe { rs_handheld_lxmf_destination_for_identity(&peer, &mut derived) },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!(to_hex(&derived), LXMF_DEST_HASH);
     assert_eq!(&out[..16], &dest); // full packed form carries dest prefix
 
     // Recipient parses.

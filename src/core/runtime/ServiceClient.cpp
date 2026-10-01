@@ -156,6 +156,7 @@ void ServiceClient::poll() {
         // publication immediately, but retain any accepted request until its
         // stale callback retires below.
         nodes._nodes.clear(); nodes._revision = 0;
+        _rrcAlertRevision=_status.rrc.alertRevision;
         closeHistory();
         _nodeStaging.clear(); _nodeOffset = 0; _nodeCursorRevision = 0;
     }
@@ -192,6 +193,10 @@ void ServiceClient::poll() {
     if (_noticeRevision != _status.noticeRevision) { _noticeRevision = _status.noticeRevision; tell(_status.notice); }
     if (_incomingRevision != _status.incomingRevision) {
         _incomingRevision = _status.incomingRevision; tell("New message");
+    }
+    if(_rrcAlertRevision!=_status.rrc.alertRevision) {
+        _rrcAlertRevision=_status.rrc.alertRevision;
+        if(_rrcAlertRevision) tell("New hub message");
     }
     if (!_mailbox.accepting() || _unhealthy) return;
     if (!_settingsPending && !_settingsQuery &&

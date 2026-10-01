@@ -154,6 +154,7 @@ bool MessagesScreen::handleRrcKey(const KeyEvent& event) {
 void MessagesScreen::onEnter() {
     _showingContext = false; _visible = true; _pageFocus = -1;
     _rrc.visible(true);
+    _rrc.openDirect=[this](const char* peer) {if(_openCb) _openCb(peer);};
     _rrc.notice = [this](const char* text) { _deleteNotice = text; _deleteNoticeSince = millis(); };
     _rrc.send = [this](const handheld::rrc::Command& value, const uint8_t* body, size_t length) {
         if (!_backend) return handheld::rrc::Code::Offline;

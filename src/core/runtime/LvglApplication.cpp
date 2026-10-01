@@ -895,7 +895,7 @@ void handheld::lvgl_application::setup() {
 
     serviceClient.onNotice = [](const char* message) {
         ui.lvStatusBar().showToast(message, 2000);
-        if (strcmp(message, "New message") == 0) audio.requestMessage();
+        if (strcmp(message, "New message") == 0 || strcmp(message,"New hub message")==0) audio.requestMessage();
     };
     serviceClient.onConfigApplied = applyUiSettings;
     serviceClient.beforeLifecycle = [] { return lvMessageView.prepareMaintenance(); };

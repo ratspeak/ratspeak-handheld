@@ -1039,6 +1039,11 @@ void loop() {
     if (maintenance.accepting() && gps.isRunning()) gps.loop();
 #endif
 
+    // RRC publishes an alert only after a policy-eligible message commits.
+    // Keep Direct's callback and the two histories independent.
+    static uint32_t rrcAlertRevision=0;
+    const auto rrcAlert=backend->rrcStatus().alertRevision;
+    if(rrcAlertRevision!=rrcAlert) {rrcAlertRevision=rrcAlert;if(rrcAlert) pendingMessageSound=true;}
     // 9. Deferred audio (from packet callbacks — delay() can't run in callbacks)
     if (pendingMessageSound) {
         pendingMessageSound = false;

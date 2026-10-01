@@ -798,6 +798,14 @@ rs_handheld_status_t rs_handheld_rrc_announce_name(const uint8_t *data, size_t l
  * nickname=1 validates a nickname, nickname=0 a room. Output excludes NUL. */
 rs_handheld_status_t rs_handheld_rrc_normalize(const uint8_t *data, size_t length,
     uint8_t nickname, uint8_t *out, size_t capacity, size_t *out_length);
+/* Desktop exact literal @nickname or @full-identity matching, case-insensitive.
+ * UTF-8 text <=431, nickname <=32 bytes. Writes 0/1; untouched on error.
+ * All pointers nonnull, readable for lengths; output writable and disjoint. */
+rs_handheld_status_t rs_handheld_rrc_mentions(const uint8_t *data, size_t length,
+    const uint8_t *nickname, size_t nickname_length, const uint8_t identity[16], uint8_t *out);
+/* Derive a participant's canonical LXMF address. The identity comes from the
+ * authenticated hub; LXMF independently obtains/authenticates the recipient key. */
+rs_handheld_status_t rs_handheld_lxmf_destination_for_identity(const uint8_t identity[16], uint8_t out[16]);
 /* Domain-separated local conversation key; never a Reticulum destination.
  * kind=0 normalized room, kind=1 full participant identity,
  * kind=2 source identity[16] followed by RRC message ID[8]. */
