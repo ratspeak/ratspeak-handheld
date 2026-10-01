@@ -17,7 +17,7 @@ void RustRrcEngine::preferenceDone(Code result) {
     if (result != Code::Ok && !(_preferences.action == Action::Draft && (_preferences.record.flags() & 1) && result == Code::Stale)) {
         notice(result == Code::Storage ? "Preferences were not saved" : "Channel request failed");
     }
-    if (result != Code::Ok && (_preferences.step == PreferenceStep::ReadJoin ||
+    if (result != Code::Ok && (_preferences.step == PreferenceStep::ReadJoin || _preferences.step == PreferenceStep::ReadJoinedPolicy ||
         _preferences.step == PreferenceStep::WriteRoom || _preferences.step == PreferenceStep::WriteHub)) {
         _joinRoom = UINT8_MAX; _joinConfirmed = false; _joinPreferenceLength = 0;
     }
@@ -58,7 +58,7 @@ RustRrcEngine::Code RustRrcEngine::startJoin(Room& room, const uint8_t* key, siz
     }
     const auto result = control(10, room.view.name, key, length, length ? 1 : 0);
     if (result != Code::Ok) return result;
-    _joinPreferenceLength = uint16_t(roomPreference(_joinPreference, room.view.name, room.view.muted, sealed, sealedLength));
+    _joinPreferenceLength = uint16_t(roomPreference(_joinPreference, room.view.name, uint8_t(room.view.notifications), sealed, sealedLength));
     _joinRoom = uint8_t(&room - _rooms); _joinConfirmed = false; _control.room = _joinRoom;
     _joinFromStored = false;
     room.wanted = true; room.view.needsKey = length != 0; room.view.phase = RoomPhase::Joining;
@@ -83,14 +83,28 @@ RustRrcEngine::Code RustRrcEngine::preferenceCommand(const Command& command, con
         if (_control.length) return Code::Busy;
         saveRoot(_bookmarks, nickname); return Code::Ok;
     }
-    case Action::Mute: {
-        auto* room = findRoom(command.room); if (!room) return Code::NotJoined;
-        disk::Context scope; context(_status.hub, room->view.name, nullptr, scope);
-        loadPreferences(PreferenceStep::ReadMute, scope);
-        _preferences.room = uint8_t(room - _rooms);
-        // Desired mute state is the request's one-bit value, separate from the
-        // published preference until the replacement commits.
-        _preferences.record.bytes[6] = command.flags ? 1 : 0; _preferences.record.seal();
+    case Action::Mute: case Action::ForgetKey: case Action::ForgetRoom: {
+        char name[65]{}; disk::Context scope;
+        if (nonzero(command.participant) || !normalized(reinterpret_cast<const uint8_t*>(command.room),
+            strnlen(command.room,65),name,sizeof name) || !name[0] || strcmp(name,command.room) ||
+            !context(command.hub,name,nullptr,scope) || (command.action==Action::Mute && command.flags>2)) return Code::Invalid;
+        // A pending JOIN owns the shared room-preference replacement. Keep
+        // policy/forget writes separate until its confirmation or failure.
+        if (_joinRoom<RoomCapacity) return Code::Busy;
+        if (command.action==Action::ForgetRoom) {
+            memcpy(_preferences.participant,scope.conversation,16);
+            memset(scope.conversation,0,16);loadPreferences(PreferenceStep::ReadForgetRoom,scope);
+        } else {
+            loadPreferences(command.action==Action::Mute?PreferenceStep::ReadMute:PreferenceStep::ReadForgetKey,scope);
+            // Retain the request name/policy in the existing record until its
+            // read completes. No room slot or network session is required.
+            uint8_t payload[RoomPreferenceHeader];
+            const auto size=roomPreference(payload,name,command.action==Action::Mute?command.flags:0,nullptr,0);
+            Record::make(_preferences.record,scope,disk::Kind::Preferences,payload,size);
+            if (!memcmp(command.hub,_status.hub,16)) {
+                const auto* room=findRoom(name);if(room) _preferences.room=uint8_t(room-_rooms);
+            }
+        }
         return Code::Ok;
     }
     case Action::Draft: {
@@ -135,7 +149,11 @@ void RustRrcEngine::pollPreferences() {
         if (!_d.store->peekResult(_preferences.ticket, result)) return;
         const auto step = _preferences.step;
         const auto originalContext = _preferences.record.context();
-        const bool wantedMute = _preferences.record.flags() != 0;
+        const auto wantedNotifications=_preferences.record.payload()[4];
+        char requestedRoom[65]{};
+        if ((step==PreferenceStep::ReadMute || step==PreferenceStep::ReadForgetKey) &&
+            _preferences.record.payloadLength()>=RoomPreferenceHeader)
+            memcpy(requestedRoom,_preferences.record.payload()+7,sizeof requestedRoom);
         bool good = result.outcome == store::Outcome::Committed;
         if (good && result.length && step != PreferenceStep::ReadUnread) good = result.length >= disk::Header && result.length <= sizeof(Record) &&
             _d.store->readPayload(_preferences.ticket, _preferences.record.bytes, result.length) &&
@@ -184,22 +202,48 @@ void RustRrcEngine::pollPreferences() {
                 Record::make(_preferences.record, scope, disk::Kind::Message, nullptr, 0);
                 _preferences.step = PreferenceStep::ReadUnread; _preferences.write = false;
             } else preferenceDone(Code::Ok);
+        } else if(step==PreferenceStep::ReadJoinedPolicy) {
+            if(!_joinConfirmed || _joinRoom>=RoomCapacity || _preferences.room!=_joinRoom) {preferenceDone(Code::Stale);return;}
+            const auto* payload=_preferences.record.payload();
+            if(result.length && (!validRoomPreference(payload,_preferences.record.payloadLength()) ||
+                strcmp(reinterpret_cast<const char*>(payload+7),_rooms[_joinRoom].view.name))) {preferenceDone(Code::Storage);return;}
+            // Supplying a replacement key after restart must not reset an
+            // existing notification policy to the fresh live-room default.
+            if(result.length) _joinPreference[4]=payload[4];
+            Record::make(_preferences.record,originalContext,disk::Kind::Preferences,_joinPreference,_joinPreferenceLength);
+            _preferences.step=PreferenceStep::WriteRoom;_preferences.write=true;
+        } else if (step==PreferenceStep::ReadForgetRoom || step==PreferenceStep::WriteForgetRoom) {
+            SavedIndex index;char name[33]{},nickname[33]{};
+            if(result.length && !decodeIndex(_preferences.record.payload(),_preferences.record.payloadLength(),index,name,nickname)) {
+                preferenceDone(Code::Storage);return;
+            }
+            if(step==PreferenceStep::ReadForgetRoom) {
+                index.remove(_preferences.participant);uint8_t payload[431];
+                const auto length=encodeIndex(payload,index,name,nickname);
+                Record::make(_preferences.record,originalContext,disk::Kind::Preferences,payload,length);
+                _preferences.step=PreferenceStep::WriteForgetRoom;_preferences.write=true;
+            } else {
+                if(!memcmp(originalContext.hub,_status.hub,16)) _savedRooms=index;
+                preferenceDone(Code::Ok);
+            }
         } else if (step == PreferenceStep::ReadJoin || step == PreferenceStep::ReadMute || step == PreferenceStep::ReadForgetKey) {
-            if (_preferences.room >= RoomCapacity) { preferenceDone(Code::Stale); return; }
-            auto& room = _rooms[_preferences.room];
+            auto* item=_preferences.room<RoomCapacity ? &_rooms[_preferences.room] : nullptr;
+            if(step==PreferenceStep::ReadJoin && !item) {preferenceDone(Code::Stale);return;}
+            const char* name=step==PreferenceStep::ReadJoin ? item->view.name : requestedRoom;
             const auto* payload = _preferences.record.payload(); const auto length = _preferences.record.payloadLength();
-            if (result.length && (!validRoomPreference(payload, length) || strcmp(reinterpret_cast<const char*>(payload + 7), room.view.name))) {
+            if (!name[0] || (result.length && (!validRoomPreference(payload, length) || strcmp(reinterpret_cast<const char*>(payload + 7), name)))) {
                 preferenceDone(Code::Storage); return;
             }
             if (step == PreferenceStep::ReadMute || step == PreferenceStep::ReadForgetKey) {
                 uint8_t replacement[431];
                 const bool forgetting = step == PreferenceStep::ReadForgetKey;
-                const auto size = roomPreference(replacement, room.view.name, forgetting ? room.view.muted : wantedMute,
+                const auto size = roomPreference(replacement, name, forgetting ? (result.length?payload[4]:0) : wantedNotifications,
                     result.length && !forgetting ? payload + RoomPreferenceHeader : nullptr,
                     result.length && !forgetting ? length - RoomPreferenceHeader : 0);
                 Record::make(_preferences.record, originalContext, disk::Kind::Preferences, replacement, size);
                 _preferences.step = PreferenceStep::WriteRoom; _preferences.write = true;
             } else {
+                auto& room=*item;
                 if (_stopped || _status.phase != Phase::Online) { preferenceDone(Code::Offline); return; }
                 uint8_t key[KeyCapacity]{}; size_t keyLength = 0;
                 const size_t sealedLength = result.length ? length - RoomPreferenceHeader : 0;
@@ -209,7 +253,7 @@ void RustRrcEngine::pollPreferences() {
                     room.view.phase = RoomPhase::NeedsKey; room.view.keyRemembered = false;
                     preferenceDone(Code::Storage); return;
                 }
-                if (result.length) room.view.muted = payload[4] != 0;
+                if (result.length) {room.view.notifications=Notifications(payload[4]);room.view.muted=room.view.notifications==Notifications::Muted;}
                 room.view.keyRemembered = sealedLength != 0;
                 const auto admitted = startJoin(room, key, keyLength, sealedLength != 0);
                 _joinFromStored = admitted == Code::Ok && sealedLength != 0;
@@ -218,7 +262,7 @@ void RustRrcEngine::pollPreferences() {
         } else if (step == PreferenceStep::WriteRoom) {
             if (_preferences.room < RoomCapacity) {
                 auto& room = _rooms[_preferences.room];
-                room.view.muted = _preferences.record.payload()[4] != 0;
+                room.view.notifications=Notifications(_preferences.record.payload()[4]);room.view.muted=room.view.notifications==Notifications::Muted;
                 room.view.keyRemembered = _preferences.record.payloadLength() > RoomPreferenceHeader;
             }
             if (_joinConfirmed) saveHubRooms(); else preferenceDone(Code::Ok);
@@ -227,13 +271,15 @@ void RustRrcEngine::pollPreferences() {
     if (_preferences.step == PreferenceStep::Idle && _joinConfirmed && _joinRoom < RoomCapacity) {
         const auto& room = _rooms[_joinRoom]; disk::Context scope;
         context(_status.hub, room.view.name, nullptr, scope);
-        Record::make(_preferences.record, scope, disk::Kind::Preferences, _joinPreference, _joinPreferenceLength);
-        _preferences.step = PreferenceStep::WriteRoom; _preferences.write = true; _preferences.room = _joinRoom;
+        loadPreferences(PreferenceStep::ReadJoinedPolicy,scope);_preferences.room=_joinRoom;
     }
     if (_preferences.step == PreferenceStep::Idle && _invalidKeyRoom < RoomCapacity) {
         const auto slot = _invalidKeyRoom; _invalidKeyRoom = UINT8_MAX;
         disk::Context scope; context(_status.hub, _rooms[slot].view.name, nullptr, scope);
         loadPreferences(PreferenceStep::ReadForgetKey, scope); _preferences.room = slot;
+        uint8_t payload[RoomPreferenceHeader];
+        const auto size=roomPreference(payload,_rooms[slot].view.name,0,nullptr,0);
+        Record::make(_preferences.record,scope,disk::Kind::Preferences,payload,size);
     }
     if (_preferences.step != PreferenceStep::Idle && !_preferences.ticket.valid()) {
         auto operation = _preferences.write ? store::Operation::RrcWrite : store::Operation::RrcRead;

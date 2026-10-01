@@ -101,6 +101,7 @@ void RustRrcEngine::recover(const char* reason) {
     wipeControl(); _pong = {}; _status.phase = Phase::Recovering;
     _status.directoryPending = false; _directoryDeadline = 0; _directoryWanted = false;
     _status.directoryStale = _status.directoryKnown;
+    if (!_joinConfirmed) {_joinRoom=UINT8_MAX;_joinPreferenceLength=0;}
     if (_failures < 8) ++_failures;
     const uint32_t backoff = std::min(uint32_t(300000), uint32_t(2000) << (_failures - 1));
     uint8_t random[2]; RustEntropy::fill(random, sizeof random);
@@ -270,7 +271,8 @@ RustRrcEngine::Code RustRrcEngine::command(const Command& command, const uint8_t
         return result;
     };
     if (command.action == Action::SaveHub || command.action == Action::ForgetHub || command.action == Action::Nickname || command.action == Action::Draft ||
-        command.action == Action::MarkRead || command.action == Action::ClearHistory)
+        command.action == Action::MarkRead || command.action == Action::ClearHistory || command.action == Action::Mute ||
+        command.action == Action::ForgetKey || command.action == Action::ForgetRoom)
         return preference();
     if (command.action == Action::Connect) {
         if (!nonzero(command.hub)) return Code::Invalid;

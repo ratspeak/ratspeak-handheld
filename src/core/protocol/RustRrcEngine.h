@@ -108,11 +108,11 @@ private:
     void applyRoomControl(const uint8_t*, size_t, const rs_handheld_rrc_view_t&, Room&);
     bool roomStatus(Room&, const uint8_t*, size_t);
     void wipeControl();
-    enum class PreferenceStep : uint8_t { Idle, ReadRoot, WriteRoot, ReadHub, WriteHub, ReadJoin, WriteRoom, ReadMute, ReadForgetKey, WriteDraft, ReadUnread, MarkRead, ClearHistory };
+    enum class PreferenceStep : uint8_t { Idle, ReadRoot, WriteRoot, ReadHub, WriteHub, ReadJoin, ReadJoinedPolicy, WriteRoom, ReadMute, ReadForgetKey, ReadForgetRoom, WriteForgetRoom, WriteDraft, ReadUnread, MarkRead, ClearHistory };
     struct Preferences {
         Record record;
         Ticket ticket;
-        uint8_t participant[16]{}; // Exact private-draft target; no additional body owner.
+        uint8_t participant[16]{}; // Exact private-draft target or pending forget-room key; no body owner.
         PreferenceStep step = PreferenceStep::Idle;
         handheld::rrc::Action action = handheld::rrc::Action::SaveHub;
         uint32_t revision = 0, roomRevision = 0;

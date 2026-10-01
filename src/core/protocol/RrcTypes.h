@@ -15,7 +15,7 @@ enum class RoomPhase : uint8_t { Saved, Joining, Joined, Leaving, Recovering, Ne
 enum class Code : uint8_t { Ok, Busy, Stale, Offline, Invalid, TooLong, Unsupported, Full, Storage, NotJoined };
 enum class SendPhase : uint8_t { Idle, Saving, Sending, Awaiting, Confirmed, Transmitted, NotSent, Unconfirmed };
 enum class Action : uint8_t { Connect, Disconnect, Join, Leave, Message, PrivateNotice, Emote,
-    Directory, Who, Topic, Nickname, Advanced, Retry, Mute, SaveHub, ForgetHub, Draft, ClearHistory, MarkRead };
+    Directory, Who, Topic, Nickname, Advanced, Retry, Mute, SaveHub, ForgetHub, Draft, ClearHistory, MarkRead, ForgetRoom, ForgetKey };
 // A local view binding. Empty room/participant means hub notices. Participant
 // notices have their own history and never become a Direct conversation.
 struct Conversation {
@@ -63,12 +63,18 @@ struct HubView {
     uint8_t hops = 0, interface = UINT8_MAX;
     bool saved = false, reachable = false, active = false;
 };
+// Persisted HRP1 values retain the original 0=All / 1=Muted meaning.
+enum class Notifications : uint8_t { All=0, Muted=1, Mentions=2 };
+inline const char* notificationName(Notifications value) {
+    return value==Notifications::Muted ? "Muted" : value==Notifications::Mentions ? "Mentions" : "All";
+}
 struct RoomView {
     char name[65]{};
     char topic[97]{}, modes[17]{};
     uint8_t key[16]{};
     uint32_t unread = 0, revision = 0;
     RoomPhase phase = RoomPhase::Saved;
+    Notifications notifications = Notifications::All;
     bool muted = false, membersComplete = false, needsKey = false;
     bool keyRemembered = false, unreadKnown = false;
     uint8_t registered = 0; // unknown=0, registered=1, unregistered=2

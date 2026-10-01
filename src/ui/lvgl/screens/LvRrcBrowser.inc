@@ -42,6 +42,7 @@ void LvMessagesScreen::pollRrc() {
     uint32_t request=0;
     using Page=handheld::ui::RrcNavigation::Page;
     switch (page) {
+    case Page::RoomInfo: case Page::Notifications: request=_service->requestRrcRoom(_rrc.navigation.conversation(),completion);break;
     case Page::Hubs: request=_service->requestRrcHubs(completion);break;
     case Page::Channels: request=_service->requestRrcChannels(_rrc.navigation.offset(),completion);break;
     case Page::People:

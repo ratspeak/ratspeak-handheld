@@ -26,13 +26,17 @@ void MessagesScreen::pollRrc() {
     using namespace handheld::rrc;
     const auto view = _rrc.beginRows();
     const auto page=_rrc.navigation.page();
-    if (page==Page::Channels || page==Page::SavedRooms || page==Page::Inbox) {
+    if (page==Page::Channels || page==Page::SavedRooms || page==Page::Inbox || page==Page::RoomInfo || page==Page::Notifications) {
         if (_deleteTicket.valid()) { _rrc.cancelRows(view);return; }
         const auto status=_backend->rrcStatus();
         const auto* hub=page==Page::Channels?status.hub:_rrc.navigation.conversation().hub;
         handheld::storage::rrc::Record record;uint32_t cursor=0;
         bool prepared=false;
-        if(page==Page::Inbox) {
+        if(page==Page::RoomInfo || page==Page::Notifications) {
+            handheld::storage::rrc::Context context;
+            prepared=_backend->rrcContext(hub,_rrc.navigation.conversation().room,nullptr,context) &&
+                handheld::storage::rrc::Record::make(record,context,handheld::storage::rrc::Kind::Preferences,nullptr,0);
+        } else if(page==Page::Inbox) {
             handheld::storage::rrc::Context context;
             prepared=_backend->rrcContext(hub,nullptr,nullptr,context) &&
                 handheld::storage::rrc::Record::make(record,context,handheld::storage::rrc::Kind::Preferences,reinterpret_cast<const uint8_t*>("HQN1"),4);
@@ -41,7 +45,8 @@ void MessagesScreen::pollRrc() {
         if (!_store || !prepared) {
             _rrc.completeRows(view,false);return;
         }
-        const auto submitted=_store->requestRrc(page==Page::Inbox?handheld::storage::Operation::RrcPrivateInbox:handheld::storage::Operation::RrcSavedRooms,
+        const auto submitted=_store->requestRrc(page==Page::Inbox?handheld::storage::Operation::RrcPrivateInbox:
+            page==Page::RoomInfo || page==Page::Notifications?handheld::storage::Operation::RrcRead:handheld::storage::Operation::RrcSavedRooms,
             record,nullptr,cursor,0,_rrc.navigation.after()?handheld::storage::HistoryDirection::After:handheld::storage::HistoryDirection::Before);
         if (!submitted.accepted()) {
             if (submitted.rejection==handheld::storage::Rejection::Busy) _rrc.cancelRows(view);
@@ -66,7 +71,7 @@ bool MessagesScreen::pollRrcCatalog() {
     handheld::storage::Result result;if (!_store->peekResult(_deleteTicket,result)) return false;
     const auto status=_backend->rrcStatus();
     const bool merged=_rrcQueryPage==handheld::ui::RrcNavigation::Page::Channels;
-    const bool current=_visible && !_rrc.navigation.direct() && _rrcQuerySession==status.generation &&
+    const bool current=_visible && !_rrc.navigation.direct() && _rrcQueryView==_rrc.navigation.revision() && _rrcQuerySession==status.generation &&
         (!merged || _rrcQueryRevision==status.revision);
     uint8_t bytes[handheld::storage::Budget::SmallPayload];
     const bool read=current && result.length<=sizeof bytes && _store->readPayload(_deleteTicket,bytes,result.length);
@@ -80,7 +85,10 @@ bool MessagesScreen::pollRrcCatalog() {
         return true;
     }
     handheld::rrc::RoomView rows[handheld::history::rrc_catalog::Capacity];size_t count=0;bool more=false;
-    const bool ok=read && handheld::history::rrc_catalog::project(*_backend,_deletePeer,merged,_rrcQueryOffset,result,bytes,rows,count,more);
+    const bool detail=_rrcQueryPage==handheld::ui::RrcNavigation::Page::RoomInfo || _rrcQueryPage==handheld::ui::RrcNavigation::Page::Notifications;
+    const bool ok=read && (detail ? handheld::history::rrc_catalog::roomDetail(*_backend,_rrc.navigation.conversation(),result,bytes,rows[0]) :
+        handheld::history::rrc_catalog::project(*_backend,_deletePeer,merged,_rrcQueryOffset,result,bytes,rows,count,more));
+    if(detail && ok) count=1;
     if (!_store->releaseResult(_deleteTicket)) return false;
     const auto view=_rrcQueryView;_rrcQueryView=0;_deleteTicket={};
     if (!current) _rrc.cancelRows(view);

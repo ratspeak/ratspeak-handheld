@@ -79,6 +79,7 @@ public:
     uint32_t requestRrcRooms(RrcCompletion<rrc::RoomView>);
     uint32_t requestRrcChannels(size_t offset, RrcCompletion<rrc::RoomView>);
     uint32_t requestRrcSavedRooms(const uint8_t hub[16], size_t offset, RrcCompletion<rrc::RoomView>);
+    uint32_t requestRrcRoom(const rrc::Conversation&, RrcCompletion<rrc::RoomView>);
     uint32_t requestRrcInbox(const uint8_t hub[16], uint32_t cursor, storage::HistoryDirection, RrcCompletion<rrc::PrivateView>);
     uint32_t requestRrcPeople(const char* room, RrcCompletion<rrc::PersonView>);
     uint32_t requestRrcDirectory(size_t offset, RrcCompletion<rrc::DirectoryView>);

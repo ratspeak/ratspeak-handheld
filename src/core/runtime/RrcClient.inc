@@ -35,6 +35,11 @@ uint32_t ServiceClient::requestRrcSavedRooms(const uint8_t hub[16],size_t offset
     rrc::Conversation binding;memcpy(binding.hub,hub,16);
     return rrcQuery<rrc::RoomView,4>(request,&binding,sizeof binding,std::move(completion));
 }
+uint32_t ServiceClient::requestRrcRoom(const rrc::Conversation& binding,RrcCompletion<rrc::RoomView> completion) {
+    if(!binding.room[0] || binding.room[64] || binding.privateNotice()) return 0;
+    Request request;request.operation=Operation::RrcRoom;
+    return rrcQuery<rrc::RoomView,1>(request,&binding,sizeof binding,std::move(completion));
+}
 uint32_t ServiceClient::requestRrcInbox(const uint8_t hub[16],uint32_t cursor,storage::HistoryDirection direction,RrcCompletion<rrc::PrivateView> completion) {
     if(!hub || (direction!=storage::HistoryDirection::Before && direction!=storage::HistoryDirection::After)) return 0;
     Request request;request.operation=Operation::RrcInbox;request.offset=cursor;request.historyDirection=direction;
@@ -53,7 +58,7 @@ uint32_t ServiceClient::requestRrcDirectory(size_t offset, RrcCompletion<rrc::Di
     return rrcQuery<rrc::DirectoryView, 8>(request, nullptr, 0, std::move(completion));
 }
 uint32_t ServiceClient::rrcCommand(const rrc::Command& command, const uint8_t* body, size_t length, Completion completion, bool quiet) {
-    if (length > rrc::PacketCapacity || (length && !body) || command.room[64] || command.action > rrc::Action::MarkRead || command.flags > (command.action==rrc::Action::Draft?3:1)) return 0;
+    if (length > rrc::PacketCapacity || (length && !body) || command.room[64] || command.action > rrc::Action::ForgetKey || command.flags > (command.action==rrc::Action::Draft?3:command.action==rrc::Action::Mute?2:1)) return 0;
     uint8_t payload[sizeof command + rrc::PacketCapacity]; memcpy(payload, &command, sizeof command);
     if (length) memcpy(payload + sizeof command, body, length);
     Request request; request.operation = Operation::RrcCommand;

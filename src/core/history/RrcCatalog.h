@@ -1,5 +1,6 @@
 #pragma once
 #include "protocol/RrcTypes.h"
+#include "protocol/RrcPreferences.h"
 #include "storage/RrcRecord.h"
 #include "ratspeak_protocol.h"
 #include <algorithm>
@@ -9,6 +10,38 @@ namespace handheld::history::rrc_catalog {
 namespace disk = storage::rrc;
 namespace model = handheld::rrc;
 constexpr size_t Capacity = disk::SavedPageCapacity;
+
+// One on-demand room detail shares the normal metadata read credit. Live
+// observations are overlaid only for this exact active hub; persisted policy
+// and remembered-key presence remain available while disconnected.
+template<class Backend>
+bool roomDetail(Backend& backend,const model::Conversation& binding,
+                const storage::Result& result,const uint8_t* bytes,model::RoomView& row) {
+    row={};disk::Context context;
+    if(!binding.room[0] || binding.room[64] || binding.privateNotice() ||
+        result.outcome!=storage::Outcome::Committed || result.error!=storage::Error::None ||
+        !backend.rrcContext(binding.hub,binding.room,nullptr,context)) return false;
+    uint8_t normalized[64];size_t length=0;const auto size=std::strlen(binding.room);
+    if(rs_handheld_rrc_normalize(reinterpret_cast<const uint8_t*>(binding.room),size,0,normalized,sizeof normalized,&length)!=RS_HANDHELD_OK ||
+        length!=size || std::memcmp(normalized,binding.room,size)) return false;
+    std::memcpy(row.name,binding.room,sizeof row.name);std::memcpy(row.key,context.conversation,16);
+    if(!std::memcmp(binding.hub,backend.rrcStatus().hub,16)) {
+        model::RoomView rooms[model::RoomCapacity];const auto count=backend.rrcRooms(rooms,model::RoomCapacity);
+        if(count>model::RoomCapacity) return false;
+        for(size_t n=0;n<count;++n) if(!std::memcmp(rooms[n].key,row.key,16)) {row=rooms[n];break;}
+    }
+    if(result.length) {
+        disk::Record record;if(result.length>sizeof record) return false;
+        std::memcpy(record.bytes,bytes,result.length);
+        if(!record.valid(result.length) || !record.matches(context) || record.kind()!=disk::Kind::Preferences ||
+            !model::validRoomPreference(record.payload(),record.payloadLength()) ||
+            std::strcmp(reinterpret_cast<const char*>(record.payload()+7),binding.room)) return false;
+        row.notifications=model::Notifications(record.payload()[4]);
+        row.muted=row.notifications==model::Notifications::Muted;
+        row.keyRemembered=record.payloadLength()>model::RoomPreferenceHeader;
+    }
+    return true;
+}
 
 inline bool privateRows(const storage::Result& result,const uint8_t* bytes,model::PrivateView (&rows)[Capacity],size_t& count) {
     count=0;
@@ -66,7 +99,7 @@ bool project(Backend& backend, const uint8_t hub[16], bool merged, size_t offset
     if (saved>Capacity-count) return false;
     for (size_t n=0;n<saved;++n) {
         disk::SavedRoom savedRoom;std::memcpy(&savedRoom,bytes+n*sizeof savedRoom,sizeof savedRoom);
-        if (!savedRoom.name[0] || savedRoom.name[64] || savedRoom.notifications>1) return false;
+        if (!savedRoom.name[0] || savedRoom.name[64] || savedRoom.notifications>2) return false;
         uint8_t normalized[64],key[16];size_t length=0;
         const auto size=std::strlen(savedRoom.name);
         if (rs_handheld_rrc_normalize(reinterpret_cast<const uint8_t*>(savedRoom.name),size,0,
@@ -75,7 +108,7 @@ bool project(Backend& backend, const uint8_t hub[16], bool merged, size_t offset
             rs_handheld_rrc_storage_key(0,normalized,length,key)!=RS_HANDHELD_OK ||
             std::memcmp(key,savedRoom.key,16)) return false;
         auto& row=rows[count++];row={};std::memcpy(row.key,key,16);std::memcpy(row.name,savedRoom.name,sizeof row.name);
-        row.muted=savedRoom.notifications!=0;row.keyRemembered=savedRoom.keyRemembered;
+        row.notifications=model::Notifications(savedRoom.notifications);row.muted=row.notifications==model::Notifications::Muted;row.keyRemembered=savedRoom.keyRemembered;
         row.phase=model::RoomPhase::Saved;
     }
     more |= result.more;return true;

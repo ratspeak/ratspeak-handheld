@@ -11,7 +11,7 @@ class RrcNavigation {
 public:
     enum class Page : uint8_t { Hubs, Channels, ActiveHub, Hub, Room, People, Person, Directory,
         Address, RoomName, RoomKey, Nickname, Advanced, SwitchHub, Disconnect, Leave,
-        ClearHistory, HubInfo, RoomInfo, Identity, Help, Inbox, SavedRooms };
+        ClearHistory, HubInfo, RoomInfo, Identity, Help, Inbox, SavedRooms, Notifications, ForgetRoom, ForgetKey, RoomText };
     enum class Choice : uint8_t { Connect, SaveHub, ForgetHub, BrowseHubs, HubInfo, Notices, Disconnect,
         JoinByName, Directory, SavedRooms, Inbox, Nickname, Advanced, Help, OpenChat,
         Join, JoinWithKey, Leave, People, RoomInfo, Mute, MarkRead, ClearHistory,
@@ -28,7 +28,7 @@ public:
         {Choice::OpenChat,"Open conversation"}, {Choice::Join,"Join channel"},
         {Choice::JoinWithKey,"Join with key"}, {Choice::People,"Known people"},
         {Choice::RoomInfo,"Channel info"}, {Choice::Mute,"Notifications"},
-        {Choice::MarkRead,"Mark read"}, {Choice::Advanced,"Advanced command"},
+        {Choice::MarkRead,"Open and mark read"}, {Choice::Advanced,"Advanced command"},
         {Choice::Leave,"Leave channel"}, {Choice::ClearHistory,"Clear local history"}, {Choice::Back,"Back"}
     };
     static constexpr Item PersonActions[] = {
@@ -130,7 +130,7 @@ public:
         rrc::Command value; value.action = action; value.generation = _session;
         std::memcpy(value.hub, selectedHub ? _selectedHub : _activeHub, 16);
         if (action == rrc::Action::Join || action == rrc::Action::Leave || action == rrc::Action::Who ||
-            action == rrc::Action::Topic || action == rrc::Action::Mute || action == rrc::Action::ClearHistory ||
+            action == rrc::Action::Topic || action == rrc::Action::Mute || action == rrc::Action::ForgetRoom || action == rrc::Action::ForgetKey || action == rrc::Action::ClearHistory ||
             action == rrc::Action::MarkRead || action == rrc::Action::Message || action == rrc::Action::Emote) {
             copy(value.room, _conversation.room);
             std::memcpy(value.hub, _conversation.hub, 16); value.generation = _conversationSession;

@@ -40,9 +40,8 @@ public:
     void refresh() { _dirty = true; }
     void visible(bool visible) { _visible = visible; if (visible) refresh(); }
     bool needsRows() const {
-        const auto page = navigation.page();
         return _visible && !navigation.direct() && !_pending && _dirty &&
-            (page == Page::Hubs || page == Page::Channels || page == Page::Directory || page == Page::People || page == Page::SavedRooms || page == Page::Inbox);
+            (dataPage() || detailPage());
     }
     uint32_t beginRows() { _pending = navigation.revision(); _dirty = false; return _pending; }
     // The host also fences session and local identity before calling this.
@@ -75,12 +74,18 @@ public:
         }
         ++_renderRevision;
     }
+    void rows(const rrc::RoomView* values,size_t count,bool following=false,bool sliced=false) {
+        if(!detailPage()) {rows<rrc::RoomView>(values,count,following,sliced);return;}
+        if(count!=1) {_failed=true;_count=0;++_renderRevision;return;}
+        static_assert(sizeof(rrc::RoomView)<=sizeof _rows,"Room detail reuses the visible metadata page");
+        std::memcpy(_rows,values,sizeof *values);_count=1;++_renderRevision;
+    }
     void rows(const rrc::PrivateView* values,size_t count,bool following=false,bool =true) {
         rows<rrc::PrivateView>(values,count,false,true);
         _newer=navigation.after()?following:navigation.offset()!=0;
         _more=count && (navigation.after()?navigation.offset()!=0:following);
     }
-    bool ready() const { return !dataPage() || _rowsView == navigation.revision(); }
+    bool ready() const { return !(dataPage() || detailPage()) || _rowsView == navigation.revision(); }
     bool form() const {
         const auto p = navigation.page();
         return p == Page::Address || p == Page::RoomName || p == Page::RoomKey || p == Page::Nickname || p == Page::Advanced;
@@ -111,7 +116,10 @@ public:
         case Page::Directory: return "Public channels";
         case Page::Disconnect: return "Disconnect this hub?";
         case Page::HubInfo: return "Hub details";
-        case Page::RoomInfo: return "Channel details";
+        case Page::RoomInfo: case Page::RoomText: return navigation.conversation().room;
+        case Page::Notifications: return "Channel notifications";
+        case Page::ForgetRoom: return "Forget saved channel?";
+        case Page::ForgetKey: return "Forget remembered key?";
         case Page::Help: return "Hub help";
         case Page::Inbox: return "Private notices";
         case Page::SavedRooms: return "Saved channels";
@@ -133,6 +141,10 @@ public:
         case Page::Identity: return 3;
         case Page::HubInfo: return 5;
         case Page::Help: return 5;
+        case Page::RoomInfo: return 10;
+        case Page::Notifications: return 4;
+        case Page::ForgetRoom: case Page::ForgetKey: return 3;
+        case Page::RoomText: return textLines()+1;
         default: return 1;
         }
     }
@@ -141,6 +153,34 @@ public:
         out[0] = 0;
         if (failed()) { copy(out,size,index?"Back":"Could not load; retry");return; }
         const auto page = navigation.page();
+        if(page==Page::RoomText) {
+            if(index==textLines()) copy(out,size,"Back");else textLine(index,out,size);return;
+        }
+        if(page==Page::ForgetRoom || page==Page::ForgetKey) {
+            copy(out,size,index==0 ? (page==Page::ForgetRoom?"History and membership kept":"History and membership kept") : index==1?"Confirm":"Cancel");return;
+        }
+        if(page==Page::RoomInfo || page==Page::Notifications) {
+            rrc::RoomView room;std::memcpy(&room,_rows,sizeof room);
+            if(page==Page::Notifications) {
+                const rrc::Notifications choices[]={rrc::Notifications::All,rrc::Notifications::Mentions,rrc::Notifications::Muted};
+                if(index<3) std::snprintf(out,size,"%s%s",room.notifications==choices[index]?"[x] ":"[ ] ",rrc::notificationName(choices[index]));
+                else copy(out,size,"Back");return;
+            }
+            switch(index) {
+            case 0: copy(out,size,room.phase==rrc::RoomPhase::Joined?"Joined":room.phase==rrc::RoomPhase::Joining?"Joining":
+                room.phase==rrc::RoomPhase::Recovering?"Reconnecting":room.phase==rrc::RoomPhase::NeedsKey?"Key needed":
+                room.phase==rrc::RoomPhase::Leaving?"Leaving":room.phase==rrc::RoomPhase::Error?"Join failed":"Not joined");return;
+            case 1: std::snprintf(out,size,"Topic: %s",room.topic[0]?room.topic:"unknown");return;
+            case 2: std::snprintf(out,size,"Modes: %s",room.modes[0]?room.modes:"unknown");return;
+            case 3: std::snprintf(out,size,"Notifications: %s",rrc::notificationName(room.notifications));return;
+            case 4: copy(out,size,room.keyRemembered?"Key remembered on this device":"No remembered key");return;
+            case 5: copy(out,size,room.membersComplete?"People: complete at last update":"People: partial or unknown");return;
+            case 6: copy(out,size,room.registered==1?"Registered channel":room.registered==2?"Unregistered channel":"Registration unknown");return;
+            case 7: copy(out,size,"Forget saved channel");return;
+            case 8: copy(out,size,"Forget remembered key");return;
+            default: copy(out,size,"Back");return;
+            }
+        }
         if (page == Page::Channels && index == 0) {
             std::snprintf(out, size, "%s  > %s", status.name[0] ? status.name : "Current hub", rrc::phaseName(status.phase)); return;
         }
@@ -198,6 +238,25 @@ public:
         if (failed()) { if (index) back();else { _failed=false;refresh();++_renderRevision; } return; }
         if (status.generation != navigation.session()) { tell(rrc::codeName(rrc::Code::Stale)); return; }
         auto page = navigation.page();
+        if(page==Page::Notifications) {
+            if(index==3) navigation.back();
+            else {auto command=navigation.command(rrc::Action::Mute);const uint8_t choices[]={0,2,1};command.flags=choices[index];
+                if(execute(command)) navigation.back();}
+            changed();return;
+        }
+        if(page==Page::ForgetRoom || page==Page::ForgetKey) {
+            if(index==2) navigation.back();
+            else if(index==1 && execute(navigation.command(page==Page::ForgetRoom?rrc::Action::ForgetRoom:rrc::Action::ForgetKey))) navigation.back();
+            changed();return;
+        }
+        if(page==Page::RoomInfo) {
+            if(index==9) navigation.back();
+            else if(index==7 || index==8) navigation.push(index==7?Page::ForgetRoom:Page::ForgetKey);
+            else if(index==3) navigation.push(Page::Notifications);
+            else {char text[112];label(index,status,text,sizeof text);if(navigation.push(Page::RoomText)) {std::memset(_rows,0,sizeof _rows);std::memcpy(_rows,text,std::strlen(text)+1);}}
+            changed();return;
+        }
+        if(page==Page::RoomText) {if(index==textLines()) {navigation.back();changed();}return;}
         if (page == Page::Channels && !index) { navigation.activeHub(status); changed(); return; }
         if (dataPage()) {
             size_t n = index - (page == Page::Channels ? 1 : 0);
@@ -287,7 +346,7 @@ private:
         case Choice::JoinWithKey: navigation.push(Page::RoomKey); break;
         case Choice::Join: execute(navigation.command(rrc::Action::Join)); break;
         case Choice::People: if (navigation.push(Page::People)) execute(navigation.command(rrc::Action::Who)); break;
-        case Choice::RoomInfo: execute(navigation.command(rrc::Action::Topic)); navigation.push(Page::RoomInfo); break;
+        case Choice::RoomInfo: navigation.push(Page::RoomInfo); break;
         case Choice::Identity: navigation.push(Page::Identity); break;
         case Choice::OpenChat: if (open) open(navigation.conversation(),nullptr); break;
         case Choice::PrivateNotice: if (open) open(navigation.privateConversation(),nullptr); break;
@@ -296,10 +355,10 @@ private:
             char mention[36]; std::snprintf(mention,sizeof mention,"@%s ",navigation.personName());
             if (open) open(navigation.conversation(),mention); break;
         }
-        case Choice::Mute: navigation.push(Page::RoomInfo); tell("Notification choices are loading"); break;
+        case Choice::Mute: navigation.push(Page::Notifications); break;
         case Choice::Inbox: navigation.inbox(); break;
         case Choice::OpenDirect: tell("LXMF requires this person's delivery address"); break;
-        case Choice::MarkRead: tell("Open the conversation to mark visible messages read"); break;
+        case Choice::MarkRead: if(open) open(navigation.conversation(),nullptr); break;
         default: break;
         }
         changed();
@@ -310,7 +369,20 @@ private:
         return code == rrc::Code::Ok;
     }
     bool dataPage() const { const auto p = navigation.page(); return p == Page::Hubs || p == Page::Channels || p == Page::People || p == Page::Directory || p == Page::SavedRooms || p == Page::Inbox; }
-    bool failed() const { return dataPage() && _failed && _rowsView==navigation.revision(); }
+    bool detailPage() const {return navigation.page()==Page::RoomInfo || navigation.page()==Page::Notifications;}
+    size_t textLine(size_t line,char* out=nullptr,size_t capacity=0) const {
+        const auto* text=reinterpret_cast<const char*>(_rows);const auto length=strnlen(text,sizeof _rows);
+        size_t begin=0;
+        for(size_t n=0;begin<length;++n) {
+            size_t end=std::min(begin+size_t(32),length);
+            while(end<length && end>begin && (uint8_t(text[end])&0xc0)==0x80) --end;
+            if(n==line) {if(out && capacity) {const auto bytes=std::min(end-begin,capacity-1);std::memcpy(out,text+begin,bytes);out[bytes]=0;}return end;}
+            begin=end;
+        }
+        return 0;
+    }
+    size_t textLines() const {size_t n=0;while(textLine(n)) ++n;return n;}
+    bool failed() const { return (dataPage() || detailPage()) && _failed && _rowsView==navigation.revision(); }
     bool previousPage() const { return navigation.page()==Page::Inbox ? _newer : navigation.offset()!=0; }
     size_t pagerCount() const { return (previousPage() ? 1 : 0) + (_more ? 1 : 0); }
     void changed() { _count = 0; _more = false; _dirty = true; _failed=false; ++_renderRevision; }

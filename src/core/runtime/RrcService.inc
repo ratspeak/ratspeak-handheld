@@ -3,7 +3,7 @@
 namespace {
 bool rrcPreferenceAction(rrc::Action action) {
     return action == rrc::Action::SaveHub || action == rrc::Action::ForgetHub || action == rrc::Action::Nickname ||
-        action == rrc::Action::Mute || action == rrc::Action::Draft || action == rrc::Action::MarkRead || action == rrc::Action::ClearHistory;
+        action == rrc::Action::ForgetRoom || action == rrc::Action::ForgetKey || action == rrc::Action::Mute || action == rrc::Action::Draft || action == rrc::Action::MarkRead || action == rrc::Action::ClearHistory;
 }
 bool rrcMessageAction(rrc::Action action) {
     return action == rrc::Action::Message || action == rrc::Action::Emote || action == rrc::Action::PrivateNotice;
@@ -54,7 +54,7 @@ void DeviceService::executeRrc(uint8_t slot) {
         if (length < sizeof command || length > sizeof command + rrc::PacketCapacity) { complete(slot, Outcome::Invalid); return; }
         memcpy(&command, _scratch, sizeof command);
         command.revision = request.id; // Unique for this mailbox lifetime, independent of draft edits/read counter.
-        const bool valid = !command.room[64] && command.action <= rrc::Action::MarkRead && command.flags <= (command.action==rrc::Action::Draft?3:1);
+        const bool valid = !command.room[64] && command.action <= rrc::Action::ForgetKey && command.flags <= (command.action==rrc::Action::Draft?3:command.action==rrc::Action::Mute?2:1);
         const auto code = valid ? _backend.rrcCommand(command,
             reinterpret_cast<const uint8_t*>(_scratch) + sizeof command, length - sizeof command) : rrc::Code::Invalid;
         volatile char* clear = _scratch; for (size_t n = 0; n < length; ++n) clear[n] = 0;
@@ -124,9 +124,9 @@ storage::Submission DeviceService::submitRrcRead(uint8_t slot) {
             return {{},storage::Rejection::Invalid};
         return _messages.requestRrc(storage::Operation::RrcSavedRooms,record,nullptr,cursor);
     }
-    if (request.operation == Operation::RrcDraft) {
+    if (request.operation == Operation::RrcDraft || request.operation==Operation::RrcRoom) {
         storage::rrc::Record record;
-        storage::rrc::Record::make(record, context, storage::rrc::Kind::Draft, nullptr, 0);
+        storage::rrc::Record::make(record, context, request.operation==Operation::RrcRoom?storage::rrc::Kind::Preferences:storage::rrc::Kind::Draft, nullptr, 0);
         return _messages.requestRrc(storage::Operation::RrcRead, record);
     }
     return history::rrc::submit(_messages, context, rrcHistoryQuery(request, context));
@@ -160,6 +160,13 @@ Result DeviceService::projectRrcRead(const storage::Result& stored) {
             stored,reinterpret_cast<const uint8_t*>(_scratch),rows,count,more) || !_mailbox.write(slot,rows,count*sizeof rows[0])) return invalid();
         result.length=count*sizeof rows[0];result.more=more;result.next=request.offset+count;
         result.total=count;result.outcome=Outcome::Ok;return result;
+    }
+    if(request.operation==Operation::RrcRoom) {
+        if(request.revision!=_backend.rrcStatus().generation) {result.outcome=Outcome::Stale;result.storageError=storage::Error::Stale;return result;}
+        rrc::Conversation binding;rrc::RoomView room;
+        if(!_mailbox.read(slot,&binding,sizeof binding) || !history::rrc_catalog::roomDetail(_backend,binding,stored,
+            reinterpret_cast<const uint8_t*>(_scratch),room) || !_mailbox.write(slot,&room,sizeof room)) return invalid();
+        result.length=sizeof room;result.total=1;result.outcome=Outcome::Ok;return result;
     }
     if (request.operation == Operation::RrcDraft || request.operation == Operation::RrcDetail) {
         storage::rrc::Record record;

@@ -21,7 +21,7 @@ namespace handheld {
 
 namespace {
 bool rrcCatalog(Operation operation) { return operation==Operation::RrcChannels || operation==Operation::RrcSavedRooms; }
-bool rrcMetadata(Operation operation) { return rrcCatalog(operation) || operation==Operation::RrcInbox; }
+bool rrcMetadata(Operation operation) { return rrcCatalog(operation) || operation==Operation::RrcInbox || operation==Operation::RrcRoom; }
 bool rrcRead(Operation operation) { return rrcMetadata(operation) || (operation >= Operation::RrcHistoryPage && operation <= Operation::RrcDetail); }
 history::HistoryWindow::Query rrcHistoryQuery(const Request& request, const storage::rrc::Context& context) {
     history::HistoryWindow::Query query;
@@ -46,6 +46,7 @@ size_t queryCapacity(Operation operation) {
         case Operation::RrcDetail: return sizeof(rrc::MessageDetail);
         case Operation::RrcChannels: case Operation::RrcSavedRooms: return 4*sizeof(rrc::RoomView);
         case Operation::RrcInbox: return 4*sizeof(rrc::PrivateView);
+        case Operation::RrcRoom: return sizeof(rrc::RoomView);
         default: return 0;
     }
 }
@@ -136,7 +137,7 @@ bool DeviceService::readyForCommand() {
         case Operation::ConversationPage: case Operation::ConversationDetail:
         case Operation::HistoryPage: case Operation::ReadRecord: case Operation::HistoryStatus:
         case Operation::RrcHistoryPage: case Operation::RrcHistoryRecord: case Operation::RrcHistoryStatus:
-        case Operation::RrcDraft: case Operation::RrcDetail: case Operation::RrcCommand: case Operation::RrcChannels: case Operation::RrcSavedRooms: case Operation::RrcInbox:
+        case Operation::RrcDraft: case Operation::RrcDetail: case Operation::RrcCommand: case Operation::RrcChannels: case Operation::RrcSavedRooms: case Operation::RrcInbox: case Operation::RrcRoom:
             return true; // Typed worker submissions and result copies only.
         default: return false; // Settings, contacts and callbacks may write inline.
     }
@@ -636,7 +637,7 @@ void DeviceService::execute(uint8_t slot) {
     case Operation::ConversationPage: case Operation::ConversationDetail:
     case Operation::HistoryPage: case Operation::ReadRecord: case Operation::HistoryStatus:
     case Operation::RrcHistoryPage: case Operation::RrcHistoryRecord: case Operation::RrcHistoryStatus:
-    case Operation::RrcDraft: case Operation::RrcDetail: case Operation::RrcChannels: case Operation::RrcSavedRooms: case Operation::RrcInbox:
+    case Operation::RrcDraft: case Operation::RrcDetail: case Operation::RrcChannels: case Operation::RrcSavedRooms: case Operation::RrcInbox: case Operation::RrcRoom:
         history(slot); break;
     case Operation::Identities: {
         JsonDocument doc; auto rows = doc.to<JsonArray>();
