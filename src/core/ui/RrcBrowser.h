@@ -142,7 +142,7 @@ public:
         case Page::Identity: return 3;
         case Page::HubInfo: return 5;
         case Page::Help: return 5;
-        case Page::RoomInfo: return 10;
+        case Page::RoomInfo: return 14;
         case Page::Notifications: return 4;
         case Page::ForgetRoom: case Page::ForgetKey: return 3;
         case Page::RoomText: return textLines()+1;
@@ -179,6 +179,11 @@ public:
             case 6: copy(out,size,room.registered==1?"Registered channel":room.registered==2?"Unregistered channel":"Registration unknown");return;
             case 7: copy(out,size,"Forget saved channel");return;
             case 8: copy(out,size,"Forget remembered key");return;
+            case 9: copy(out,size,room.speaking==rrc::Speaking::Allowed?"Speaking: confirmed by echo":
+                room.speaking==rrc::Speaking::Denied?"Speaking denied; manual retry allowed":"Speaking permission unknown");return;
+            case 10: copy(out,size,rrc::restrictionName(room.restriction));return;
+            case 11: std::snprintf(out,size,"Channel: %s",room.name);return;
+            case 12: copy(out,size,"Refresh channel details");return;
             default: copy(out,size,"Back");return;
             }
         }
@@ -194,6 +199,7 @@ public:
                         row.state == uint8_t(rrc::RoomPhase::Available) ? " [available]" :
                         row.state == uint8_t(rrc::RoomPhase::NeedsKey) ? " [key needed]" :
                         row.state == uint8_t(rrc::RoomPhase::Joining) ? " [joining]" :
+                        row.state == uint8_t(rrc::RoomPhase::Error) ? " [action needed]" :
                         row.state == uint8_t(rrc::RoomPhase::Recovering) ? " [reconnecting]" : " [saved]";
                     if (row.unread) std::snprintf(out, size, "%s [%lu]%s", row.name, static_cast<unsigned long>(row.unread), state);
                     else std::snprintf(out, size, "%s%s", row.name, state);
@@ -251,7 +257,8 @@ public:
             changed();return;
         }
         if(page==Page::RoomInfo) {
-            if(index==9) navigation.back();
+            if(index==13) navigation.back();
+            else if(index==12) execute(navigation.command(rrc::Action::Topic));
             else if(index==7 || index==8) navigation.push(index==7?Page::ForgetRoom:Page::ForgetKey);
             else if(index==3) navigation.push(Page::Notifications);
             else {char text[112];label(index,status,text,sizeof text);if(navigation.push(Page::RoomText)) {std::memset(_rows,0,sizeof _rows);std::memcpy(_rows,text,std::strlen(text)+1);}}

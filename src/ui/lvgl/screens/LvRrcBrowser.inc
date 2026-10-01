@@ -144,7 +144,7 @@ void LvMessagesScreen::renderRrc() {
                 lv_obj_clear_flag(divider,LV_OBJ_FLAG_SCROLLABLE|LV_OBJ_FLAG_CLICKABLE);
             }
         }
-        if (selected<_rrc.count() && selected<12 && _rrcRows[selected]) lv_group_focus_obj(_rrcRows[selected]);
+        if (selected<_rrc.count() && selected<sizeof _rrcRows/sizeof _rrcRows[0] && _rrcRows[selected]) lv_group_focus_obj(_rrcRows[selected]);
     }
     _binding=false;
     _rrcRendered=_rrc.revision();

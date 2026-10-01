@@ -34,7 +34,7 @@ private:
     handheld::ui::RrcBrowser _rrc;
     lv_obj_t* _family[2]{};
     lv_obj_t *_rrcPanel = nullptr, *_rrcText = nullptr, *_rrcRemember = nullptr;
-    lv_obj_t* _rrcRows[12]{};
+    lv_obj_t* _rrcRows[14]{};
     uint32_t _rrcRendered = 0, _rrcFormView = 0, _rrcRetryAt = 0;
     using Window = handheld::history::ConversationList;
     using Row = Window::Row;

@@ -63,6 +63,7 @@ RustRrcEngine::Code RustRrcEngine::startJoin(Room& room, const uint8_t* key, siz
     _joinFromStored = false;
     RustEntropy::fill(room.observation,sizeof room.observation);room.observationPending=true;
     room.wanted = true; room.view.needsKey = length != 0; room.view.phase = RoomPhase::Joining;
+    room.view.restriction=Restriction::None;room.view.speaking=Speaking::Unknown;
     room.deadline = now() + wait(8); changed(); return Code::Ok;
 }
 RustRrcEngine::Code RustRrcEngine::preferenceCommand(const Command& command, const uint8_t* body, size_t length) {
@@ -258,6 +259,7 @@ void RustRrcEngine::pollPreferences() {
             } else {
                 auto& room=*item;
                 if (_stopped || _status.phase != Phase::Online) { preferenceDone(Code::Offline); return; }
+                if(room.view.phase!=RoomPhase::Joining) {preferenceDone(Code::Stale);return;}
                 uint8_t key[KeyCapacity]{}; size_t keyLength = 0;
                 const size_t sealedLength = result.length ? length - RoomPreferenceHeader : 0;
                 if (sealedLength && rs_handheld_rrc_unseal_key(_d.ctx, _status.hub,

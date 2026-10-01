@@ -227,6 +227,7 @@ void LvMessageView::activateRrcTool() {
         if(_rrcTools.selected==1) readRrcTool(Action::Copy);
         else if(_rrcTools.selected==2) closeRrcTools();return;
     }
+    if(_rrcTools.state==State::Invitation && _rrcTools.selected==2) return;
     const auto action=_rrcTools.action();
     if(action==Action::Back) {closeRrcTools();return;}
     if(action==Action::Identity || action==Action::Copy) {
@@ -256,6 +257,28 @@ void LvMessageView::readRrcTool(RrcTools::Action action,bool metadata) {
         if(metadata) {_rrcTools.accept(row);showSendModeMenu();return;}
         _rrcTools.state=RrcTools::State::Menu;showSendModeMenu();
         if(!row.kind) {rrcNotice("This is a local history marker");return;}
+        if(action==RrcTools::Action::AcceptInvite) {
+            char room[65];
+            if(!row.invitation || !handheld::rrc::hubText::invitation(reinterpret_cast<const uint8_t*>(row.text),row.length,room)) {
+                rrcNotice("This is not a recognized hub invitation");return;
+            }
+            const auto& live=_service->status().rrc;
+            if(memcmp(live.hub,_rrcBinding.hub,16) || live.phase!=handheld::rrc::Phase::Online) {
+                showRrcGuidance(RrcTools::State::Connect);return;
+            }
+            if(memcmp(row.source,live.identity,16)) {rrcNotice("Hub identity changed; reopen the invitation");return;}
+            auto command=rrcCommand(handheld::rrc::Action::Join);memset(command.participant,0,16);strcpy(command.room,room);
+            _rrcTools.state=RrcTools::State::Loading;showSendModeMenu();
+            const auto id=_service->rrcCommand(command,nullptr,0,[this,view,revision](const handheld::Result& result) {
+                if(!_entered || !_screen || !_rrcMode || _rrcView!=view || _rrcTools.revision!=revision || !_rrcTools.visible() ||
+                    _rrcIdentity!=_service->status().generation) return;
+                if(result.outcome==handheld::Outcome::Ok) {closeRrcTools();rrcNotice("Joining invited channel");}
+                else {_rrcTools.state=RrcTools::State::Invitation;showSendModeMenu();const auto code=handheld::rrc::Code(result.next);
+                    rrcNotice(handheld::rrc::codeName(code==handheld::rrc::Code::Ok?handheld::rrc::Code::Storage:code));}
+            });
+            if(!id) {_rrcTools.state=RrcTools::State::Invitation;showSendModeMenu();rrcNotice("Hub busy; try again");}return;
+        }
+
         if(action==RrcTools::Action::Private || action==RrcTools::Action::Direct) {
             if(action==RrcTools::Action::Private && !(_service->status().rrc.capabilities&4)) {rrcNotice("Hub does not support private notices");return;}
             if(!leaveRrcDraft()) return;
@@ -306,7 +329,7 @@ void LvMessageView::activateRrcGuidance() {
     if(state==State::Connect) {
         const auto& live=_service->status().rrc;const bool same=!memcmp(live.hub,_rrcBinding.hub,16);
         if(same && live.phase!=handheld::rrc::Phase::Disconnected && live.phase!=handheld::rrc::Phase::Recovering) {
-            closeRrcTools();rrcNotice("Connection in progress; draft kept");return;
+            closeRrcTools();rrcNotice(live.phase==handheld::rrc::Phase::Online?"Connected; send when ready":"Connection in progress; draft kept");return;
         }
         action=same && live.phase==handheld::rrc::Phase::Recovering?handheld::rrc::Action::Retry:handheld::rrc::Action::Connect;
     }
@@ -316,7 +339,7 @@ void LvMessageView::activateRrcGuidance() {
     const auto id=_service->rrcCommand(command,nullptr,0,[this,view,revision,state,action](const handheld::Result& result) {
         if(!_entered || !_screen || !_rrcMode || _rrcView!=view || _rrcTools.revision!=revision || !_rrcTools.visible() || _rrcIdentity!=_service->status().generation) return;
         if(result.outcome==handheld::Outcome::Ok) {closeRrcTools();rrcNotice(action==handheld::rrc::Action::Join?"Joining; send when ready":"Connecting; draft kept");}
-        else {_rrcTools.state=state;showSendModeMenu();rrcNotice(handheld::rrc::codeName(handheld::rrc::Code(result.next)));}
+        else {_rrcTools.state=state;showSendModeMenu();const auto code=handheld::rrc::Code(result.next);rrcNotice(handheld::rrc::codeName(code==handheld::rrc::Code::Ok?handheld::rrc::Code::Storage:code));}
     });
     if(!id) {_rrcTools.state=state;showSendModeMenu();rrcNotice("Hub busy; draft kept");}
 }

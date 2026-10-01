@@ -1,6 +1,7 @@
 #include "protocol/RustRrcEngine.h"
 #include "protocol/RustClock.h"
 #include "protocol/RustEntropy.h"
+#include "protocol/RrcHubText.h"
 #include "protocol/RustInterfacePump.h"
 #include "storage/MessageStore.h"
 #include "util/DisplayName.h"
@@ -110,6 +111,7 @@ void RustRrcEngine::recover(const char* reason) {
     for (auto& room : _rooms) if (room.used && room.wanted) {
         room.view.phase = room.view.needsKey && !room.view.keyRemembered ? RoomPhase::NeedsKey : RoomPhase::Recovering;
         room.view.membersComplete = false;
+        room.view.speaking = Speaking::Unknown;
     }
     for (auto& person : _people) person = {};
     if (_send.length && !_send.confirmed) {
@@ -321,7 +323,8 @@ RustRrcEngine::Code RustRrcEngine::command(const Command& command, const uint8_t
         disk::Context scope; context(_status.hub, room, nullptr, scope);
         loadPreferences(PreferenceStep::ReadJoin, scope); _preferences.room = uint8_t(item - _rooms);
         _preferences.revision = command.revision; _preferences.action = Action::Join;
-        item->view.phase = RoomPhase::Joining; item->deadline = now() + wait(8); changed(); return Code::Ok;
+        item->view.phase = RoomPhase::Joining; item->view.restriction=Restriction::None; item->view.speaking=Speaking::Unknown;
+        item->deadline = now() + wait(8); changed(); return Code::Ok;
     }
     case Action::Leave: {
         if (!item) return Code::NotJoined;
@@ -471,7 +474,8 @@ void RustRrcEngine::applyRoomControl(const uint8_t* data, size_t length, const r
     } else {
         for (size_t n = 0; n < count; ++n) { uint8_t identity[16]; rs_handheld_rrc_member(data, length, n, identity, &count); participant(identity, nullptr, 0, slot, true); }
         if (includesSelf || (room.view.phase == RoomPhase::Leaving && !count)) {
-            room.wanted = false; room.view.phase = RoomPhase::Saved; room.view.membersComplete = false;
+            room.wanted = false; room.view.phase = room.view.restriction==Restriction::None ? RoomPhase::Saved : RoomPhase::Error;
+            room.view.membersComplete = false;room.view.speaking=Speaking::Unknown;
             for (auto& person : _people) person.rooms &= uint8_t(~(1u << slot));
         }
     }
@@ -500,6 +504,36 @@ bool RustRrcEngine::roomStatus(Room& room, const uint8_t* bytes, size_t length) 
         joined(room);
     }
     ++room.view.revision; changed(); return true;
+}
+
+void RustRrcEngine::roomError(Room& room,const uint8_t* bytes,size_t length) {
+    const std::string_view value(reinterpret_cast<const char*>(bytes),length);
+    auto named=[&](std::string_view prefix) {return value.substr(0,prefix.size())==prefix && value.substr(prefix.size())==room.view.name;};
+    const auto slot=uint8_t(&room-_rooms);
+    const bool joining=room.view.phase==RoomPhase::Joining;
+    Restriction restriction=Restriction::None;
+    if(value=="bad key (+k)") restriction=Restriction::Key;
+    else if(value=="invite-only (+i)") restriction=Restriction::InviteOnly;
+    else if(value=="banned from room" || named("banned from ")) restriction=Restriction::Banned;
+    else if(named("kicked from ")) restriction=Restriction::Kicked;
+    else if(value=="no such room") restriction=Restriction::Missing;
+    if(value=="room is moderated (+m)" || value=="no outside messages (+n)") room.view.speaking=Speaking::Denied;
+    const bool removed=restriction==Restriction::Banned || restriction==Restriction::Kicked || restriction==Restriction::Missing;
+    if(joining || removed) {
+        room.wanted=false;room.view.restriction=restriction;
+        room.view.phase=restriction==Restriction::Key ? RoomPhase::NeedsKey : RoomPhase::Error;
+        room.view.membersComplete=false;room.view.speaking=removed?Speaking::Denied:Speaking::Unknown;
+        if(restriction==Restriction::Key) room.view.needsKey=true;
+        for(auto& person:_people) person.rooms &= uint8_t(~(1u<<slot));
+        if(_control.room==slot && _control.kind==10) wipeControl();
+        if(_joinRoom==slot && !_joinConfirmed) {
+            if(restriction==Restriction::Key && _joinFromStored) {room.view.keyRemembered=false;_invalidKeyRoom=slot;}
+            _joinRoom=UINT8_MAX;_joinPreferenceLength=0;
+        }
+    }
+    // There is no request ID in ERROR: do not turn an unrelated message into
+    // Failed or clear its draft. A later echo is still authoritative evidence.
+    ++room.view.revision;changed();
 }
 
 void RustRrcEngine::onRrcPacket(Handle handle, const uint8_t* data, size_t length, const uint8_t packetHash[32]) {
@@ -536,8 +570,11 @@ void RustRrcEngine::onRrcPacket(Handle handle, const uint8_t* data, size_t lengt
         char name[65]{}; Room* room = nullptr;
         if (view.room.length) {
             if (!normalized(data + view.room.offset, view.room.length, name, sizeof name)) return;
-            room = findRoom(name); if (!room || !room->wanted) return;
+            room = findRoom(name);
+            if ((!room || !room->wanted) && (!hub || (kind!=21 && kind!=40))) return;
         } else if (!hub && !view.meta.has_destination) return;
+        char invited[65];
+        if(hub && hubText::invitation(data,view,invited)) room=nullptr; // One discoverable invitation inbox: Hub notices.
         Receive* pending = nullptr;
         for (auto& item : _receive) {
             if ((item.ticket.valid() || item.proofPending || item.statusPending) && !memcmp(item.file, file, 16)) return;
@@ -554,7 +591,7 @@ void RustRrcEngine::onRrcPacket(Handle handle, const uint8_t* data, size_t lengt
         *pending = {}; pending->ticket = submitted.ticket; pending->link = handle; pending->confirming = ours;
         pending->room = room ? uint8_t(room - _rooms) : UINT8_MAX;
         memcpy(pending->hash, packetHash, 32); memcpy(pending->file, file, 16);
-        if (room) participant(view.meta.source, data + view.nickname.offset, view.nickname.length, pending->room);
+        if (room && room->wanted && !hub) participant(view.meta.source, data + view.nickname.offset, view.nickname.length, pending->room);
         return; // durability before proof or visible receipt
     } else return;
     remember(file); _d.links->proveRrc(handle, packetHash);
@@ -600,6 +637,8 @@ void RustRrcEngine::pollReceive() {
                 }
                 rs_handheld_rrc_view_t view{};
                 const bool decoded=rs_handheld_rrc_decode(record.payload(),record.payloadLength(),&view)==RS_HANDHELD_OK;
+                if(decoded && live(item.link) && item.confirming && item.room<RoomCapacity &&
+                    _rooms[item.room].view.phase==RoomPhase::Joined) _rooms[item.room].view.speaking=Speaking::Allowed;
                 if(!result.duplicate && decoded && live(item.link)) alert(record,view,item.room);
                 // A durable completion from a lost Link may update history,
                 // but cannot apply control observations to its replacement.
@@ -618,21 +657,16 @@ void RustRrcEngine::pollReceive() {
                     }
                     if (view.meta.kind == 21 && item.room < RoomCapacity && roomStatus(_rooms[item.room], record.payload() + view.text.offset, view.text.length))
                         notice("Channel details updated");
+                    char invited[65];
+                    if(hubText::invitation(record.payload(),view,invited)) {
+                        snprintf(_status.notice,sizeof _status.notice,"Invitation: %s. Open Hub notices to join.",invited);
+                    }
                     if (view.meta.kind == 40) {
                         if (item.room < RoomCapacity) {
-                            auto& room = _rooms[item.room];
-                            if (room.view.phase == RoomPhase::Joining) {
-                                const bool badKey = !strcmp(_status.notice, "bad key (+k)");
-                                room.view.phase = badKey ? RoomPhase::NeedsKey : RoomPhase::Error;
-                                room.wanted = false;
-                                if (_joinRoom == item.room && !_joinConfirmed) {
-                                    if (badKey && _joinFromStored) { room.view.keyRemembered = false; _invalidKeyRoom = item.room; }
-                                    _joinRoom = UINT8_MAX; _joinPreferenceLength = 0;
-                                }
-                            }
-                        } else if (!strcmp(_status.notice, "banned")) disconnect();
+                            roomError(_rooms[item.room],record.payload()+view.text.offset,view.text.length);
+                        } else if (!view.room.length && std::string_view(reinterpret_cast<const char*>(record.payload()+view.text.offset),view.text.length)=="banned") disconnect();
                         else if (_status.phase == Phase::Greeting) recover("Hub rejected the greeting");
-                        _status.directoryPending = false;
+                        if(!view.room.length) _status.directoryPending = false;
                     }
                 }
                 changed();

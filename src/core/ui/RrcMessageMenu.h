@@ -8,8 +8,8 @@ namespace handheld::ui {
 // reads its exact immutable counter through the existing query owner, then
 // inserts into the foreground editor. No second body cache is introduced.
 struct RrcMessageMenu {
-    enum class State : uint8_t { Closed, Loading, Failed, Menu, Identity, Copy, Connect, Join, Plain };
-    enum class Action : uint8_t { Read, Quote, Mention, Private, Identity, Direct, Copy, Back };
+    enum class State : uint8_t { Closed, Loading, Failed, Menu, Identity, Copy, Connect, Join, Plain, Invitation };
+    enum class Action : uint8_t { Read, Quote, Mention, Private, Identity, Direct, Copy, Back, AcceptInvite };
     State state=State::Closed;
     uint8_t selected=0,kind=0,status=0;
     uint32_t counter=0, revision=0;
@@ -21,18 +21,22 @@ struct RrcMessageMenu {
     bool accept(const rrc::MessageDetail& detail) {
         if(state!=State::Loading || detail.counter!=counter) return false;
         memcpy(source,detail.source,16);memcpy(nickname,detail.nickname,sizeof nickname);
-        kind=detail.kind;status=detail.status;state=State::Menu;selected=0;return true;
+        kind=detail.kind;status=detail.status;state=detail.invitation?State::Invitation:State::Menu;selected=0;return true;
     }
     size_t count() const {
         if(state==State::Connect) return 5;
         if(state==State::Join) return 4;
         if(state==State::Plain) return 3;
+        if(state==State::Invitation) return 4;
         if(state==State::Identity) return 5;
         if(state==State::Copy) return 3;
         if(state==State::Failed || (state==State::Menu && !kind)) return 2;
         return state==State::Menu?8:1;
     }
-    Action action() const {return !kind && selected==1?Action::Back:Action(selected);}
+    Action action() const {
+        if(state==State::Invitation) return selected==0?Action::Read:selected==1?Action::AcceptInvite:Action::Back;
+        return !kind && selected==1?Action::Back:Action(selected);
+    }
     void move(int direction) {const auto n=count();selected=uint8_t((selected+n+direction)%n);}
     static void hex(const uint8_t* bytes,size_t length,char* out) {
         static constexpr char digits[]="0123456789abcdef";
@@ -43,6 +47,7 @@ struct RrcMessageMenu {
         if(state==State::Connect) return kind?"Switch to this hub?":"Connect this hub?";
         if(state==State::Join) return "Join channel";
         if(state==State::Plain) return "Send ordinary text?";
+        if(state==State::Invitation) return "Hub invitation";
         return state==State::Identity?"Sender identity":state==State::Copy?"Reuse message?":"Message actions";
     }
     void label(size_t row,char* out,size_t capacity) const {
@@ -55,6 +60,7 @@ struct RrcMessageMenu {
             value=row==2?"Hub can read messages":row==3?(kind?"Switch and connect":"Connect"):"Cancel";
         } else if(state==State::Join) value=row==0?"Join this channel first":row==1?"Join channel":row==2?"Open channel menu":"Cancel";
         else if(state==State::Plain) value=row==0?"Hub lacks ACTION":row==1?"Use ordinary text":"Cancel";
+        else if(state==State::Invitation) value=row==0?"Read invitation":row==1?"Join invited channel":row==2?"Invitation may have expired":"Dismiss";
         else if(state==State::Identity) {
             if(row<2) {char part[17];hex(source+row*8,8,part);snprintf(out,capacity,"%s",part);return;}
             value=row==2?"Identity reported":row==3?"by this hub":"Back";

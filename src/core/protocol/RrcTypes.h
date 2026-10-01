@@ -32,6 +32,7 @@ struct MessageDetail {
     char nickname[33]{};
     uint16_t length = 0;
     uint8_t kind = 0, status = 0;
+    bool invitation = false; // Exact hub-source, room-context invitation grammar.
     char text[PacketCapacity + 1]{};
 };
 inline const char* codeName(Code code) {
@@ -65,6 +66,18 @@ struct HubView {
 };
 // Persisted HRP1 values retain the original 0=All / 1=Muted meaning.
 enum class Notifications : uint8_t { All=0, Muted=1, Mentions=2 };
+enum class Speaking : uint8_t { Unknown, Allowed, Denied };
+enum class Restriction : uint8_t { None, Key, InviteOnly, Kicked, Banned, Missing };
+inline const char* restrictionName(Restriction value) {
+    switch(value) {
+    case Restriction::Key: return "Channel key rejected";
+    case Restriction::InviteOnly: return "Fresh invitation may be needed";
+    case Restriction::Kicked: return "Removed by hub; rejoin manually";
+    case Restriction::Banned: return "Banned from this channel";
+    case Restriction::Missing: return "Channel unavailable";
+    default: return "No observed join restriction";
+    }
+}
 inline const char* notificationName(Notifications value) {
     return value==Notifications::Muted ? "Muted" : value==Notifications::Mentions ? "Mentions" : "All";
 }
@@ -78,6 +91,8 @@ struct RoomView {
     bool muted = false, membersComplete = false, needsKey = false;
     bool keyRemembered = false, unreadKnown = false;
     uint8_t registered = 0; // unknown=0, registered=1, unregistered=2
+    Speaking speaking = Speaking::Unknown;
+    Restriction restriction = Restriction::None;
 };
 struct PersonView {
     uint8_t identity[16]{};

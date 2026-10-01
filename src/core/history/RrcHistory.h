@@ -4,6 +4,7 @@
 #include "storage/RrcRecord.h"
 #include "ratspeak_protocol.h"
 #include "protocol/RrcTypes.h"
+#include "protocol/RrcHubText.h"
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -44,7 +45,12 @@ inline bool decode(const disk::Record& record, const disk::Context& context, rs_
         if (view.meta.kind != 21 || (incoming && std::memcmp(view.meta.destination, context.local, 16)) ||
             rs_handheld_rrc_storage_key(1, incoming ? view.meta.source : view.meta.destination, 16, key) != RS_HANDHELD_OK) return false;
     }
-    return !std::memcmp(key, context.conversation, 16);
+    if(!std::memcmp(key, context.conversation, 16)) return true;
+    // Room-scoped hub replies also arrive before membership (invitations and
+    // denials). The owner stores these in Hub notices, preserving original CBOR.
+    const uint8_t empty[16]{};
+    return incoming && view.room.length && (view.meta.kind==21 || view.meta.kind==40) &&
+        !std::memcmp(context.conversation,empty,16) && handheld::rrc::hubText::source(view.meta.source,context.hub);
 }
 
 // The native renderer stores seconds in 32 bits. Out-of-range wire times are
@@ -78,6 +84,8 @@ inline bool detail(const disk::Record& record,const disk::Context& context,handh
     }
     rs_handheld_rrc_view_t view{};if(!decode(record,context,view)) return false;
     std::memcpy(out.source,view.meta.source,16);out.timestamp=timestamp(view.meta.timestamp_ms);out.kind=uint8_t(view.meta.kind);
+    char invited[65];out.invitation=record.status()==disk::Status::Received &&
+        handheld::rrc::hubText::source(view.meta.source,context.hub) && handheld::rrc::hubText::invitation(record.payload(),view,invited);
     std::memcpy(out.nickname,record.payload()+view.nickname.offset,std::min(size_t(32),size_t(view.nickname.length)));
     out.length=view.text.length;std::memcpy(out.text,record.payload()+view.text.offset,out.length);return true;
 }

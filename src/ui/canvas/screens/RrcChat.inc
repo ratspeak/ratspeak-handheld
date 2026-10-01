@@ -254,6 +254,7 @@ void MessageView::activateRrcTool() {
         if(_rrcTools.selected==1) readRrcTool(Action::Copy);
         else if(_rrcTools.selected==2) closeRrcTools();return;
     }
+    if(_rrcTools.state==State::Invitation && _rrcTools.selected==2) return;
     const auto action=_rrcTools.action();
     if(action==Action::Back) {closeRrcTools();return;}
     if(action==Action::Identity) {_rrcTools.state=State::Identity;_rrcTools.selected=0;return;}
@@ -279,6 +280,23 @@ void MessageView::readRrcTool(RrcTools::Action action,bool metadata) {
         if(metadata) {_rrcTools.accept(row);return;}
         _rrcTools.state=RrcTools::State::Menu;
         if(!row.kind) {rrcNotice("This is a local history marker");return;}
+        if(action==RrcTools::Action::AcceptInvite) {
+            char room[65];
+            if(!row.invitation || !handheld::rrc::hubText::invitation(reinterpret_cast<const uint8_t*>(row.text),row.length,room)) {
+                rrcNotice("This is not a recognized hub invitation");return;
+            }
+            const auto& live=_backend->rrcStatus();
+            if(memcmp(live.hub,_rrcBinding.hub,16) || live.phase!=handheld::rrc::Phase::Online) {
+                showRrcGuidance(RrcTools::State::Connect);return;
+            }
+            if(memcmp(row.source,live.identity,16)) {rrcNotice("Hub identity changed; reopen the invitation");return;}
+            auto command=rrcCommand(handheld::rrc::Action::Join);memset(command.participant,0,16);strcpy(command.room,room);
+            command.revision=handheld::ui::nextCardRrcCommand();
+            const auto code=_backend->rrcCommand(command,nullptr,0);
+            if(code==handheld::rrc::Code::Ok) {closeRrcTools();rrcNotice("Joining invited channel");}
+            else rrcNotice(handheld::rrc::codeName(code));return;
+        }
+
         if(action==RrcTools::Action::Private || action==RrcTools::Action::Direct) {
             if(action==RrcTools::Action::Private && !(_backend->rrcStatus().capabilities&4)) {rrcNotice("Hub does not support private notices");return;}
             if(!leaveRrcDraft()) return;
@@ -328,7 +346,7 @@ void MessageView::activateRrcGuidance() {
     if(state==State::Connect) {
         const auto& live=_backend->rrcStatus();const bool same=!memcmp(live.hub,_rrcBinding.hub,16);
         if(same && live.phase!=handheld::rrc::Phase::Disconnected && live.phase!=handheld::rrc::Phase::Recovering) {
-            closeRrcTools();rrcNotice("Connection in progress; draft kept");return;
+            closeRrcTools();rrcNotice(live.phase==handheld::rrc::Phase::Online?"Connected; send when ready":"Connection in progress; draft kept");return;
         }
         action=same && live.phase==handheld::rrc::Phase::Recovering?handheld::rrc::Action::Retry:handheld::rrc::Action::Connect;
     }

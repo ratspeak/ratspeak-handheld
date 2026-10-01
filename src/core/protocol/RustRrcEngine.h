@@ -109,6 +109,7 @@ private:
     void alert(const Record&, const rs_handheld_rrc_view_t&, uint8_t room);
     void applyRoomControl(const uint8_t*, size_t, const rs_handheld_rrc_view_t&, Room&);
     bool roomStatus(Room&, const uint8_t*, size_t);
+    void roomError(Room&, const uint8_t*, size_t);
     void wipeControl();
     enum class PreferenceStep : uint8_t { Idle, ReadRoot, WriteRoot, ReadHub, WriteHub, ReadJoin, ReadJoinedPolicy, WriteRoom, ReadMute, ReadForgetKey, ReadForgetRoom, WriteForgetRoom, WriteDraft, ReadUnread, MarkRead, ClearHistory, Observe };
     struct Preferences {

@@ -806,6 +806,9 @@ rs_handheld_status_t rs_handheld_rrc_mentions(const uint8_t *data, size_t length
 /* Derive a participant's canonical LXMF address. The identity comes from the
  * authenticated hub; LXMF independently obtains/authenticates the recipient key. */
 rs_handheld_status_t rs_handheld_lxmf_destination_for_identity(const uint8_t identity[16], uint8_t out[16]);
+/* Derive rrc.hub for a control source already authenticated by the Link owner.
+ * Used to validate the original hub source when projecting stored notices. */
+rs_handheld_status_t rs_handheld_rrc_destination_for_identity(const uint8_t identity[16], uint8_t out[16]);
 /* Domain-separated local conversation key; never a Reticulum destination.
  * kind=0 normalized room, kind=1 full participant identity,
  * kind=2 source identity[16] followed by RRC message ID[8]. */
