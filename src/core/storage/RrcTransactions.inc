@@ -488,6 +488,22 @@ void MessageTransactions::rrcTransaction(const Request& request, uint8_t* bytes,
         return rrcWalk(flash, context.local, [&](const rrc::Context& c, const char* name, size_t size) {
             if (size > RrcQuota || total > RrcQuota * 2 - size) return Error::InvalidRecord;
             total += size; uint8_t fileKey[16]; char canonical[RrcPath];
+            const auto* basename=rrcBasename(name);
+            const bool tombstoneFile=!strcmp(basename,"5.rrc") || !strcmp(basename,"5.rrc.bak");
+            const bool readMarkerFile=!strcmp(basename,"4.rrc") || !strcmp(basename,"4.rrc.bak");
+            if(tombstoneFile || readMarkerFile) {
+                // Cleared or fully trimmed histories can retain only cursors.
+                // NVS recovery must stay above those counters in every room.
+                const auto markerKind=tombstoneFile?rrc::Kind::Tombstone:rrc::Kind::ReadMarker;
+                rrcPath(c,markerKind,nullptr,canonical);rrc::Record marker;bool found=false;
+                const auto error=rrcLoad(flash,canonical,c,markerKind,marker,found);
+                if(error!=Error::None) return error;
+                if(found) {
+                    if(marker.payloadLength() || marker.flags() || marker.status()!=rrc::Status::Received) return Error::InvalidRecord;
+                    highest=std::max(highest,marker.counter());
+                }
+                return Error::None;
+            }
             const bool observationFile=!strcmp(rrcBasename(name),"6.rrc") || !strcmp(rrcBasename(name),"6.rrc.bak");
             if (observationFile || !strcmp(rrcBasename(name),"2.rrc") || !strcmp(rrcBasename(name),"2.rrc.bak")) {
                 // Include private inbox cursors when recovering after NVS loss.
