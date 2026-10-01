@@ -65,10 +65,11 @@ public:
             else if (stored.length>=storage::rrc::Header && stored.length<=storage::rrc::Maximum) {
                 storage::rrc::Record record;
                 if (_store->readPayload(*_ticket,record.bytes,stored.length) && record.valid(stored.length) &&
-                    record.matches(_draftContext) && record.kind()==storage::rrc::Kind::Draft && record.payloadLength()>=8 &&
+                    record.matches(_draftContext) && record.kind()==storage::rrc::Kind::Draft &&
+                    (record.status()==storage::rrc::Status::Received || record.status()==storage::rrc::Status::Unconfirmed) && record.payloadLength()>=8 &&
                     !memcmp(record.payload(),"HRD1",4) && rrc::validDraftText(record.payload()+8,record.payloadLength()-8)) {
                     result.code=rrc::Code::Ok;draft.revision=storage::prepared::read32(record.payload()+4);
-                    draft.storageRevision=record.revision();draft.length=record.payloadLength()-8;
+                    draft.storageRevision=record.revision();draft.uncertain=record.status()==storage::rrc::Status::Unconfirmed;draft.length=record.payloadLength()-8;
                     memcpy(draft.text,record.payload()+8,draft.length);
                 }
             }

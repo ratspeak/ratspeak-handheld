@@ -137,6 +137,7 @@ bool MessageView::setPeerHex(const std::string& peerHex) {
     return true;
 }
 void MessageView::onExit() {
+    _rrcSendRequested=false; // Already-admitted messages continue on their protocol owner.
     if (_rrcMode) saveRrcDraft(true);
     else if (_backend && (!_sendTicket.valid() || _retainedPeer==_peerHex)) {
         _retainedDraft=_input.getText();_retainedPeer=_peerHex;

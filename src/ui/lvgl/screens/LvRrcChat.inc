@@ -33,7 +33,7 @@ bool LvMessageView::setRrcConversation(const handheld::rrc::Conversation& bindin
         _peerHex.clear();_inputText.clear();composerEdited();
         memset(_rrcInsert,0,sizeof _rrcInsert);
         _rrcLoaded=!rrcWritable();_rrcLoading=false;_rrcSavedRevision=_draftRevision;
-        _rrcStorageRevision=0;_rrcSendRequested=false;
+        _rrcStorageRevision=0;_rrcPreparedRevision=0;_rrcSendRequested=false;
         _rrcRetryAt=0;_rrcEmote=false;_rrcUncertain=false;_rrcResendConfirmed=false;
     }
     if (insert && *insert) {
@@ -71,7 +71,7 @@ void LvMessageView::loadRrcDraft() {
         if (_service->status().generation!=identity) return;
         if (result.outcome!=handheld::Outcome::Ok || count!=1) { rrcNotice("Could not load draft; retrying");return; }
         _inputText.assign(rows[0].text,rows[0].length);composerEdited();_rrcSavedRevision=_draftRevision;_rrcLoaded=true;
-        _rrcStorageRevision=rows[0].storageRevision;
+        _rrcStorageRevision=rows[0].storageRevision;_rrcUncertain=rows[0].uncertain;
         if (_rrcInsert[0]) {
             const auto length=handheld::ui::rrc_input::textPrefix(_rrcInsert,strlen(_rrcInsert),handheld::rrc::DraftCapacity-_inputText.size());
             _inputText.append(_rrcInsert,length);memset(_rrcInsert,0,sizeof _rrcInsert);composerEdited();
@@ -80,19 +80,25 @@ void LvMessageView::loadRrcDraft() {
     });
     if (!id) {_rrcLoading=false;_rrcRetryAt=millis()+1000;}
 }
-void LvMessageView::saveRrcDraft(bool immediate) {
+void LvMessageView::saveRrcDraft(bool immediate, bool forSend) {
     if (!_service || !_rrcMode || !rrcWritable() || !_rrcLoaded || _rrcSaving || _rrcClearPending ||
-        _rrcIdentity!=_service->status().generation || _rrcSavedRevision==_draftRevision ||
+        _rrcIdentity!=_service->status().generation || (!forSend && _rrcSavedRevision==_draftRevision) ||
         (!immediate && (uint32_t(millis()-_rrcEditAt)<500 || int32_t(millis()-_rrcRetryAt)<0))) return;
     const auto view=_rrcView,identity=_rrcIdentity;const auto revision=_draftRevision;
+    if (forSend && !_rrcStorageRevision) return;
+    auto command=rrcCommand(handheld::rrc::Action::Draft);
+    if (forSend) {command.flags=3;command.counter=_rrcStorageRevision;}
     _rrcSaving=true;
-    const auto id=_service->rrcCommand(rrcCommand(handheld::rrc::Action::Draft),
-        reinterpret_cast<const uint8_t*>(_inputText.data()),_inputText.size(),[this,view,identity,revision](const handheld::Result& result) {
+    const auto id=_service->rrcCommand(command,
+        reinterpret_cast<const uint8_t*>(_inputText.data()),_inputText.size(),[this,view,identity,revision,forSend](const handheld::Result& result) {
             _rrcSaving=false;
             if (_rrcView!=view || !_rrcMode || _service->status().generation!=identity) return;
-            if (result.outcome==handheld::Outcome::Ok) { _rrcSavedRevision=revision;_rrcStorageRevision=result.total; }
-            else rrcNotice("Draft not saved; text kept");
-            _rrcRetryAt=millis()+1000;
+            if (result.outcome==handheld::Outcome::Ok) { _rrcSavedRevision=revision;_rrcStorageRevision=result.total;_rrcPreparedRevision=forSend?revision:0; }
+            else {
+                if (forSend && result.next==uint32_t(handheld::rrc::Code::Stale)) { _rrcSendRequested=false;rrcNotice("Saved draft changed; reopen before sending"); }
+                else rrcNotice("Draft not saved; text kept");
+            }
+            _rrcRetryAt=result.outcome==handheld::Outcome::Ok?0:millis()+1000;
         });
     if (!id) {_rrcSaving=false;_rrcRetryAt=millis()+1000;}
 }
@@ -151,9 +157,9 @@ void LvMessageView::pollRrc() {
     saveRrcDraft();
     if (_rrcSendRequested) {
         if (_draftRevision!=_rrcRequestedRevision) _rrcSendRequested=false;
-        else if (!_rrcSaving && _rrcSavedRevision==_draftRevision) {
+        else if (!_rrcSaving && _rrcSavedRevision==_draftRevision && _rrcPreparedRevision==_draftRevision) {
             _rrcSendRequested=false;_rrcEmote=_rrcRequestedEmote;sendRrcMessage();_rrcEmote=false;
-        } else saveRrcDraft(true);
+        } else if (int32_t(millis()-_rrcRetryAt)>=0) saveRrcDraft(true,_rrcSavedRevision==_draftRevision && _rrcStorageRevision);
     }
 }
 void LvMessageView::sendRrcMessage() {
@@ -167,9 +173,9 @@ void LvMessageView::sendRrcMessage() {
     if (preview.code!=handheld::rrc::Code::Ok) {
         rrcNotice(_inputText[0]=='/'?"Use Advanced command in the channel menu":handheld::rrc::codeName(preview.code));return;
     }
-    if (_rrcSaving || _rrcSavedRevision!=_draftRevision) {
+    if (_rrcSaving || _rrcSavedRevision!=_draftRevision || _rrcPreparedRevision!=_draftRevision) {
         _rrcSendRequested=true;_rrcRequestedRevision=_draftRevision;_rrcRequestedEmote=_rrcEmote;
-        saveRrcDraft(true);rrcNotice("Saving draft before sending...");return;
+        saveRrcDraft(true,_rrcSavedRevision==_draftRevision && _rrcStorageRevision);rrcNotice("Saving draft before sending...");return;
     }
     const auto view=_rrcView;
     _rrcSendId=UINT32_MAX;_rrcSentView=view;_rrcSentDraftRevision=_draftRevision;
@@ -183,6 +189,6 @@ void LvMessageView::sendRrcMessage() {
         });
     if (!id) {_rrcSendId=0;rrcNotice("Hub busy; draft kept");return;}
     if (!_rrcSendId) return;
-    _rrcSendId=id;_rrcResendConfirmed=false;
+    _rrcSendId=id;_rrcResendConfirmed=false;_rrcPreparedRevision=0;
     rrcNotice("Saving message...");
 }

@@ -35,7 +35,7 @@ public:
 private:
     bool leaveRrcDraft();
     void loadRrcDraft();
-    void saveRrcDraft(bool immediate = false);
+    void saveRrcDraft(bool immediate = false, bool forSend = false);
     void clearConfirmedRrcDraft();
     void enterRrcHistory();
     void sendRrcMessage();
@@ -45,7 +45,7 @@ private:
     handheld::rrc::Conversation _rrcBinding;
     handheld::rrc::Conversation _rrcSendingBinding;
     char _rrcInsert[36]{}; // One pending nickname insertion, never message text.
-    uint64_t _rrcSavedRevision = 0, _rrcSentDraftRevision = 0;
+    uint64_t _rrcPreparedRevision = 0, _rrcSavedRevision = 0, _rrcSentDraftRevision = 0;
     uint64_t _rrcRequestedRevision = 0, _rrcClearEditorRevision = 0;
     uint32_t _rrcIdentity = 0, _rrcView = 0, _rrcSentView = 0, _rrcSendId = 0, _rrcRetryAt = 0, _rrcEditAt = 0;
     bool _rrcMode = false, _rrcLoaded = false, _rrcLoading = false, _rrcSaving = false;

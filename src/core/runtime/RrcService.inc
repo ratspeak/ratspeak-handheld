@@ -54,7 +54,7 @@ void DeviceService::executeRrc(uint8_t slot) {
         if (length < sizeof command || length > sizeof command + rrc::PacketCapacity) { complete(slot, Outcome::Invalid); return; }
         memcpy(&command, _scratch, sizeof command);
         command.revision = request.id; // Unique for this mailbox lifetime, independent of draft edits/read counter.
-        const bool valid = !command.room[64] && command.action <= rrc::Action::MarkRead && command.flags <= 1;
+        const bool valid = !command.room[64] && command.action <= rrc::Action::MarkRead && command.flags <= (command.action==rrc::Action::Draft?3:1);
         const auto code = valid ? _backend.rrcCommand(command,
             reinterpret_cast<const uint8_t*>(_scratch) + sizeof command, length - sizeof command) : rrc::Code::Invalid;
         volatile char* clear = _scratch; for (size_t n = 0; n < length; ++n) clear[n] = 0;
@@ -141,10 +141,11 @@ Result DeviceService::projectRrcRead(const storage::Result& stored) {
             rrc::DraftView draft;
             if (stored.length) {
                 const auto length = record.payloadLength();
-                if (record.kind() != storage::rrc::Kind::Draft || length < 8 || length > 8 + rrc::DraftCapacity ||
+                if (record.kind() != storage::rrc::Kind::Draft ||
+                    (record.status()!=storage::rrc::Status::Received && record.status()!=storage::rrc::Status::Unconfirmed) || length < 8 || length > 8 + rrc::DraftCapacity ||
                     memcmp(record.payload(), "HRD1", 4) || !rrc::validDraftText(record.payload() + 8, length - 8)) return invalid();
                 draft.revision = storage::prepared::read32(record.payload() + 4); draft.length = length - 8;
-                draft.storageRevision = record.revision();
+                draft.storageRevision = record.revision(); draft.uncertain = record.status()==storage::rrc::Status::Unconfirmed;
                 memcpy(draft.text, record.payload() + 8, draft.length);
             }
             if (!_mailbox.write(slot, &draft, sizeof draft)) return invalid();

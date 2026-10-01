@@ -190,7 +190,7 @@ void LvMessageView::updateComposerState() {
 void LvMessageView::composerEdited() {
     if (_nextDraftRevision != UINT64_MAX) ++_nextDraftRevision;
     _draftRevision = _nextDraftRevision;
-    if (_rrcMode) { _rrcEditAt=millis();_rrcResendConfirmed=false;return; }
+    if (_rrcMode) { _rrcEditAt=millis();_rrcResendConfirmed=false;_rrcPreparedRevision=0;return; }
     if (_peerHex == _retainedDraftPeer && _service &&
         _retainedDraftIdentity == _service->status().generation) {
         _retainedDraft = _inputText;
@@ -619,6 +619,7 @@ void LvMessageView::onEnter() {
 }
 
 void LvMessageView::onExit() {
+    _rrcSendRequested=false; // Leaving cancels an intent still waiting for draft durability.
     if (_rrcMode) saveRrcDraft(true);
     else if (_service && !_inputText.empty() && (!_sendPending || _retainedDraftPeer==_peerHex)) {
         _retainedDraft=_inputText;_retainedDraftPeer=_peerHex;_retainedDraftRevision=_draftRevision;

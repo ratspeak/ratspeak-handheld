@@ -95,13 +95,18 @@ RustRrcEngine::Code RustRrcEngine::preferenceCommand(const Command& command, con
     case Action::Draft: {
         if (length > DraftCapacity) return Code::TooLong;
         if (!validDraftText(body,length)) return Code::Invalid;
-        if ((command.flags & 1) && !command.counter) return Code::Invalid;
+        if (command.flags>3 || ((command.flags&1) && !command.counter) ||
+            ((command.flags&2) && (!(command.flags&1) || !length))) return Code::Invalid;
         disk::Context scope;
         if (!context(command.hub, command.room, nonzero(command.participant) ? command.participant : nullptr, scope)) return Code::Invalid;
         uint8_t payload[DraftCapacity + 8]{}; memcpy(payload, "HRD1", 4);
         store::prepared::write32(payload + 4, command.revision);
         if (length) memcpy(payload + 8, body, length);
-        Record::make(_preferences.record, scope, disk::Kind::Draft, payload, 8 + length);
+        // Persist uncertainty before the UI can submit a message. A crash in the
+        // gap may conservatively warn about an unsent draft, but never silently
+        // offers a possibly transmitted body as a fresh send after restart.
+        Record::make(_preferences.record, scope, disk::Kind::Draft, payload, 8 + length,
+            command.flags&2 ? disk::Status::Unconfirmed : disk::Status::Received);
         if (command.flags & 1) { _preferences.record.flags(1); _preferences.record.revision(command.counter); _preferences.record.seal(); }
         _preferences.step = PreferenceStep::WriteDraft; _preferences.write = true; return Code::Ok;
     }

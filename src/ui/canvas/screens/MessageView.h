@@ -48,7 +48,7 @@ private:
     bool leaveRrcDraft();
     bool sameRrcIdentity(const handheld::rrc::Conversation&, const uint8_t[16]) const;
     void loadRrcDraft();
-    void saveRrcDraft(bool immediate = false);
+    void saveRrcDraft(bool immediate = false, bool forSend = false);
     void clearConfirmedRrcDraft();
     void enterRrcHistory();
     void sendRrcMessage();
@@ -62,7 +62,7 @@ private:
     handheld::rrc::Conversation _rrcBinding, _rrcSendingBinding;
     char _rrcInsert[36]{};
     uint8_t _rrcIdentity[16]{}, _rrcSendIdentity[16]{};
-    uint64_t _rrcSavedRevision = 0, _rrcRequestedRevision = 0, _rrcClearEditorRevision = 0;
+    uint64_t _rrcPreparedRevision = 0, _rrcSavedRevision = 0, _rrcRequestedRevision = 0, _rrcClearEditorRevision = 0;
     uint32_t _rrcView = 0, _rrcSentView = 0, _rrcSendId = 0, _rrcRetryAt = 0, _rrcEditAt = 0;
     uint32_t _rrcStorageRevision = 0, _rrcSentStorageRevision = 0, _rrcClearView = 0, _rrcReadThrough = 0, _rrcVisibleThrough = 0, _rrcObservedRevision = 0;
     bool _rrcMode = false, _rrcLoaded = false, _rrcLoading = false, _rrcSaving = false;

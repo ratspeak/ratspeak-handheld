@@ -39,7 +39,7 @@ uint32_t ServiceClient::requestRrcDirectory(size_t offset, RrcCompletion<rrc::Di
     return rrcQuery<rrc::DirectoryView, 8>(request, nullptr, 0, std::move(completion));
 }
 uint32_t ServiceClient::rrcCommand(const rrc::Command& command, const uint8_t* body, size_t length, Completion completion, bool quiet) {
-    if (length > rrc::PacketCapacity || (length && !body) || command.room[64] || command.action > rrc::Action::MarkRead || command.flags > 1) return 0;
+    if (length > rrc::PacketCapacity || (length && !body) || command.room[64] || command.action > rrc::Action::MarkRead || command.flags > (command.action==rrc::Action::Draft?3:1)) return 0;
     uint8_t payload[sizeof command + rrc::PacketCapacity]; memcpy(payload, &command, sizeof command);
     if (length) memcpy(payload + sizeof command, body, length);
     Request request; request.operation = Operation::RrcCommand;

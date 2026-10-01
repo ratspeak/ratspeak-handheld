@@ -35,7 +35,7 @@ bool MessageView::setRrcConversation(const handheld::rrc::Conversation& binding,
         _peerHex.clear();_input.clear();rrcEdited();
         memset(_rrcInsert,0,sizeof _rrcInsert);
         _rrcLoaded=!rrcWritable();_rrcLoading=false;_rrcSavedRevision=_input.revision();
-        _rrcStorageRevision=0;_rrcSendRequested=false;_rrcReadThrough=_rrcVisibleThrough=0;
+        _rrcStorageRevision=0;_rrcPreparedRevision=0;_rrcSendRequested=false;_rrcReadThrough=_rrcVisibleThrough=0;
         _rrcRetryAt=0;_rrcEmote=false;_rrcUncertain=false;_rrcResendConfirmed=false;
     }
     if (insert && *insert) {
@@ -54,7 +54,7 @@ bool MessageView::sameRrcIdentity(const handheld::rrc::Conversation& binding,con
         !memcmp(context.local,identity,16);
 }
 void MessageView::rrcEdited() {
-    _rrcEditAt=millis();_rrcResendConfirmed=false;
+    _rrcEditAt=millis();_rrcResendConfirmed=false;_rrcPreparedRevision=0;
 }
 void MessageView::enterRrcHistory() {
     if (!_backend || !_rrcMode || !_visible) return;
@@ -72,7 +72,7 @@ void MessageView::loadRrcDraft() {
         if (!sameRrcIdentity(_rrcBinding,_rrcIdentity)) return;
         if (result.code!=handheld::rrc::Code::Ok || count!=1) { rrcNotice("Could not load draft; retrying");return; }
         _input.setText(rows[0].text,rows[0].length);rrcEdited();_rrcSavedRevision=_input.revision();_rrcLoaded=true;
-        _rrcStorageRevision=rows[0].storageRevision;
+        _rrcStorageRevision=rows[0].storageRevision;_rrcUncertain=rows[0].uncertain;
         if (_rrcInsert[0]) {
             const auto length=handheld::ui::rrc_input::textPrefix(_rrcInsert,strlen(_rrcInsert),handheld::rrc::DraftCapacity-_input.getText().size());
             _input.appendText(_rrcInsert,length);memset(_rrcInsert,0,sizeof _rrcInsert);rrcEdited();
@@ -81,19 +81,25 @@ void MessageView::loadRrcDraft() {
     });
     if (!id) {_rrcLoading=false;_rrcRetryAt=millis()+1000;}
 }
-void MessageView::saveRrcDraft(bool immediate) {
+void MessageView::saveRrcDraft(bool immediate, bool forSend) {
     if (!_backend || !_rrcMode || !rrcWritable() || !_rrcLoaded || _rrcSaving || _rrcClearPending ||
-        !sameRrcIdentity(_rrcBinding,_rrcIdentity) || _rrcSavedRevision==_input.revision() ||
+        !sameRrcIdentity(_rrcBinding,_rrcIdentity) || (!forSend && _rrcSavedRevision==_input.revision()) ||
         (!immediate && (uint32_t(millis()-_rrcEditAt)<500 || int32_t(millis()-_rrcRetryAt)<0))) return;
     const auto view=_rrcView;const auto revision=_input.revision();
+    if (forSend && !_rrcStorageRevision) return;
+    auto command=rrcCommand(handheld::rrc::Action::Draft);
+    if (forSend) {command.flags=3;command.counter=_rrcStorageRevision;}
     _rrcSaving=true;
-    const auto id=_rrcClient.command(rrcCommand(handheld::rrc::Action::Draft),
-        reinterpret_cast<const uint8_t*>(_input.getText().data()),_input.getText().size(),[this,view,revision](const handheld::canvas::RrcClient::Result& result) {
+    const auto id=_rrcClient.command(command,
+        reinterpret_cast<const uint8_t*>(_input.getText().data()),_input.getText().size(),[this,view,revision,forSend](const handheld::canvas::RrcClient::Result& result) {
             _rrcSaving=false;
             if (_rrcView!=view || !_rrcMode || !sameRrcIdentity(_rrcBinding,_rrcIdentity)) return;
-            if (result.code==handheld::rrc::Code::Ok) { _rrcSavedRevision=revision;_rrcStorageRevision=result.total; }
-            else rrcNotice("Draft not saved; text kept");
-            _rrcRetryAt=millis()+1000;
+            if (result.code==handheld::rrc::Code::Ok) { _rrcSavedRevision=revision;_rrcStorageRevision=result.total;_rrcPreparedRevision=forSend?revision:0; }
+            else {
+                if (forSend && result.code==handheld::rrc::Code::Stale) { _rrcSendRequested=false;rrcNotice("Saved draft changed; reopen before sending"); }
+                else rrcNotice("Draft not saved; text kept");
+            }
+            _rrcRetryAt=result.code==handheld::rrc::Code::Ok?0:millis()+1000;
         });
     if (!id) {_rrcSaving=false;_rrcRetryAt=millis()+1000;}
 }
@@ -157,9 +163,9 @@ bool MessageView::pollRrc(bool allowAdmission) {
     saveRrcDraft();
     if (_rrcSendRequested) {
         if (_input.revision()!=_rrcRequestedRevision) _rrcSendRequested=false;
-        else if (!_rrcSaving && _rrcSavedRevision==_input.revision()) {
+        else if (!_rrcSaving && _rrcSavedRevision==_input.revision() && _rrcPreparedRevision==_input.revision()) {
             _rrcSendRequested=false;_rrcEmote=_rrcRequestedEmote;sendRrcMessage();_rrcEmote=false;
-        } else saveRrcDraft(true);
+        } else if (int32_t(millis()-_rrcRetryAt)>=0) saveRrcDraft(true,_rrcSavedRevision==_input.revision() && _rrcStorageRevision);
     }
     if (_visible && _rrcVisibleThrough>_rrcReadThrough && !_rrcClient.pending()) {
         auto command=rrcCommand(handheld::rrc::Action::MarkRead);command.counter=_rrcVisibleThrough;
@@ -181,9 +187,9 @@ void MessageView::sendRrcMessage() {
     if (preview.code!=handheld::rrc::Code::Ok) {
         rrcNotice(_input.getText()[0]=='/'?"Use Advanced command in the channel menu":handheld::rrc::codeName(preview.code));return;
     }
-    if (_rrcSaving || _rrcSavedRevision!=_input.revision()) {
+    if (_rrcSaving || _rrcSavedRevision!=_input.revision() || _rrcPreparedRevision!=_input.revision()) {
         _rrcSendRequested=true;_rrcRequestedRevision=_input.revision();_rrcRequestedEmote=_rrcEmote;
-        saveRrcDraft(true);rrcNotice("Saving draft before sending...");return;
+        saveRrcDraft(true,_rrcSavedRevision==_input.revision() && _rrcStorageRevision);rrcNotice("Saving draft before sending...");return;
     }
     const auto view=_rrcView;
     _rrcSendId=UINT32_MAX;_rrcSentView=view;
@@ -197,6 +203,6 @@ void MessageView::sendRrcMessage() {
         });
     if (!id) {_rrcSendId=0;rrcNotice("Hub busy; draft kept");return;}
     if (!_rrcSendId) return;
-    _rrcSendId=id;_rrcResendConfirmed=false;
+    _rrcSendId=id;_rrcResendConfirmed=false;_rrcPreparedRevision=0;
     rrcNotice("Saving message...");
 }
