@@ -78,6 +78,10 @@ struct PersonView {
     char nickname[33]{};
     uint8_t rooms = 0;
 };
+struct PrivateView {
+    uint8_t identity[16]{};
+    uint32_t counter=0, unread=0;
+};
 struct DirectoryView { char name[65]{}, topic[97]{}; };
 struct Status {
     uint32_t generation = 0, revision = 0, dropped = 0, sendRevision = 0;

@@ -170,6 +170,70 @@ void MessageTransactions::rrcTransaction(const Request& request, uint8_t* bytes,
     uint32_t deleted = 0;
     result.error = marker(rrc::Kind::Tombstone, deleted); if (result.error != Error::None) return;
 
+    if(request.operation==Operation::RrcPrivateInbox) {
+        if(kind!=rrc::Kind::Preferences || input.payloadLength()!=4 || memcmp(input.payload(),"HQN1",4) ||
+            (request.historyDirection!=HistoryDirection::Before && request.historyDirection!=HistoryDirection::After)) {
+            result.error=Error::InvalidRecord;return;
+        }
+        for(auto byte:context.conversation) if(byte) {result.error=Error::InvalidRecord;return;}
+        const bool before=request.historyDirection==HistoryDirection::Before;
+        rrc::PrivateNotice rows[rrc::SavedPageCapacity]{};size_t used=0,eligible=0;
+        char parent[RrcPath];rrcDirectory(context,parent);*strrchr(parent,'/')=0;
+        if(flash.exists(parent)) {
+            File conversations=flash.open(parent);
+            if(!conversations || !conversations.isDirectory()) {result.error=Error::Read;return;}
+            unsigned visited=0;
+            while(File directory=conversations.openNextFile()) {
+                if(++visited>4096) {result.error=Error::InvalidRecord;return;}
+                auto scope=context;const char* name=rrcBasename(directory.name());
+                if(!directory.isDirectory() || !decodeHex(name,strlen(name),scope.conversation,16)) continue;
+                directory.close();char descriptorPath[RrcPath];rrcPath(scope,rrc::Kind::Preferences,nullptr,descriptorPath);
+                rrc::Record descriptor;bool found=false;
+                result.error=rrcLoad(flash,descriptorPath,scope,rrc::Kind::Preferences,descriptor,found);
+                if(result.error!=Error::None) return;
+                if(!found || !descriptor.counter()) continue;
+                if(!rrc::privateDescriptor(descriptor)) {result.error=Error::InvalidRecord;return;}
+                ++result.total;const auto counter=descriptor.counter();
+                if(request.key.counter && (before?counter>=request.key.counter:counter<=request.key.counter)) continue;
+                ++eligible;size_t at=0;
+                while(at<used && (before?rows[at].counter>counter:rows[at].counter<counter)) ++at;
+                if(at<used && rows[at].counter==counter) {result.error=Error::InvalidRecord;return;}
+                if(at>=rrc::SavedPageCapacity) continue;
+                if(used<rrc::SavedPageCapacity) ++used;
+                for(size_t n=used-1;n>at;--n) rows[n]=rows[n-1];
+                rows[at]={};rows[at].counter=counter;memcpy(rows[at].key,scope.conversation,16);
+                memcpy(rows[at].participant,descriptor.payload()+4,16);yield();
+            }
+        }
+        // Count only the displayed conversations. This is still bounded worker
+        // IO; no transcript buffers or filenames survive the query.
+        for(size_t n=0;n<used;++n) {
+            auto scope=context;memcpy(scope.conversation,rows[n].key,16);uint32_t through=0;
+            for(auto markerKind:{rrc::Kind::Tombstone,rrc::Kind::ReadMarker}) {
+                char markerPath[RrcPath];rrcPath(scope,markerKind,nullptr,markerPath);
+                rrc::Record record;bool found=false;result.error=rrcLoad(flash,markerPath,scope,markerKind,record,found);
+                if(result.error!=Error::None) return;if(found) through=std::max(through,record.counter());
+            }
+            char roomPath[RrcPath];rrcDirectory(scope,roomPath);File records=flash.open(roomPath);
+            if(!records || !records.isDirectory()) {result.error=Error::Read;return;}
+            unsigned visited=0;
+            while(File file=records.openNextFile()) {
+                if(++visited>4096) {result.error=Error::InvalidRecord;return;}
+                uint8_t key[16];char recordPath[RrcPath];
+                if(file.isDirectory() || !rrcEnumerate(flash,scope,file.name(),key,recordPath)) continue;
+                file.close();rrc::Record record;bool found=false;
+                result.error=rrcLoad(flash,recordPath,scope,rrc::Kind::Message,record,found);
+                if(result.error!=Error::None) return;
+                if(found && record.status()==rrc::Status::Received && !record.flags() && record.counter()>through) ++rows[n].unread;
+                yield();
+            }
+        }
+        if(!before) std::reverse(rows,rows+used);
+        memcpy(bytes,rows,used*sizeof rows[0]);result.length=uint16_t(used*sizeof rows[0]);
+        result.key.counter=used?rows[before?used-1:0].counter:0;
+        result.more=eligible>used;result.outcome=Outcome::Committed;return;
+    }
+
     if (request.operation == Operation::RrcSavedRooms) {
         // HQS1 + page capacity + exclusion count + zero reserved bytes + keys.
         // The caller excludes live rooms already projected by the protocol
@@ -365,14 +429,45 @@ void MessageTransactions::rrcTransaction(const Request& request, uint8_t* bytes,
     // Draft bit 0 is an admission-only conditional replacement flag. The
     // worker checked the exact persisted revision above; never store the flag.
     if (kind == rrc::Kind::Draft) input.flags(0);
+    bool privateConversation=false;for(auto byte:request.source) privateConversation|=byte!=0;
+    bool createPrivate=false;rrc::Record descriptor;
+    char privatePath[RrcPath]{};
+    if (privateConversation) {
+        if (!append && kind!=rrc::Kind::Draft) {result.error=Error::InvalidRecord;return;}
+        rrcPath(context,rrc::Kind::Preferences,nullptr,privatePath);bool exists=false;
+        result.error=rrcLoad(flash,privatePath,context,rrc::Kind::Preferences,descriptor,exists,true);
+        if(result.error!=Error::None) return;
+        if(exists && (!rrc::privateDescriptor(descriptor) || memcmp(descriptor.payload()+4,request.source,16))) {
+            result.error=Error::InvalidRecord;return;
+        }
+        createPrivate=!exists;
+        if(createPrivate) {
+            uint8_t metadata[20];memcpy(metadata,"HRN1",4);memcpy(metadata+4,request.source,16);
+            rrc::Record::make(descriptor,context,rrc::Kind::Preferences,metadata,sizeof metadata);
+        }
+    }
     // Quota and retention are worker work. No directory IO reaches the protocol
-    // or UI owner; one extra atomic record is the maximum temporary overage.
+    // or UI owner. A new private conversation reserves its 100-byte descriptor
+    // as well as the message/draft before either write; both use this one job.
     uint32_t highest = 0;
     auto usage = [&](size_t& total, size_t& roomCount, char (&oldest)[RrcPath], bool roomOnly) {
         total = roomCount = 0; uint32_t oldestCounter = UINT32_MAX; oldest[0] = 0;
         return rrcWalk(flash, context.local, [&](const rrc::Context& c, const char* name, size_t size) {
             if (size > RrcQuota || total > RrcQuota * 2 - size) return Error::InvalidRecord;
             total += size; uint8_t fileKey[16]; char canonical[RrcPath];
+            if (!strcmp(rrcBasename(name),"2.rrc") || !strcmp(rrcBasename(name),"2.rrc.bak")) {
+                // Include private inbox cursors when recovering after NVS loss.
+                // A recovered descriptor must not reuse another inbox position.
+                rrcPath(c,rrc::Kind::Preferences,nullptr,canonical);
+                rrc::Record metadata;bool found=false;
+                const auto error=rrcLoad(flash,canonical,c,rrc::Kind::Preferences,metadata,found);
+                if(error!=Error::None) return error;
+                if(found && metadata.counter()) {
+                    if(!rrc::privateDescriptor(metadata)) return Error::InvalidRecord;
+                    highest=std::max(highest,metadata.counter());
+                }
+                return Error::None;
+            }
             if (!rrcEnumerate(flash, c, name, fileKey, canonical)) return Error::None;
             rrc::Record record; bool exists = false;
             const auto error = rrcLoad(flash, canonical, c, rrc::Kind::Message, record, exists);
@@ -393,19 +488,33 @@ void MessageTransactions::rrcTransaction(const Request& request, uint8_t* bytes,
         result.error = usage(total, count, oldest, true); if (result.error != Error::None) return;
         if (!oldest[0]) { result.error = Error::Unavailable; return; }
     }
-    if (total > RrcQuota || ((total - std::min(total, previousBytes) + input.length() > RrcQuota ||
+    if (total > RrcQuota || ((total - std::min(total, previousBytes) + input.length() + (createPrivate?descriptor.length():0) > RrcQuota ||
          (append && count >= RrcHistoryLimit)) && !oldest[0])) { result.error = Error::Unavailable; return; }
-    if (append) {
+    // If the second write fails, the descriptor alone must still fit. Otherwise
+    // a failed first message could strand the namespace over quota indefinitely.
+    for(unsigned n=0;createPrivate && total+descriptor.length()>RrcQuota;++n) {
+        if(n==8 || !oldest[0] || !rrcRemove(flash,oldest)) {result.error=Error::Unavailable;return;}
+        result.error=usage(total,count,oldest,false);if(result.error!=Error::None) return;
+    }
+    if (append || createPrivate) {
         if (highest == UINT32_MAX) { result.error = Error::CounterExhausted; return; }
         // Reconcile recovered RRC files after an NVS reset without making
         // direct-message boot depend on the health of this separate namespace.
         highest = std::max(highest, deleted);
         uint32_t counter;
         if (highest == UINT32_MAX || !reserveRrcCounter(counter, highest + 1)) { result.error = Error::CounterExhausted; return; }
-        input.counter(counter);
+        if(append) input.counter(counter);
+        if(createPrivate) {descriptor.counter(counter);descriptor.revision(1);descriptor.seal();}
     }
     input.revision(present ? previous.revision() + 1 : 1); input.seal();
     if (!rrcEnsure(flash, context)) { result.error = Error::Write; return; }
+    if(createPrivate) {
+        // Persist the discovery descriptor before exposing a committed message
+        // or draft. A power loss between writes can leave an empty inbox entry,
+        // never a receipt for a message that did not commit.
+        const MemorySource metadata(descriptor.bytes,descriptor.length());
+        result.error=flash.write(privatePath,metadata);if(result.error!=Error::None) return;
+    }
     const MemorySource source(input.bytes, input.length());
     result.error = flash.write(path, source); if (result.error != Error::None) return;
     result.flash = {true, true, Error::None};

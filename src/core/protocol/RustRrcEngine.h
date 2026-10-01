@@ -112,6 +112,7 @@ private:
     struct Preferences {
         Record record;
         Ticket ticket;
+        uint8_t participant[16]{}; // Exact private-draft target; no additional body owner.
         PreferenceStep step = PreferenceStep::Idle;
         handheld::rrc::Action action = handheld::rrc::Action::SaveHub;
         uint32_t revision = 0, roomRevision = 0;

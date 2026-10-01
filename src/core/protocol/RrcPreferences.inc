@@ -22,6 +22,7 @@ void RustRrcEngine::preferenceDone(Code result) {
         _joinRoom = UINT8_MAX; _joinConfirmed = false; _joinPreferenceLength = 0;
     }
     wipe(&_preferences.record, sizeof _preferences.record);
+    memset(_preferences.participant,0,sizeof _preferences.participant);
     _preferences.step = PreferenceStep::Idle; _preferences.ticket = {}; _preferences.revision = 0;
     _preferences.write = false; changed();
 }
@@ -93,12 +94,14 @@ RustRrcEngine::Code RustRrcEngine::preferenceCommand(const Command& command, con
         return Code::Ok;
     }
     case Action::Draft: {
+        if (command.room[0] && nonzero(command.participant)) return Code::Invalid;
         if (length > DraftCapacity) return Code::TooLong;
         if (!validDraftText(body,length)) return Code::Invalid;
         if (command.flags>3 || ((command.flags&1) && !command.counter) ||
             ((command.flags&2) && (!(command.flags&1) || !length))) return Code::Invalid;
         disk::Context scope;
         if (!context(command.hub, command.room, nonzero(command.participant) ? command.participant : nullptr, scope)) return Code::Invalid;
+        memcpy(_preferences.participant,command.participant,16);
         uint8_t payload[DraftCapacity + 8]{}; memcpy(payload, "HRD1", 4);
         store::prepared::write32(payload + 4, command.revision);
         if (length) memcpy(payload + 8, body, length);
@@ -241,7 +244,8 @@ void RustRrcEngine::pollPreferences() {
         else if (_preferences.step == PreferenceStep::ClearHistory) operation = store::Operation::RrcClear;
         const auto submitted = _d.store->requestRrc(operation, _preferences.record, nullptr,
             operation == store::Operation::RrcMarkRead ? _preferences.record.counter() : 0,
-            _preferences.step == PreferenceStep::WriteDraft && (_preferences.record.flags() & 1) ? _preferences.record.revision() : 0);
+            _preferences.step == PreferenceStep::WriteDraft && (_preferences.record.flags() & 1) ? _preferences.record.revision() : 0,
+            store::HistoryDirection::Before,_preferences.step==PreferenceStep::WriteDraft && nonzero(_preferences.participant) ? _preferences.participant : nullptr);
         if (submitted.accepted()) _preferences.ticket = submitted.ticket;
         else if (submitted.rejection != store::Rejection::Busy) preferenceDone(Code::Storage);
     }

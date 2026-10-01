@@ -10,6 +10,21 @@ namespace disk = storage::rrc;
 namespace model = handheld::rrc;
 constexpr size_t Capacity = disk::SavedPageCapacity;
 
+inline bool privateRows(const storage::Result& result,const uint8_t* bytes,model::PrivateView (&rows)[Capacity],size_t& count) {
+    count=0;
+    if(result.outcome!=storage::Outcome::Committed || result.error!=storage::Error::None ||
+        result.length%sizeof(disk::PrivateNotice) || result.length>Capacity*sizeof(disk::PrivateNotice)) return false;
+    uint32_t previous=UINT32_MAX;
+    for(size_t n=0;n<result.length/sizeof(disk::PrivateNotice);++n) {
+        disk::PrivateNotice row;std::memcpy(&row,bytes+n*sizeof row,sizeof row);uint8_t key[16];
+        if(!row.counter || row.counter>=previous || rs_handheld_rrc_storage_key(1,row.participant,16,key)!=RS_HANDHELD_OK ||
+            std::memcmp(key,row.key,16)) return false;
+        std::memcpy(rows[n].identity,row.participant,16);rows[n].counter=row.counter;rows[n].unread=row.unread;
+        previous=row.counter;++count;
+    }
+    return true;
+}
+
 // The query and result live in the existing worker credit. Only the visible
 // page is projected; saved room names/keys are never hydrated into a new cache.
 template<class Backend>

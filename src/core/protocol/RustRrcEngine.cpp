@@ -361,7 +361,8 @@ RustRrcEngine::Code RustRrcEngine::send(const Command& command, const uint8_t* b
     if (rs_handheld_rrc_decode(_send.packet, count, &view) != RS_HANDHELD_OK || !messageKey(view.meta, _send.file)) return Code::Invalid;
     disk::Context scope; if (!context(_status.hub, pm ? nullptr : room->view.name, pm ? command.participant : nullptr, scope)) return Code::Invalid;
     Record record; Record::make(record, scope, disk::Kind::Message, _send.packet, count, disk::Status::Pending, now());
-    const auto submitted = _d.store->requestRrc(store::Operation::RrcAppend, record, _send.file);
+    const auto submitted = _d.store->requestRrc(store::Operation::RrcAppend, record, _send.file,0,0,
+        store::HistoryDirection::Before,pm ? command.participant : nullptr);
     if (!submitted.accepted()) { wipe(&_send, sizeof _send); _send = {}; return Code::Storage; }
     _send.ticket = submitted.ticket; _send.length = count; _send.token = ++_sequence;
     _send.born = now(); _send.deadline = now() + wait(8); memcpy(_send.conversation, scope.conversation, 16);
@@ -541,7 +542,8 @@ void RustRrcEngine::onRrcPacket(Handle handle, const uint8_t* data, size_t lengt
         if (!context(_status.hub, room ? room->view.name : nullptr, view.meta.has_destination ? view.meta.source : nullptr, scope)) return;
         const bool ours = !memcmp(view.meta.source, _d.identity, 16) && room && (kind == 20 || kind == 22);
         Record record; Record::make(record, scope, disk::Kind::Message, data, length, ours ? disk::Status::Confirmed : disk::Status::Received, now());
-        const auto submitted = _d.store->requestRrc(store::Operation::RrcAppend, record, file);
+        const auto submitted = _d.store->requestRrc(store::Operation::RrcAppend, record, file,0,0,
+            store::HistoryDirection::Before,view.meta.has_destination ? view.meta.source : nullptr);
         if (!submitted.accepted()) { ++_status.dropped; notice("Storage busy: message not saved"); return; }
         *pending = {}; pending->ticket = submitted.ticket; pending->link = handle; pending->confirming = ours;
         pending->room = room ? uint8_t(room - _rooms) : UINT8_MAX;

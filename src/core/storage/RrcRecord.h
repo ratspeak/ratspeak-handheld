@@ -73,7 +73,18 @@ struct SavedRoom {
     bool keyRemembered = false;
 };
 constexpr size_t SavedPageCapacity = 4;
-inline bool operation(Operation op) { return op >= Operation::RrcRead && op <= Operation::RrcSavedRooms; }
+struct PrivateNotice {
+    uint8_t participant[16]{}, key[16]{};
+    uint32_t counter=0, unread=0;
+};
+// HRN1 is a private-notice conversation descriptor, not a message. Its immutable
+// counter provides a stable inbox cursor even when history is cleared.
+inline bool privateDescriptor(const Record& record) {
+    if (record.kind()!=Kind::Preferences || record.status()!=Status::Received || record.flags() || record.payloadLength()!=20 ||
+        std::memcmp(record.payload(),"HRN1",4) || !record.counter()) return false;
+    uint8_t any=0;for(size_t n=4;n<20;++n) any|=record.payload()[n];return any!=0;
+}
+inline bool operation(Operation op) { return op >= Operation::RrcRead && op <= Operation::RrcPrivateInbox; }
 static_assert(SavedPageCapacity * sizeof(SavedRoom) <= Budget::SmallPayload, "Saved channels share one metadata credit");
 static_assert(sizeof(Context) == 48 && sizeof(Record) <= Budget::SmallPayload && sizeof(Selector) <= 28,
               "RRC records and pages must fit existing small storage credits");
