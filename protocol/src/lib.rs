@@ -197,6 +197,7 @@ pub struct RsHandheldRns {
     /// Exact tag from the most recently surfaced own-destination path request. The C++ pump
     /// consumes it immediately so its bounded response cache can preserve Python tag semantics.
     own_path_request: Option<OwnPathRequest>,
+    voice_enabled: bool,
 }
 
 // The context is one long-lived C-allocator allocation. Together with the caller-owned
@@ -214,6 +215,7 @@ const _: () = {
 
 #[derive(Clone, Copy)]
 struct OwnPathRequest {
+    voice: bool,
     tag: [u8; DESTINATION_LENGTH],
     tag_len: usize,
 }
@@ -341,6 +343,7 @@ pub unsafe extern "C" fn rs_handheld_rns_init(out: *mut *mut RsHandheldRns) -> R
             pending_ratchet: None,
             pending_announce_wire: None,
             own_path_request: None,
+            voice_enabled: false,
         });
         // SAFETY: `out` is non-null and writable per the contract above.
         unsafe { *out = Box::into_raw(ctx) };
@@ -405,6 +408,9 @@ pub use rrc::*;
 pub use rrc_secret::*;
 mod voice;
 pub use voice::*;
+mod voice_endpoint;
+use voice_endpoint::VOICE_DESTINATION_NAME;
+pub use voice_endpoint::*;
 mod link;
 pub use link::*;
 mod resource;

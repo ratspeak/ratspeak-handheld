@@ -368,6 +368,13 @@ bool UserConfig::parseJson(const char* json, size_t length, bool persisted, bool
             (!doc["prop_select"].isNull() && !doc["prop_select"].is<uint8_t>()) ||
             (!doc["prop_delivery"].isNull() && !doc["prop_delivery"].is<uint8_t>()) ||
             (!doc["prop_node"].isNull() && !doc["prop_node"].is<const char*>())) return false;
+        parsed.voice.enabled=doc["voice_on"] | false;
+        parsed.voice.contactsOnly=doc["voice_contacts"] | true;
+        const int voiceVolume=doc["voice_volume"] | 70;
+        const int voiceRoute=doc["voice_route"] | 0;
+        if(voiceVolume<0 || voiceVolume>100 || voiceRoute<0 || voiceRoute>2) return false;
+        parsed.voice.volume=static_cast<uint8_t>(voiceVolume);
+        parsed.voice.route=static_cast<handheld::voice::Route>(voiceRoute);
         parsed.propagation.enabled = doc["prop_on"] | false;
         parsed.propagation.selection = static_cast<handheld::propagation::Selection>(doc["prop_select"] | 0);
         parsed.propagation.delivery = static_cast<handheld::propagation::Delivery>(doc["prop_delivery"] | 0);
@@ -477,6 +484,11 @@ String UserConfig::serializeToJson(bool persisted, size_t limit, bool* unavailab
     doc["announce_int"] = _settings.announceInterval;
     doc["dev_mode"]     = _settings.devMode;
     if (!_settings.propagation.valid()) return "";
+    if(_settings.voice.volume>100 || uint8_t(_settings.voice.route)>2) return "";
+    doc["voice_on"]=_settings.voice.enabled;
+    doc["voice_contacts"]=_settings.voice.contactsOnly;
+    doc["voice_volume"]=_settings.voice.volume;
+    doc["voice_route"]=uint8_t(_settings.voice.route);
     doc["prop_on"] = _settings.propagation.enabled;
     doc["prop_select"] = static_cast<uint8_t>(_settings.propagation.selection);
     doc["prop_delivery"] = static_cast<uint8_t>(_settings.propagation.delivery);

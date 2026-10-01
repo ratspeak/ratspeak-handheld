@@ -22,6 +22,11 @@ void DeviceDiagnostics::printDiagnostics() {
     Serial.printf("Paths: %d  Links: %d\n", (int)backend->pathCount(), (int)backend->linkCount());
     Serial.printf("Delivery: %s  Resources: %u\n", backend->deliveryBackendDetail(),
                   (unsigned)backend->activeResourceTransfers());
+    const auto voice=backend->voiceStatus();
+    Serial.printf("Voice: phase=%u reason=%u profile=%u iface=%u generation=%lu RXdrops=%lu TXdrops=%lu stack_free=%lu encode_us=%lu decode_us=%lu\n",
+                  unsigned(voice.phase),unsigned(voice.reason),voice.profile,voice.iface,
+                  (unsigned long)voice.generation,(unsigned long)voice.rxDrops,(unsigned long)voice.txDrops,
+                  (unsigned long)voice.stackFree,(unsigned long)voice.encodeUs,(unsigned long)voice.decodeUs);
     Serial.printf("Radio: %s\n", radioOnline ? "ONLINE" : "OFFLINE");
     if (radioOnline) {
         Serial.printf("Freq: %lu Hz  SF: %d  BW: %lu  CR: 4/%d  TXP: %d dBm\n",

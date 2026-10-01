@@ -88,6 +88,7 @@ private:
     handheld::ServiceClient* _service = nullptr;
     void buildItems();
     void buildPropagationItems(int&);
+    void buildVoiceItems(int&);
     void showPropagationDialog(SettingsView);
     void rebuildPropagationDialog();
     void activatePropagationRow(int);

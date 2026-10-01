@@ -1104,6 +1104,7 @@ void LvSettingsScreen::buildItems() {
             return (_service && _service->status().sd) ? String("SD ready") : String("Flash only");
         }});
     buildPropagationItems(idx);
+    buildVoiceItems(idx);
 }
 
 void LvSettingsScreen::createUI(lv_obj_t* parent) {

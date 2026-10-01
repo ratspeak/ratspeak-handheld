@@ -3,6 +3,7 @@
 #include <M5Unified.h>
 #include <M5GFX.h>
 #include "Screen.h"
+#include "VoicePanel.h"
 #include "StatusBar.h"
 #include "TabBar.h"
 #include "Theme.h"
@@ -10,6 +11,7 @@
 class UIManager {
 public:
     bool begin();
+    void setVoicePanel(VoicePanel* panel) {_voicePanel=panel;}
     void render();
 
     // Screen management
@@ -42,6 +44,7 @@ public:
     bool isDirty() const { return _statusDirty || _contentDirty || _tabDirty; }
 
 private:
+    VoicePanel* _voicePanel=nullptr;
     M5Canvas _canvas;
     StatusBar _statusBar;
     TabBar _tabBar;

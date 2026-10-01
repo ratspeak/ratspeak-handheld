@@ -406,7 +406,9 @@ void RustLxmfEngine::settleStorage(Ticket ticket) {
 bool RustLxmfEngine::receiptHook(void* context, handheld::TxReceipt receipt, handheld::TxReceiptEvent event) {
     auto& owner = *static_cast<RustLxmfEngine*>(context);
     static_assert(RustLinkManager::RequestReceiptSlot >= RustIncomingDelivery::ReceiptCount &&
-                  RustLinkManager::RrcReceiptSlot < ReceiptBase, "Receipt namespaces must not overlap");
+                  RustLinkManager::VoiceReceiptSlot < ReceiptBase, "Receipt namespaces must not overlap");
+    if (receipt.slot == RustLinkManager::VoiceReceiptSlot)
+        return owner._d.links && owner._d.links->voiceReceipt(receipt, event);
     if (receipt.slot == RustLinkManager::RrcReceiptSlot)
         return owner._d.links && owner._d.links->rrcReceipt(receipt, event);
     if (receipt.slot == RustLinkManager::RequestReceiptSlot || receipt.slot == RustLinkManager::IdentifyReceiptSlot)

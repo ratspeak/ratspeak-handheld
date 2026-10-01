@@ -41,6 +41,7 @@
 #include "screens/NodesScreen.h"
 #include "screens/MessagesScreen.h"
 #include "screens/MessageView.h"
+#include "VoicePanel.h"
 #include "screens/SettingsScreen.h"
 #include "screens/NameInputScreen.h"
 #include "screens/MaintenanceScreen.h"
@@ -105,6 +106,7 @@ HomeScreen homeScreen;
 NodesScreen nodesScreen;
 MessagesScreen messagesScreen;
 MessageView messageView;
+VoicePanel voicePanel;
 NameInputScreen nameInputScreen;
 MaintenanceScreen maintenanceScreen;
 handheld::MaintenanceBarrier maintenance;
@@ -334,7 +336,7 @@ static void pollMaintenance() {
     network.pollSettlements();
     handheld::MaintenanceBarrier::Snapshot snapshot;
     snapshot.normalPending = wifiConnection.scanning() || userConfig.settingsPending() || settingsScreen.radioApplyPending();
-    snapshot.applicationPending = !backend->lxmfDrained() || !backend->rrcDrained() || !diagnostics.resultsDrained() ||
+    snapshot.applicationPending = !backend->lxmfDrained() || !backend->rrcDrained() || !backend->voiceDrained() || !diagnostics.resultsDrained() ||
         messageStore.writeQueue().drainCount() != 0;
     snapshot.helpersPending = snapshot.normalPending || !protocolRuntime.maintenanceDrained() ||
         !network.quiescent();
@@ -801,6 +803,8 @@ void setup() {
     messageView.setMessageStore(&messageStore);
     messageView.setLXMFManager(&lxmf);
     messageView.setBackend(backend);
+    voicePanel.begin(backend);ui.setVoicePanel(&voicePanel);
+    messageView.setVoiceCallback([](const char* peer) {voicePanel.start(peer);});
     messageView.setAnnounceManager(announceManager);
     messageView.setBackCallback([]() {
         ui.setScreen(&messagesScreen);
@@ -956,6 +960,7 @@ void loop() {
         } else if (ui.isBootMode()) {
             ui.handleKey(evt);
         }
+        else if (voicePanel.handleKey(evt)) {ui.markAllDirty();}
         else if (helpOverlay.isVisible()) {
             helpOverlay.handleKey(evt);
             ui.setOverlay(helpOverlay.isVisible() ? &helpOverlay : nullptr);
@@ -985,6 +990,7 @@ void loop() {
     if (maintenance.accepting() && now - lastRNS >= rnsInterval) {
         lastRNS = now;
         unsigned long rnsStart = millis();
+        backend->configureVoice(userConfig.settings().voice);
         backend->configurePropagation(userConfig.settings().propagation);
         backend->loop();
         rnsDuration = millis() - rnsStart;
@@ -1049,6 +1055,10 @@ void loop() {
         pendingMessageSound = false;
         audio.playMessage();
     }
+    voicePanel.poll(power.isScreenOn() && maintenance.accepting() && !helpOverlay.isVisible());
+    if(voicePanel.takeIncoming()) {power.activity();audio.playMessage();}
+    if(voicePanel.active() || voicePanel.visible()) ui.markAllDirty();
+    if(voicePanel.active() && power.isScreenOn()) power.activity();
     audio.loop();
 
     // 10. Power management

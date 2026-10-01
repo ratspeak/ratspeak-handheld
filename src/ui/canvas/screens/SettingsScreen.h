@@ -59,9 +59,11 @@ public:
 private:
     enum SubMenu { MENU_MAIN, MENU_RADIO, MENU_WIFI, MENU_TCP, MENU_SDCARD,
                    MENU_DISPLAY, MENU_AUDIO, MENU_ABOUT, MENU_WIFI_SCAN,
-                   MENU_PROPAGATION, MENU_PROPAGATION_CHOICE, MENU_PROPAGATION_NODES };
+                   MENU_PROPAGATION, MENU_PROPAGATION_CHOICE, MENU_PROPAGATION_NODES, MENU_VOICE };
 
     void buildPropagationMenu();
+    void buildVoiceMenu();
+    void activateVoiceRow(int);
     void showPropagationChoice();
     void showPropagationNodes();
     void activatePropagationRow(int row);

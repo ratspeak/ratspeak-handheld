@@ -118,6 +118,7 @@ void SettingsScreen::buildMainMenu() {
     _list.addItem("About");
     _list.addItem("Factory Reset", Theme::ERROR);
     _list.addItem("Propagation");
+    _list.addItem("Voice");
 }
 
 void SettingsScreen::buildRadioMenu() {
@@ -898,12 +899,15 @@ bool SettingsScreen::handleKey(const KeyEvent& event) {
                 case 5: _subMenu = MENU_ABOUT; break;
                 case 6: _confirmPending = true; _confirmAction = 0; break;
                 case 7: _subMenu = MENU_PROPAGATION; buildPropagationMenu(); break;
+                case 8: _subMenu = MENU_VOICE; buildVoiceMenu(); break;
             }
             return true;
         }
 
         if (_subMenu == MENU_PROPAGATION || _subMenu == MENU_PROPAGATION_CHOICE ||
             _subMenu == MENU_PROPAGATION_NODES) { activatePropagationRow(sel); return true; }
+
+        if(_subMenu==MENU_VOICE) {activateVoiceRow(sel);return true;}
 
         // WiFi scan results handling
         if (_subMenu == MENU_WIFI_SCAN) {
@@ -1078,7 +1082,7 @@ void SettingsScreen::applyCommitted(bool refreshCandidate) {
         if (_candidateReady) _candidateDirty = false;
     }
     auto& s = _config->settings();
-    if (_backend) _backend->configurePropagation(s.propagation);
+    if (_backend) {_backend->configureVoice(s.voice);_backend->configurePropagation(s.propagation);}
     const auto radio = _radioApply ? _radioApply(s, true) : RadioApply::Unavailable;
 
     // Apply power settings

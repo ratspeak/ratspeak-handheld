@@ -3,6 +3,7 @@
 #include <lvgl.h>
 #include "LvStatusBar.h"
 #include "LvTabBar.h"
+#include "LvVoicePanel.h"
 #include "hal/Keyboard.h"
 
 // LVGL screen base class
@@ -27,6 +28,8 @@ protected:
 class UIManager {
 public:
     void begin();
+    void setVoicePanel(LvVoicePanel* panel) {_voicePanel=panel;}
+    void openVoice(const char* peer) {if(_voicePanel)_voicePanel->start(peer);}
 
     // Screen management
     void setScreen(LvScreen* screen);
@@ -58,6 +61,7 @@ public:
 
 private:
     // LVGL components
+    LvVoicePanel* _voicePanel=nullptr;
     LvStatusBar _lvStatusBar;
     LvTabBar _lvTabBar;
     LvScreen* _currentLvScreen = nullptr;

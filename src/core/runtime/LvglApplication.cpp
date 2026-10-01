@@ -47,6 +47,7 @@
 #include "screens/LvHomeScreen.h"
 #include "screens/LvNodesScreen.h"
 #include "screens/LvMessagesScreen.h"
+#include "LvVoicePanel.h"
 #include "screens/LvMessageView.h"
 #include "screens/LvContactsScreen.h"
 #include "screens/LvSettingsScreen.h"
@@ -150,6 +151,7 @@ LvBootScreen lvBootScreen;
 LvHomeScreen lvHomeScreen;
 LvNodesScreen lvNodesScreen;
 LvMessagesScreen lvMessagesScreen;
+LvVoicePanel lvVoicePanel;
 LvContactsScreen lvContactsScreen;
 LvMessageView lvMessageView;
 LvSettingsScreen lvSettingsScreen;
@@ -969,6 +971,8 @@ void handheld::lvgl_application::setup() {
     lvSettingsScreen.setService(&serviceClient);
     lvMessageView.setService(&serviceClient);
     lvMessagesScreen.setService(&serviceClient);
+    lvVoicePanel.begin(&serviceClient);
+    ::ui.setVoicePanel(&lvVoicePanel);
     lvContactsScreen.setService(&serviceClient);
     lvNodesScreen.setService(&serviceClient);
     lvHomeScreen.setService(&serviceClient);
@@ -1261,7 +1265,8 @@ static void dispatchKey(const KeyEvent& evt) {
     LvInput::noteKeyActivity();
 
     // Help overlay intercepts all keys when visible
-    if (lvHelpOverlay.isVisible()) {
+    if (lvVoicePanel.handleKey(evt)) {}
+    else if (lvHelpOverlay.isVisible()) {
         lvHelpOverlay.handleKey(evt);
     }
     // QR controls own navigation while the overlay is visible.
@@ -1306,6 +1311,7 @@ static void dispatchKey(const KeyEvent& evt) {
 // an unconsumed hold blanks the screen, as the trackball hold always has.
 static void dispatchLongPress() {
     if (lvQrOverlay.isVisible() || !::ui.handleLongPress()) {
+        handheld::voice::VoiceInput::instance().cancel();
         powerMgr.forceScreenOff();
     }
 }
@@ -1527,6 +1533,9 @@ void handheld::lvgl_application::loop() {
         }
     }
 
+    lvVoicePanel.poll(powerMgr.isScreenOn() && serviceClient.available() && serviceClient.status().state==handheld::ServiceState::Running && !lvHelpOverlay.isVisible() && !lvQrOverlay.isVisible());
+    if(lvVoicePanel.takeIncoming()) {powerMgr.activity();audio.playMessage();}
+    if(handheld::voice::active(serviceClient.status().voice.phase) && powerMgr.isScreenOn()) powerMgr.activity();
     audio.loop();
     powerMgr.loop();
     if (millis() - lastStatusUpdate >= 100) {

@@ -552,3 +552,10 @@ void LoRaInterface::refreshRadioTiming(bool forceLog) {
                       _radio->lowDataRateEnabled() ? "on" : "off");
     }
 }
+
+
+bool LoRaInterface::admitsVoice(size_t rawLength, uint32_t intervalMs, uint8_t hops) const {
+    if (!isOnline() || _maintenance || _reconfigurePending || !hops || rawLength > RNODE_SINGLE_MTU || !intervalMs) return false;
+    const float airtime = packetAirtimeMs(rawLength);
+    return airtime > 0 && airtime * hops <= intervalMs * (AIRTIME_THROTTLE * 0.8f);
+}

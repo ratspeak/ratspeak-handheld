@@ -1,4 +1,5 @@
 #include "Keyboard.h"
+#include "voice/VoiceInput.h"
 #include <ctype.h>
 
 Keyboard* Keyboard::_instance = nullptr;
@@ -140,8 +141,11 @@ char Keyboard::decodeKey(uint8_t matrixIndex, bool pressed) {
         // from text deletion and never synthesize repeated Escape events.
         return pressed ? (_altHeld ? '\x1b' : '\b') : 0;
     }
+    if (matrixIndex == KEY_SPACE) {
+        handheld::voice::VoiceInput::instance().edge(handheld::voice::VoiceInput::Key,pressed);
+        return pressed ? ' ' : 0;
+    }
     if (!pressed) return 0;
-    if (matrixIndex == KEY_SPACE) return ' ';
 
     uint8_t row = matrixIndex / KEY_COLS;
     uint8_t col = matrixIndex % KEY_COLS;
@@ -293,6 +297,7 @@ void Keyboard::setSpareRowGate(bool lit) const {
 }
 
 void Keyboard::discardPending() {
+    handheld::voice::VoiceInput::instance().cancel();
     // TCA8418 holds at most ten edges. Decode discarded modifiers/releases so
     // the following real press still observes the physical modifier state.
     const uint8_t count = keyCount();

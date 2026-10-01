@@ -32,6 +32,7 @@ public:
         RustLxmfEngine* lxmf = nullptr;
         RustResourceEngine* resources = nullptr;
         const uint8_t* ourDestHash = nullptr;  // 16 bytes
+        const uint8_t* ourVoiceHash = nullptr; // enabled telephone endpoint, 16 bytes
     };
 
     enum class State : uint8_t { Free, InitRequested, Active, RespPending, Stale, Closed };
@@ -63,6 +64,28 @@ public:
     void closeRrc(Handle);
     static constexpr uint8_t RrcReceiptSlot = 66;
     bool rrcReceipt(handheld::TxReceipt, handheld::TxReceiptEvent);
+
+    struct VoiceSink {
+        virtual ~VoiceSink() = default;
+        virtual bool voiceMediaEligible(Handle, uint32_t) const { return true; }
+        virtual bool admitVoice(uint8_t iface, uint8_t hops) const = 0;
+        virtual void onVoiceLink(Handle, bool incoming, uint8_t iface, uint8_t hops) = 0;
+        virtual void onVoiceIdentity(Handle, const uint8_t publicKey[64]) = 0;
+        virtual void onVoicePacket(Handle, const uint8_t*, size_t) = 0;
+        virtual void onVoiceClosed(Handle) = 0;
+        virtual void onVoiceTransmit(Handle, uint32_t token, bool started) = 0;
+    };
+    void setVoiceSink(VoiceSink* sink) { _voiceSink = sink; }
+    bool openVoice(const uint8_t dest[16], const uint8_t pubkey[64], const rs_handheld_route_t&, Handle&);
+    bool voiceActive(Handle) const;
+    bool voiceIdentified(Handle) const;
+    bool identifyVoice(Handle, uint64_t bornMs, uint32_t waitMs);
+    bool sendVoice(Handle, const uint8_t*, size_t, uint32_t token, uint64_t bornMs, uint32_t waitMs);
+    // Media tokens have bit 31 set. Release/profile change invalidates only media.
+    void cancelVoiceMedia(Handle);
+    void closeVoice(Handle);
+    static constexpr uint8_t VoiceReceiptSlot = 67;
+    bool voiceReceipt(handheld::TxReceipt, handheld::TxReceiptEvent);
 
     ~RustLinkManager() { endAll(); }  // defense-in-depth: keys never outlive the manager
 
@@ -128,7 +151,7 @@ public:
     void endAll();  // zeroize + free all links (teardown)
 
 private:
-    enum class Owner : uint8_t { Delivery, Rrc };
+    enum class Owner : uint8_t { Delivery, Rrc, Voice };
     struct Link {
         State state = State::Free;
         Owner owner = Owner::Delivery;
@@ -171,8 +194,12 @@ private:
     const Link* rrcLink(Handle) const;
     bool offerRrc(Handle, bool identify, const uint8_t*, size_t, uint32_t token, uint64_t, uint32_t);
     bool rrcTxLive() const;
+    Link* voiceLink(Handle);
+    const Link* voiceLink(Handle) const;
+    bool voiceTxLive() const;
+    bool offerVoice(Handle, bool identify, const uint8_t*, size_t, uint32_t, uint64_t, uint32_t);
     Link* findByLinkId(const uint8_t linkId[16]);
-    Link* allocLink();
+    Link* allocLink(bool reclaimHalfOpen = true);
     void closeLink(Link& l);
     void failSetup(Link& l);
     bool sendLinkFrame(Link& l, uint8_t context, const uint8_t* payload, size_t len,
@@ -205,6 +232,9 @@ private:
     RrcTx _rrcTx;
     uint32_t _rrcSequence = 0;
     RrcSink* _rrcSink = nullptr;
+    RrcTx _voiceTx;
+    uint32_t _voiceSequence = 0;
+    VoiceSink* _voiceSink = nullptr;
 
     struct Request {
         RequestSink* sink = nullptr;

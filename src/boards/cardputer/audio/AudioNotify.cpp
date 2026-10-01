@@ -1,4 +1,5 @@
 #include "AudioNotify.h"
+#include "voice/AudioCoordinator.h"
 
 void AudioNotify::begin() {
     M5.Speaker.begin();
@@ -7,6 +8,7 @@ void AudioNotify::begin() {
 }
 
 void AudioNotify::loop() {
+    if (!handheld::voice::AudioCoordinator::instance().poll([this] { end(); }, [this] { begin(); })) return;
     if (!_enabled || !_noteCount) return;
 
     unsigned long now = millis();
@@ -92,6 +94,7 @@ void AudioNotify::setVolume(uint8_t vol) {
 }
 
 void AudioNotify::playMessage() {
+    if (!handheld::voice::AudioCoordinator::instance().notifications()) return;
     if (!_enabled) return;
     const Note notes[] = {
         {1000, 50, 50},
@@ -101,11 +104,13 @@ void AudioNotify::playMessage() {
 }
 
 void AudioNotify::playAnnounce() {
+    if (!handheld::voice::AudioCoordinator::instance().notifications()) return;
     if (!_enabled) return;
     tone(800, 20);
 }
 
 void AudioNotify::playError() {
+    if (!handheld::voice::AudioCoordinator::instance().notifications()) return;
     if (!_enabled) return;
     const Note notes[] = {
         {400, 100, 50},
@@ -116,6 +121,7 @@ void AudioNotify::playError() {
 }
 
 void AudioNotify::playBoot() {
+    if (!handheld::voice::AudioCoordinator::instance().notifications()) return;
     if (!_enabled) return;
     const Note notes[] = {
         {440, 60, 30},   // A4
@@ -125,3 +131,5 @@ void AudioNotify::playBoot() {
     };
     playSequence(notes, 4);
 }
+
+void AudioNotify::end() { stop(); M5.Speaker.end(); _begun=false; }

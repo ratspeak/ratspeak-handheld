@@ -234,11 +234,11 @@ void RustInterfacePump::ingest(const uint8_t* data, size_t len, uint8_t ifaceId)
             _counters.rxAccepted++;
             _counters.rxPathReqSelf++;
             // A peer's cached path to us expired; re-announce our dest (throttled in ProtocolRuntime).
-            size_t tagLen;
-            if (rs_handheld_rns_take_own_path_request_tag(_ctx, _pathRequestTag, &tagLen) ==
+            size_t tagLen; uint32_t endpoint = 0;
+            if (rs_handheld_rns_take_own_path_request(_ctx, _pathRequestTag, &tagLen, &endpoint) ==
                     RS_HANDHELD_OK &&
                 tagLen > 0 && tagLen <= sizeof(_pathRequestTag)) {
-                if (_sink) _sink->onOwnPathRequest(ifaceId, _pathRequestTag, tagLen);
+                if (_sink) _sink->onEndpointPathRequest(ifaceId, _pathRequestTag, tagLen, endpoint);
             } else {
                 _counters.rxErrors++;
             }
@@ -262,6 +262,11 @@ void RustInterfacePump::ingest(const uint8_t* data, size_t len, uint8_t ifaceId)
             _counters.rxAccepted++;
             _counters.rxAnnounces++;
             if (_sink) _sink->onPropagationAnnounce(_event, ifaceId);
+            break;
+        case RS_HANDHELD_INGEST_ANNOUNCE_VOICE:
+            _counters.rxAccepted++;
+            _counters.rxAnnounces++;
+            if (_sink) _sink->onVoiceAnnounce(_event, ifaceId);
             break;
         case RS_HANDHELD_INGEST_ANNOUNCE_RRC:
             _counters.rxAccepted++;
@@ -548,4 +553,10 @@ void RustInterfacePump::drainOutbound() {
         }
         if (!queued) heldServiced = _pending.targets != 0;
     }
+}
+
+
+bool RustInterfacePump::admitsVoice(uint8_t iface, size_t bytes, uint32_t interval, uint8_t hops) const {
+    if (!interfaceOnline(iface)) return false;
+    return iface != LORA_IFACE_ID || (_lora && _lora->admitsVoice(bytes, interval, hops));
 }

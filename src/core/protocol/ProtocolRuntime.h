@@ -12,6 +12,8 @@
 #include "protocol/RustResourceEngine.h"
 #include "protocol/PropagationNodes.h"
 #include "protocol/RustRrcEngine.h"
+#include "protocol/RustVoiceEngine.h"
+#include "voice/VoiceWorker.h"
 #include "ratspeak_protocol.h"
 
 class FlashStore;
@@ -41,7 +43,7 @@ public:
     // requires both incoming and outgoing ownership drained.
     void stopReceive();
     void pollReceive();
-    bool receiveDrained() const { return _lxmf.incoming().drained() && _lxmf.drained() && _rrc.drained(); }
+    bool receiveDrained() const { return _lxmf.incoming().drained() && _lxmf.drained() && _rrc.drained() && _voice.drained(); }
 
     // Retains the context and the caller-owned radio until both message owners
     // and the already-started radio burst settle. No RX, scheduler or metadata
@@ -87,6 +89,11 @@ public:
     AnnounceResult announce(const uint8_t* appData, size_t len) override;
     unsigned long lastAnnounceTime() const override { return _lastAnnounceMs; }
     uint32_t announceFilterCount() const override;
+    void configureVoice(const handheld::voice::Settings&) override;
+    handheld::voice::Status voiceStatus() const override { return _voice.status(); }
+    handheld::voice::Code voiceCommand(const handheld::voice::Command& command) override { return _voice.command(command,handheld::voice::VoiceWorker::stopEpoch()); }
+    bool voiceDrained() const override { return _voice.drained(); }
+    void voiceStop() override { _voice.stop(); }
     void configurePropagation(const handheld::propagation::Settings&) override;
     size_t propagationNodes(handheld::propagation::NodeView*, size_t) const override;
     handheld::propagation::SyncView propagationStatus() const override;
@@ -137,9 +144,11 @@ public:
     // RustPumpSink
     void onAnnounceEvent(const rs_handheld_announce_event_t& ev, uint8_t ifaceId) override;
     void onPropagationAnnounce(const rs_handheld_announce_event_t&, uint8_t) override;
+    void onVoiceAnnounce(const rs_handheld_announce_event_t&, uint8_t) override;
     void onRrcAnnounce(const rs_handheld_announce_event_t&, uint8_t) override;
     void onLocalFrame(const rs_handheld_local_frame_t& f, uint8_t ifaceId) override;
     void onOwnPathRequest(uint8_t ifaceId, const uint8_t tag[16], size_t tagLen) override;
+    void onEndpointPathRequest(uint8_t ifaceId, const uint8_t tag[16], size_t tagLen, uint32_t endpoint) override;
 
 private:
     bool loadOrCreateIdentity(IdentityManager* idMgr);
@@ -196,6 +205,7 @@ private:
         uint16_t rawLen = 0;
         uint8_t tag[16] = {};
         uint8_t tagLen = 0;
+        uint8_t endpoint = 0;
         bool pending = false;
         bool hasLastSent = false;
         bool replay = false;
@@ -204,6 +214,7 @@ private:
         uint64_t followupBornMs = 0;
         uint8_t followupTag[16] = {};
         uint8_t followupTagLen = 0;
+        uint8_t followupEndpoint = 0;
     } _pathResponses[PATH_RESPONSE_INTERFACES];
     static_assert(sizeof(_pathResponses) <= handheld::ResourceBudget::PathResponses,
                   "Review per-interface path-response retention budget");
@@ -224,6 +235,11 @@ private:
     RustResourceEngine _resources;
     RustLxmfEngine _lxmf;
     RustRrcEngine _rrc;
+    RustVoiceEngine _voice;
+    handheld::voice::VoiceWorker _voiceAudio;
+    uint8_t _voiceHash[16]{};
+    uint64_t _nextVoiceAnnounce=0;
+    bool _voiceEnabled=false;
     handheld::propagation::Nodes _propagationNodes;
     uint64_t _nextPropagationPoll = 0;
     static_assert(sizeof(handheld::propagation::Nodes) <= handheld::ResourceBudget::PropagationNodes,

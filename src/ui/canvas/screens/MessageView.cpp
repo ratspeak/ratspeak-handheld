@@ -221,7 +221,8 @@ void MessageView::render(M5Canvas& canvas) {
                     _history.statusRefreshDelayed() ?
                         (_history.mode() == History::Mode::Full || _history.focusedSpan() < _history.spanCount() ?
                             "Status delayed; R retries" : "Status delayed; Tab, R") : header,
-                    8, baseY + 2, Theme::CONTENT_W - 16);
+                    8, baseY + 2, Theme::CONTENT_W - (_rrcMode?16:108));
+    if(!_rrcMode) {Theme::useSmallFont(canvas);canvas.setTextColor(Theme::ACCENT);canvas.drawString("Ctrl+V voice",164,baseY+3);}
     if (_rrcMode && _backend) {
         const auto status=_backend->rrcStatus();
         const auto action=_rrcBinding.privateNotice()?handheld::rrc::Action::PrivateNotice:_rrcEmote?handheld::rrc::Action::Emote:handheld::rrc::Action::Message;
@@ -287,6 +288,7 @@ void MessageView::render(M5Canvas& canvas) {
 }
 
 bool MessageView::handleKey(const KeyEvent& event) {
+    if(!_rrcMode && event.ctrl && (event.character=='v' || event.character=='V')) {if(!event.repeat && _voice)_voice(_peerHex.c_str());return true;}
     if(_rrcMode && _rrcTools.visible()) {
         if(event.escape || event.backspace) {if(!event.repeat) closeRrcTools();return true;}
         if(event.up || event.left) {_rrcTools.move(-1);return true;}

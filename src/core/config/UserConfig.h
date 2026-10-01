@@ -12,6 +12,7 @@
 #include "config/BoardConfig.h"
 #include "config/ConfigMemory.h"
 #include "config/PropagationSettings.h"
+#include "voice/VoiceTypes.h"
 
 enum RatWiFiMode : uint8_t { RAT_WIFI_OFF = 0, RAT_WIFI_AP = 1, RAT_WIFI_STA = 2 };
 
@@ -79,6 +80,7 @@ struct UserSettings {
     std::vector<TCPEndpoint> tcpConnections;
 
     handheld::propagation::Settings propagation;
+    handheld::voice::Settings voice;
 
     // Display
     uint16_t screenDimTimeout = 30;   // seconds

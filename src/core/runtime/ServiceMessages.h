@@ -6,6 +6,7 @@
 #include "storage/ConversationView.h"
 #include "config/PropagationSettings.h"
 #include "protocol/RrcTypes.h"
+#include "voice/VoiceTypes.h"
 
 namespace handheld {
 
@@ -14,7 +15,7 @@ enum class Operation : uint8_t {
     RrcHubs, RrcRooms, RrcChannels, RrcPeople, RrcDirectory, RrcContext, RrcHistoryPage, RrcHistoryRecord, RrcHistoryStatus, RrcDraft, RrcDetail, RrcSavedRooms, RrcInbox, RrcRoom,
     Send, MarkRead, DeleteConversation, SaveContact, DeleteContact, RenameContact,
     ApplySettings, Announce, CreateIdentity, ImportIdentity, Diagnostics,
-    PropagationSync, RrcCommand, HomeReady, Restart, PowerOff, SwitchIdentity, FormatSD, WipeSD, FactoryReset,
+    PropagationSync, RrcCommand, VoiceCommand, HomeReady, Restart, PowerOff, SwitchIdentity, FormatSD, WipeSD, FactoryReset,
     EnableSDAndRestart, ClearOldDataAndRestart
 };
 enum class Admission : uint8_t { Admitted, Busy, NotReady, Invalid };
@@ -74,6 +75,7 @@ struct Result {
 struct Status {
     propagation::SyncView propagation;
     rrc::Status rrc;
+    voice::Status voice;
     uint32_t generation = 1;
     uint32_t storeRevision = 0;
     uint32_t historyRevision = 0; // Structural invalidation only; MAX is exhausted.

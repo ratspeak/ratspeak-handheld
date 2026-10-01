@@ -129,7 +129,7 @@ bool DeviceService::readyForCommand() {
     if (!_storageOwnerBound || _backend.pollRadioBeforeBlockingWork()) return true;
     const auto* request = _mailbox.nextRequest();
     if (!request) return false;
-    if (request->operation == Operation::PropagationNodes || request->operation == Operation::PropagationSync ||
+    if (request->operation == Operation::VoiceCommand || request->operation == Operation::PropagationNodes || request->operation == Operation::PropagationSync ||
         (request->operation >= Operation::RrcHubs && request->operation <= Operation::RrcContext && !rrcCatalog(request->operation))) return true;
     if (!_messages.deferredIO()) return false;
     switch (request->operation) {
@@ -163,7 +163,7 @@ void DeviceService::poll() {
     _messages.poll();
     // Observe UI cancellation before the pump can start another queued frame.
     pollSends();
-    if (_status.state == ServiceState::Running) _backend.configurePropagation(_config.settings().propagation);
+    if (_status.state == ServiceState::Running) { _backend.configureVoice(_config.settings().voice);_backend.configurePropagation(_config.settings().propagation); }
     if (_status.state == ServiceState::Running && pollNetwork) pollNetwork();
     else if (!_maintenance.accepting() && pollSettlements) pollSettlements();
     pollSends();
@@ -210,6 +210,7 @@ void DeviceService::finishSettings(uint8_t slot) {
     ++_status.configRevision;
     ++_status.identityRevision;
     if (_maintenance.accepting()) {
+        _backend.configureVoice(_config.settings().voice);
         _backend.configurePropagation(_config.settings().propagation);
         if (_config.settings().timezoneIdx < TIMEZONE_COUNT) {
             setenv("TZ", TIMEZONE_TABLE[_config.settings().timezoneIdx].posixTZ, 1);
@@ -251,7 +252,7 @@ void DeviceService::pollMaintenance() {
     if (_maintenance.accepting()) return;
     MaintenanceBarrier::Snapshot snapshot;
     snapshot.normalPending = _mailbox.normalWorkPending() || _config.settingsPending();
-    snapshot.applicationPending = !_backend.lxmfDrained() || !_backend.rrcDrained() || _rrcCommands;
+    snapshot.applicationPending = !_backend.voiceDrained() || !_backend.lxmfDrained() || !_backend.rrcDrained() || _rrcCommands;
     snapshot.helpersPending = !_maintenance.helpersStarted() || (quiescent && !quiescent());
     snapshot.storageStopped = _maintenance.storageStopStarted() && _messages.finishStop();
     snapshot.error = _backend.lxmfDrainError();
@@ -315,6 +316,7 @@ void DeviceService::refreshStatus() {
     _status.historyRevision = _messages.historyRevision();
     _status.statusRevision = _backend.lxmfStatusRevision();
     _status.rrc = _backend.rrcStatus();
+    _status.voice = _backend.voiceStatus();
     _status.flash = _flash.isReady();
     _status.sd = _sd.isReady();
     if ((!_lastStorageStatus || _lastStatus - _lastStorageStatus >= 5000) &&
@@ -463,6 +465,7 @@ void DeviceService::execute(uint8_t slot) {
         _outgoingPaused = true;
         _backend.lxmfStopAdmissions();
         _backend.rrcStopAdmissions();
+        _backend.voiceStop();
         if (closeAdmissions) closeAdmissions();
         notice("Finishing pending work");
         refreshStatus();
@@ -470,7 +473,7 @@ void DeviceService::execute(uint8_t slot) {
     }
     if (!_maintenance.accepting() && (request.operation == Operation::Announce ||
         request.operation == Operation::Diagnostics || request.operation == Operation::HomeReady ||
-        request.operation == Operation::Scan || request.operation == Operation::PropagationSync || request.operation == Operation::RrcCommand)) {
+        request.operation == Operation::Scan || request.operation == Operation::PropagationSync || request.operation == Operation::RrcCommand || request.operation == Operation::VoiceCommand)) {
         complete(slot, Outcome::Cancelled, "Cancelled for maintenance"); return;
     }
     const auto length = _mailbox.length(slot);
@@ -480,6 +483,15 @@ void DeviceService::execute(uint8_t slot) {
     case Operation::RrcHubs: case Operation::RrcRooms: case Operation::RrcPeople: case Operation::RrcDirectory:
     case Operation::RrcContext: case Operation::RrcCommand:
         executeRrc(slot); break;
+    case Operation::VoiceCommand: {
+        voice::Command command;
+        if (length!=sizeof command || _mailbox.cancellationRequested(slot)) {complete(slot,Outcome::Invalid);break;}
+        memcpy(&command,_scratch,sizeof command);
+        if(command.action>voice::Action::Volume || command.volume>100) {complete(slot,Outcome::Invalid);break;}
+        const auto code=_backend.voiceCommand(command);
+        Result result;result.outcome=code==voice::Code::Ok?Outcome::Ok:Outcome::Failed;
+        result.next=uint32_t(code);_mailbox.complete(slot,result);break;
+    }
     case Operation::Send: {
         if (_outgoingPaused || _mailbox.cancellationRequested(slot)) {
             complete(slot, Outcome::Cancelled, "Sending cancelled"); break;

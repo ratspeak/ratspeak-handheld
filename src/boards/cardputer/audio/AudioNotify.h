@@ -6,6 +6,7 @@
 class AudioNotify {
 public:
     void begin();
+    void end();
     void loop();
 
     // Notification sounds

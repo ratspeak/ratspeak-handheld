@@ -1,4 +1,5 @@
 #include "Keyboard.h"
+#include "voice/VoiceInput.h"
 #include "config/BoardConfig.h"
 
 static constexpr unsigned long KEY_REPEAT_START_MS = 400;
@@ -81,6 +82,9 @@ void Keyboard::update() {
         CardputerAdvKeyboard::Event raw;
         if (!_hardware.poll(&raw, 1)) break;
         _pressed[raw.row][raw.col] = raw.pressed;
+        Point2D_t position;position.x=raw.col;position.y=raw.row;
+        if(M5Cardputer.Keyboard.getKeyValue(position).value_first==' ')
+            handheld::voice::VoiceInput::instance().edge(handheld::voice::VoiceInput::Key,raw.pressed);
         if (!raw.pressed || isModifierPosition(raw.row, raw.col)) continue;
         KeyEvent candidate = eventForKey(raw.row, raw.col);
         if (!hasAction(candidate)) continue;
@@ -120,10 +124,14 @@ void Keyboard::setCapsLocked(bool locked) {
 }
 
 void Keyboard::discardPending() {
+    handheld::voice::VoiceInput::instance().cancel();
     for (unsigned i = 0; i < 16; ++i) {
         CardputerAdvKeyboard::Event raw;
         if (!_hardware.poll(&raw, 1)) break;
         _pressed[raw.row][raw.col] = raw.pressed;
+        Point2D_t position;position.x=raw.col;position.y=raw.row;
+        if(M5Cardputer.Keyboard.getKeyValue(position).value_first==' ')
+            handheld::voice::VoiceInput::instance().edge(handheld::voice::VoiceInput::Key,raw.pressed);
     }
     _keyHeld = false;
     _hasEvent = false;

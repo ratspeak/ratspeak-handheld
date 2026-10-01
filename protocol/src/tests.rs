@@ -1101,7 +1101,7 @@ fn packet_ingest_rejects_hops_at_pathfinder_m_for_all_types() {
 }
 
 #[test]
-fn packet_ingest_suppresses_non_lxmf_delivery_aspect_contact() {
+fn packet_ingest_separates_voice_aspect_from_delivery_contact() {
     let ctx = loaded_ctx();
     let _node = open_transport_into(ctx, 1);
     // A valid announce for a DIFFERENT aspect of the same identity (e.g. lxst.telephony):
@@ -1133,9 +1133,9 @@ fn packet_ingest_suppresses_non_lxmf_delivery_aspect_contact() {
         },
         RsHandheldStatus::Ok
     );
-    // Non-delivery aspect -> ANNOUNCE_OTHER (not LearnedAnnounce/Scheduled); event unfilled.
-    assert_eq!(action, INGEST_ANNOUNCE_OTHER);
-    assert_eq!(ev.identity_hash, [0u8; 16]);
+    // Telephone has its own event, never LearnedAnnounce/Scheduled contacts.
+    assert_eq!(action, INGEST_ANNOUNCE_VOICE);
+    assert_eq!(ev.identity_hash, *id.identity_hash());
     // But the path IS learned (transport learns every aspect, for every aspect).
     let mut has = 0;
     assert_eq!(
@@ -4098,5 +4098,145 @@ fn retained_outbound_ffi_retirement_and_invalid_transfer_do_not_consume() {
         unsafe { rs_handheld_rns_outbound_retire_interface(ctx, 7) },
         RsHandheldStatus::ErrInvalidArg
     );
+    unsafe { rs_handheld_rns_shutdown(ctx) };
+}
+
+#[test]
+fn voice_endpoint_admission_is_explicit_identity_bound_and_separate_from_delivery() {
+    let ctx = loaded_ctx();
+    let _node = open_transport_into(ctx, 1);
+    let identity = LocalIdentity::from_private_key(&unhex::<64>(INCREMENTING));
+    let mut dest = [0; 16];
+    assert_eq!(
+        unsafe { rs_handheld_voice_destination(identity.public_key(), &mut dest) },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!(dest, identity.destination_hash("lxst.telephony"));
+    let mut packet = [0; 200];
+    let mut length = 999;
+    assert_eq!(
+        unsafe {
+            rs_handheld_voice_announce(
+                ctx,
+                &RNG_SEED,
+                UNIX_SECS,
+                0,
+                packet.as_mut_ptr(),
+                packet.len(),
+                &mut length,
+            )
+        },
+        RsHandheldStatus::ErrNotReady
+    );
+    assert_eq!(length, 999);
+    assert_eq!(
+        unsafe { rs_handheld_voice_enable(ctx, 1) },
+        RsHandheldStatus::Ok
+    );
+    for response in [0, 1] {
+        assert_eq!(
+            unsafe {
+                rs_handheld_voice_announce(
+                    ctx,
+                    &RNG_SEED,
+                    UNIX_SECS,
+                    response,
+                    packet.as_mut_ptr(),
+                    packet.len(),
+                    &mut length,
+                )
+            },
+            RsHandheldStatus::Ok
+        );
+        let view = PacketView::parse(&packet[..length]).unwrap();
+        assert_eq!(view.header.destination_hash, dest);
+        assert_eq!(
+            view.header.context,
+            if response == 1 {
+                PacketContext::PathResponse
+            } else {
+                PacketContext::None
+            }
+        );
+        let mut scratch = [0; SIGNED_DATA_MAX];
+        let announce = AnnounceView::parse(view.payload, false, MAX_ANNOUNCE_APP_DATA).unwrap();
+        assert!(announce.validate(&dest, None, &mut scratch).is_ok());
+        assert!(announce.app_data.is_empty());
+    }
+    let mut request = dest.to_vec();
+    request.extend([0x23; 16]);
+    assert_eq!(
+        ingest_action(ctx, &frame_path_request(&request), 10),
+        INGEST_PATH_REQUEST_SELF
+    );
+    let mut tag = [0; 16];
+    let mut tag_len = 0;
+    let mut endpoint = 99;
+    assert_eq!(
+        unsafe { rs_handheld_rns_take_own_path_request_tag(ctx, &mut tag, &mut tag_len) },
+        RsHandheldStatus::ErrUnsupported
+    );
+    assert_eq!(
+        unsafe {
+            rs_handheld_rns_take_own_path_request(ctx, &mut tag, &mut tag_len, &mut endpoint)
+        },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!((tag, tag_len, endpoint), ([0x23; 16], 16, 1));
+    let frame = |kind, destination_type| {
+        let header = PacketHeader {
+            flags: PacketFlags {
+                header_type: HeaderType::Header1,
+                context_flag: false,
+                transport_type: TransportType::Broadcast,
+                destination_type,
+                packet_type: kind,
+            },
+            hops: 0,
+            transport_id: None,
+            destination_hash: dest,
+            context: PacketContext::None,
+        };
+        build_packet(header, &[1; 64]).unwrap()
+    };
+    let mut local: RsHandheldLocalFrame = unsafe { core::mem::zeroed() };
+    assert!(classify_local_frame(
+        unsafe { &*ctx },
+        frame(PacketType::LinkRequest, DestinationType::Single).as_slice(),
+        &mut local
+    ));
+    assert!(!classify_local_frame(
+        unsafe { &*ctx },
+        frame(PacketType::Data, DestinationType::Single).as_slice(),
+        &mut local
+    ));
+    assert!(!classify_local_frame(
+        unsafe { &*ctx },
+        frame(PacketType::LinkRequest, DestinationType::Plain).as_slice(),
+        &mut local
+    ));
+    assert_eq!(
+        unsafe { rs_handheld_voice_enable(ctx, 0) },
+        RsHandheldStatus::Ok
+    );
+    assert!(!classify_local_frame(
+        unsafe { &*ctx },
+        frame(PacketType::LinkRequest, DestinationType::Single).as_slice(),
+        &mut local
+    ));
+    assert!(
+        unsafe { (*ctx).node.unwrap().as_ref() }.is_own_destination(&identity.lxmf_delivery_hash())
+    );
+    assert!(!unsafe { (*ctx).node.unwrap().as_ref() }.is_own_destination(&dest));
+    assert_eq!(
+        unsafe { rs_handheld_voice_enable(ctx, 1) },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!(
+        unsafe { rs_handheld_rns_load_identity(ctx, &[0x98; 64]) },
+        RsHandheldStatus::Ok
+    );
+    assert!(!unsafe { (*ctx).voice_enabled });
+    assert!(!unsafe { (*ctx).node.unwrap().as_ref() }.is_own_destination(&dest));
     unsafe { rs_handheld_rns_shutdown(ctx) };
 }

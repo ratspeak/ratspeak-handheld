@@ -19,10 +19,14 @@ public:
     virtual ~RustPumpSink() = default;
     virtual void onAnnounceEvent(const rs_handheld_announce_event_t& ev, uint8_t ifaceId) = 0;
     virtual void onPropagationAnnounce(const rs_handheld_announce_event_t&, uint8_t) {}
+    virtual void onVoiceAnnounce(const rs_handheld_announce_event_t&, uint8_t) {}
     virtual void onRrcAnnounce(const rs_handheld_announce_event_t&, uint8_t) {}
     virtual void onLocalFrame(const rs_handheld_local_frame_t& f, uint8_t ifaceId) = 0;
     // An inbound path request for our own dest: re-announce as a PATH_RESPONSE (throttled).
     virtual void onOwnPathRequest(uint8_t ifaceId, const uint8_t tag[16], size_t tagLen) = 0;
+    virtual void onEndpointPathRequest(uint8_t ifaceId, const uint8_t tag[16], size_t tagLen, uint32_t endpoint) {
+        if (endpoint == 0) onOwnPathRequest(ifaceId, tag, tagLen);
+    }
 };
 
 // Raw-frame pump between the C++ interface drivers and the Rust transport node
@@ -72,6 +76,7 @@ public:
     bool interfaceOnline(uint8_t id) const { return id <= WIFI_AP_IFACE_ID && (liveTargets() & (1u << id)); }
     // Authoritative first-hop bitrate for a registered interface, or zero when unavailable.
     uint32_t interfaceBitrate(uint8_t ifaceId) const;
+    bool admitsVoice(uint8_t ifaceId, size_t rawLength, uint32_t intervalMs, uint8_t hops) const;
     uint32_t interfaceTxWaitMs(uint8_t ifaceId, uint32_t packets) const;
     uint32_t interfaceGeneration(uint8_t ifaceId);
     int lastLoraRssi() const;    // last RX RSSI from the LoRa driver (0 if no LoRa)

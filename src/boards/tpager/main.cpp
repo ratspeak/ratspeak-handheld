@@ -36,6 +36,7 @@
 #include "screens/LvHomeScreen.h"
 #include "screens/LvNodesScreen.h"
 #include "screens/LvMessagesScreen.h"
+#include "LvVoicePanel.h"
 #include "screens/LvMessageView.h"
 #include "screens/LvContactsScreen.h"
 #include "screens/LvSettingsScreen.h"
@@ -135,6 +136,7 @@ LvBootScreen lvBootScreen;
 LvHomeScreen lvHomeScreen;
 LvNodesScreen lvNodesScreen;
 LvMessagesScreen lvMessagesScreen;
+LvVoicePanel lvVoicePanel;
 LvContactsScreen lvContactsScreen;
 LvMessageView lvMessageView;
 LvSettingsScreen lvSettingsScreen;
@@ -916,6 +918,8 @@ void setup() {
     lvSettingsScreen.setService(&serviceClient);
     lvMessageView.setService(&serviceClient);
     lvMessagesScreen.setService(&serviceClient);
+    lvVoicePanel.begin(&serviceClient);
+    ui.setVoicePanel(&lvVoicePanel);
     lvContactsScreen.setService(&serviceClient);
     lvNodesScreen.setService(&serviceClient);
     lvHomeScreen.setService(&serviceClient);
@@ -1335,7 +1339,8 @@ void loop() {
     if (inputManager.hadLongPress()) {
         bool screenOwns = !lvQrOverlay.isVisible() && (ui.isBootMode() || !wheelNavbarMode);
         if (!(screenOwns && ui.handleLongPress())) {
-            powerMgr.forceScreenOff();
+            handheld::voice::VoiceInput::instance().cancel();
+        powerMgr.forceScreenOff();
         }
     }
 
@@ -1359,6 +1364,7 @@ void loop() {
             lvHelpOverlay.handleKey(evt);
         }
         // QR controls own navigation while the overlay is visible.
+        else if (lvVoicePanel.handleKey(evt)) {}
         else if (lvQrOverlay.isVisible()) {
             lvQrOverlay.handleKey(evt);
         }
@@ -1430,12 +1436,16 @@ void loop() {
         }
     }
 
+    lvVoicePanel.poll(powerMgr.isScreenOn() && serviceClient.available() && serviceClient.status().state==handheld::ServiceState::Running && !lvHelpOverlay.isVisible() && !lvQrOverlay.isVisible() && !lvPowerOffOverlay.isVisible());
+    if(lvVoicePanel.takeIncoming()) {powerMgr.activity();audio.playMessage();}
+    if(handheld::voice::active(serviceClient.status().voice.phase) && powerMgr.isScreenOn()) powerMgr.activity();
     audio.loop();
     powerMgr.loop();
     if (powerMgr.screenSleepGestureFired()) {
         if (lvPowerOffOverlay.isVisible()) {
             lvPowerOffOverlay.hide();
         }
+        handheld::voice::VoiceInput::instance().cancel();
         powerMgr.forceScreenOff();
     }
     if (millis() - lastStatusUpdate >= 100) {

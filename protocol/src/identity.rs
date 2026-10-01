@@ -86,6 +86,7 @@ pub unsafe extern "C" fn rs_handheld_rns_load_identity(
                 ctx.pending_ratchet = None;
                 ctx.pending_announce_wire = None;
                 ctx.own_path_request = None;
+                ctx.voice_enabled = false;
                 ctx.identity = Some(id);
                 RsHandheldStatus::Ok
             }

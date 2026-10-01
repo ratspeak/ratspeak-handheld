@@ -1253,6 +1253,17 @@ typedef struct {
     rs_handheld_voice_frame_t frames[4];
 } rs_handheld_voice_packet_t;
 
+/* Telephone endpoint defaults OFF, and identity replacement disables it. */
+rs_handheld_status_t rs_handheld_voice_destination(const uint8_t public_key[64], uint8_t out[16]);
+rs_handheld_status_t rs_handheld_voice_peer_destination(const uint8_t public_key[64], uint8_t out_delivery[16]);
+rs_handheld_status_t rs_handheld_voice_enable(rs_handheld_rns_t *ctx, uint32_t enabled);
+rs_handheld_status_t rs_handheld_voice_announce(const rs_handheld_rns_t *ctx, const uint8_t seed[5],
+    uint64_t order, uint32_t response, uint8_t *out, size_t capacity, size_t *out_len);
+/* Take the exact self-request tag and endpoint (0 delivery, 1 telephone). */
+rs_handheld_status_t rs_handheld_rns_take_own_path_request(rs_handheld_rns_t *ctx,
+    uint8_t out_tag[16], size_t *out_length, uint32_t *out_endpoint);
+#define RS_HANDHELD_INGEST_ANNOUNCE_VOICE 15
+
 #define RS_HANDHELD_VOICE_LINK_READY 1u
 #define RS_HANDHELD_VOICE_PEER_VERIFIED 2u
 #define RS_HANDHELD_VOICE_ANSWER 3u
@@ -1261,6 +1272,7 @@ typedef struct {
 #define RS_HANDHELD_VOICE_PTT 6u         /* argument=pressed; fresh edge only */
 #define RS_HANDHELD_VOICE_TICK 7u
 #define RS_HANDHELD_VOICE_END 8u
+#define RS_HANDHELD_VOICE_PROFILE_MEDIA 9u /* validated codec/mode/size; argument=profile */
 /* Event kinds: 1 send signal; 2 identify; 3 select profile; 4 prepare;
  * 5 reset; 6 open audio; 7 start receive; 8 dial tone; 9 terminate;
  * 10 close Link; 11 ring; 12 switch profile; 13 ignored signal;
@@ -1276,6 +1288,12 @@ rs_handheld_status_t rs_handheld_voice_codec_encode(uint8_t *storage, const int1
                                                  uint8_t *out, size_t capacity, size_t *out_len);
 rs_handheld_status_t rs_handheld_voice_codec_decode(uint8_t *storage, const uint8_t *payload, size_t length,
                                                  int16_t *pcm, size_t capacity, size_t *out_samples);
+/* Native frame streaming: 160/320 PCM16 samples and exactly 8 encoded bytes.
+ * No mode header here; validate/aggregate the negotiated full packet at the caller. */
+rs_handheld_status_t rs_handheld_voice_codec_encode_frame(uint8_t *storage, const int16_t *pcm, size_t samples,
+                                                       uint8_t *out, size_t capacity);
+rs_handheld_status_t rs_handheld_voice_codec_decode_frame(uint8_t *storage, const uint8_t *payload, size_t length,
+                                                       int16_t *pcm, size_t capacity);
 void rs_handheld_voice_codec_clear(uint8_t *storage);
 /* allowed: bit 0 admits VLBW, bit 1 admits LBW; only already qualified local
  * routes/codecs may be admitted. Every bool is 0 or 1. */

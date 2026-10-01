@@ -1,4 +1,5 @@
 #pragma once
+#include "voice/VoiceTypes.h"
 
 // Narrow protocol facade shared by the device frontends. Conversation reads
 // remain store-backed; protocol sends, status, and lifecycle pass through here.
@@ -47,6 +48,11 @@ public:
     virtual unsigned long lastAnnounceTime() const = 0;
     virtual uint32_t announceFilterCount() const = 0;
 
+    virtual void configureVoice(const handheld::voice::Settings&) {}
+    virtual handheld::voice::Status voiceStatus() const { return {}; }
+    virtual handheld::voice::Code voiceCommand(const handheld::voice::Command&) { return handheld::voice::Code::Off; }
+    virtual bool voiceDrained() const { return true; }
+    virtual void voiceStop() {}
     virtual void configurePropagation(const handheld::propagation::Settings&) {}
     virtual size_t propagationNodes(handheld::propagation::NodeView*, size_t) const { return 0; }
     virtual handheld::propagation::SyncView propagationStatus() const { return {}; }

@@ -22,6 +22,7 @@ public:
     void onExit() override;
 
     void setLXMFManager(LXMFManager* lxmf) { _lxmf = lxmf; }
+    void setVoiceCallback(std::function<void(const char*)> callback) {_voice=std::move(callback);}
     void setBackend(ProtocolBackend* backend) { _backend = backend; }
     void setMessageStore(MessageStore* store) { _store = store; }
     void setAnnounceManager(AnnounceManager* am) { _am = am; }
@@ -91,6 +92,7 @@ private:
     handheld::history::HistoryWindow _history;
     TextInput _input;
     BackCallback _backCb;
+    std::function<void(const char*)> _voice;
     UnreadUpdateCb _unreadCb;
     bool _needsRefresh = false;
 

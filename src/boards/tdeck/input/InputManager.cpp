@@ -1,4 +1,5 @@
 #include "InputManager.h"
+#include "voice/AudioCoordinator.h"
 #include "config/BoardConfig.h"
 
 void InputManager::begin(Keyboard* kb, Trackball* pointer, TouchInput* touch) {
@@ -14,7 +15,7 @@ void InputManager::update(bool dispatchReady) {
     if (_pointer) _pointer->update();
     _pointerInput.update(_pointer ? _pointer->lastDeltaX() : 0,
                          _pointer ? _pointer->lastDeltaY() : 0,
-                         _pointer && digitalRead(TBALL_CLICK) == LOW,
+                         _pointer && !handheld::voice::AudioCoordinator::instance().held() && digitalRead(TBALL_CLICK) == LOW,
                          screenOn, now, _speed, false);
     _activity = _pointerInput.activity;
     _strongActivity = _pointerInput.strongActivity;

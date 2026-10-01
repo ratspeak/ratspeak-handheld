@@ -76,6 +76,7 @@ pub(super) const INGEST_ANNOUNCE_OTHER: i32 = 11;
 pub(super) const INGEST_ANNOUNCE_PROPAGATION: i32 = 13;
 /// Accepted RRC hub announcement; never learned as an LXMF contact.
 pub(super) const INGEST_ANNOUNCE_RRC: i32 = 14;
+pub(super) const INGEST_ANNOUNCE_VOICE: i32 = 15;
 
 /// True iff the announce payload is for the `lxmf.delivery` aspect (name_hash match). Cheap parse;
 /// no signature check (the caller already validated for path-learning).
@@ -125,10 +126,13 @@ pub(super) fn classify_local_frame(
     let is_local = match h.flags.packet_type {
         PacketType::Proof => true, // C++ matches against its pending (hash, key) set
         PacketType::Data | PacketType::LinkRequest => {
-            let to_our_dest = ctx
-                .identity
-                .as_ref()
-                .is_some_and(|id| id.lxmf_delivery_hash() == h.destination_hash);
+            let to_our_dest = ctx.identity.as_ref().is_some_and(|id| {
+                h.flags.destination_type == DestinationType::Single
+                    && (id.lxmf_delivery_hash() == h.destination_hash
+                        || (ctx.voice_enabled
+                            && h.flags.packet_type == PacketType::LinkRequest
+                            && id.destination_hash(VOICE_DESTINATION_NAME) == h.destination_hash))
+            });
             let to_our_link = h.flags.destination_type == DestinationType::Link
                 && ctx
                     .link_ids
@@ -184,16 +188,15 @@ pub(super) fn classify_own_path_request(ctx: &RsHandheldRns, raw: &[u8]) -> Opti
     if tag.is_empty() {
         return None;
     }
-    if ctx
-        .identity
-        .as_ref()
-        .is_none_or(|id| id.lxmf_delivery_hash() != payload[..16])
-    {
+    let id = ctx.identity.as_ref()?;
+    let voice = ctx.voice_enabled && id.destination_hash(VOICE_DESTINATION_NAME) == payload[..16];
+    if !voice && id.lxmf_delivery_hash() != payload[..16] {
         return None;
     }
     let mut tag_bytes = [0u8; DESTINATION_LENGTH];
     tag_bytes[..tag.len()].copy_from_slice(tag);
     Some(OwnPathRequest {
+        voice,
         tag: tag_bytes,
         tag_len: tag.len(),
     })
@@ -395,6 +398,10 @@ pub unsafe extern "C" fn rs_handheld_rns_open_transport(
                 // Own-announce guard (see load_identity): cover the open-after-load order too.
                 if let Some(id) = &ctx.identity {
                     let _ = node.register_own_destination(id.lxmf_delivery_hash());
+                    if ctx.voice_enabled {
+                        let _ = node
+                            .register_own_destination(id.destination_hash(VOICE_DESTINATION_NAME));
+                    }
                 }
                 ctx.node = Some(NonNull::from(node));
                 RsHandheldStatus::Ok
@@ -489,7 +496,13 @@ pub unsafe extern "C" fn rs_handheld_rns_packet_ingest_with_mode(
                     );
                     let rrc =
                         is_named_announce(view.payload, view.header.flags.context_flag, "rrc.hub");
+                    let voice = is_named_announce(
+                        view.payload,
+                        view.header.flags.context_flag,
+                        VOICE_DESTINATION_NAME,
+                    );
                     if propagation
+                        || voice
                         || rrc
                         || is_lxmf_delivery_announce(view.payload, view.header.flags.context_flag)
                     {
@@ -497,6 +510,8 @@ pub unsafe extern "C" fn rs_handheld_rns_packet_ingest_with_mode(
                             action_code = INGEST_ANNOUNCE_PROPAGATION;
                         } else if rrc {
                             action_code = INGEST_ANNOUNCE_RRC;
+                        } else if voice {
+                            action_code = INGEST_ANNOUNCE_VOICE;
                         }
                         if !out_event.is_null() {
                             let ev = unsafe { &mut *out_event };
@@ -651,6 +666,9 @@ pub unsafe extern "C" fn rs_handheld_rns_take_own_path_request_tag(
             return RsHandheldStatus::ErrInvalidArg;
         }
         let ctx = unsafe { &mut *ctx };
+        if ctx.own_path_request.is_some_and(|request| request.voice) {
+            return RsHandheldStatus::ErrUnsupported;
+        }
         let Some(request) = ctx.own_path_request.take() else {
             return RsHandheldStatus::ErrNotReady;
         };

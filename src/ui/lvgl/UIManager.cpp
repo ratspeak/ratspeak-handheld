@@ -1,4 +1,5 @@
 #include "UIManager.h"
+#include "voice/VoiceInput.h"
 #include "Theme.h"
 #include "LvTheme.h"
 #include "LvInput.h"
@@ -43,6 +44,8 @@ void UIManager::begin() {
 
 void UIManager::setScreen(LvScreen* screen) {
     if (_currentLvScreen == screen) return;
+    handheld::voice::VoiceInput::instance().cancel();
+    if(_voicePanel && _voicePanel->visible()) _voicePanel->hide();
     const char* fromTitle = _currentLvScreen ? _currentLvScreen->title() : "none";
     const char* toTitle = screen ? screen->title() : "none";
     unsigned long startMs = PerfTrace::nowMs();
@@ -130,6 +133,7 @@ void UIManager::applyTheme() {
 }
 
 bool UIManager::handleKey(const KeyEvent& event) {
+    if(_voicePanel && _voicePanel->handleKey(event)) return true;
     if (_currentLvScreen) {
         return _currentLvScreen->handleKey(event);
     }

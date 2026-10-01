@@ -274,6 +274,12 @@ void LvMessageView::createUI(lv_obj_t* parent) {
         self->goBack();
     }, LV_EVENT_CLICKED, this);
 
+    if(!_rrcMode && _service && _service->status().voice.capabilities) {
+        lv_obj_set_width(_lblHeader,Theme::CONTENT_W-92);lv_obj_set_width(_lblHeaderMeta,Theme::CONTENT_W-92);
+        auto* voice=lv_btn_create(_header);lv_obj_add_style(voice,LvTheme::styleBtn(),0);lv_obj_set_size(voice,58,28);lv_obj_align(voice,LV_ALIGN_RIGHT_MID,-3,0);
+        auto* label=lv_label_create(voice);lv_label_set_text(label,"Voice");lv_obj_set_style_text_font(label,&lv_font_rsdeck_12,0);lv_obj_center(label);
+        lv_obj_add_event_cb(voice,[](lv_event_t* e) {auto& self=*static_cast<LvMessageView*>(lv_event_get_user_data(e));if(self._ui)self._ui->openVoice(self._peerHex.c_str());},LV_EVENT_CLICKED,this);
+    }
     // Message scroll area (middle, grows to fill)
     _msgScroll = lv_obj_create(parent);
     lv_obj_clear_flag(_msgScroll, LV_OBJ_FLAG_GESTURE_BUBBLE);
@@ -973,12 +979,12 @@ bool LvMessageView::handleKey(const KeyEvent& event) {
             return true;
         }
         if (event.up || event.left) {
-            _sendMenuIdx = (_sendMenuIdx + 2) % 3;
+            _sendMenuIdx = (_sendMenuIdx + sendMenuCount()-1) % sendMenuCount();
             updateSendModeMenu();
             return true;
         }
         if (event.down || event.right || event.tab) {
-            _sendMenuIdx = (_sendMenuIdx + 1) % 3;
+            _sendMenuIdx = (_sendMenuIdx + 1) % sendMenuCount();
             updateSendModeMenu();
             return true;
         }
@@ -1072,18 +1078,18 @@ bool LvMessageView::handleKey(const KeyEvent& event) {
 
 bool LvMessageView::handleLongPress() {
     if(_rrcTools.visible()) return true;
-    if (_inputText.empty()) return false;
+    if (_inputText.empty() && sendMenuCount()==3) return false;
     showSendModeMenu();
     return true;
 }
 
 void LvMessageView::showSendModeMenu() {
-    if (_inputText.empty() && !_rrcTools.visible()) return;
+    if (_inputText.empty() && !_rrcTools.visible() && sendMenuCount()==3) return;
     hideSendModeMenu();
     _sendMenuIdx = 0;
 
     _sendOverlay = lv_obj_create(lv_layer_top());
-    lv_obj_set_size(_sendOverlay,244,_rrcTools.visible()?std::min(Theme::CONTENT_H,268):118);
+    lv_obj_set_size(_sendOverlay,244,_rrcTools.visible()?std::min(Theme::CONTENT_H,268):34+28*sendMenuCount());
     lv_obj_center(_sendOverlay);
     lv_obj_add_style(_sendOverlay, LvTheme::styleModal(), 0);
     lv_obj_set_style_pad_all(_sendOverlay, 8, 0);
@@ -1092,11 +1098,11 @@ void LvMessageView::showSendModeMenu() {
     lv_obj_t* title = lv_label_create(_sendOverlay);
     lv_obj_set_style_text_font(title, &lv_font_rsdeck_12, 0);
     lv_obj_set_style_text_color(title, lv_color_hex(Theme::ACCENT), 0);
-    lv_label_set_text(title, _rrcTools.visible()?_rrcTools.title():"Send mode");
+    lv_label_set_text(title, _rrcTools.visible()?_rrcTools.title():"Chat actions");
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 0);
 
     static const char* labels[3] = {"Send normally", "Send as link", "Cancel"};
-    for (int i = 0; i < (_rrcTools.visible()?int(_rrcTools.count()):3); i++) {
+    for (int i = 0; i < (_rrcTools.visible()?int(_rrcTools.count()):sendMenuCount()); i++) {
         lv_obj_t* row = lv_obj_create(_sendOverlay);
         lv_obj_set_size(row, 220, 24);
         lv_obj_set_pos(row, 12, 24 + i * 28);
@@ -1116,7 +1122,7 @@ void LvMessageView::showSendModeMenu() {
         _sendLabels[i] = lv_label_create(row);
         lv_obj_set_style_text_font(_sendLabels[i], &lv_font_rsdeck_12, 0);
         if(_rrcTools.visible()) {char label[64];_rrcTools.label(i,label,sizeof label);lv_label_set_text(_sendLabels[i],label);}
-        else lv_label_set_text(_sendLabels[i], _rrcMode && i==1 ? "Send as action" : labels[i]);
+        else lv_label_set_text(_sendLabels[i],i==sendMenuCount()-1?"Cancel":sendMenuCount()==4 && i==2?"Live voice":_rrcMode && i==1?"Send as action":labels[i]);
         lv_obj_center(_sendLabels[i]);
         _sendRows[i] = row;
     }
@@ -1160,11 +1166,12 @@ void LvMessageView::chooseSendMode(int idx) {
         _rrcTools.selected=uint8_t(idx);activateRrcTool();return;
     }
     bool viaLink = idx == 1;
-    if (idx == 2) {
+    if (idx == sendMenuCount()-1) {
         hideSendModeMenu();
         return;
     }
     hideSendModeMenu();
+    if(sendMenuCount()==4 && idx==2) {if(_ui)_ui->openVoice(_peerHex.c_str());return;}
     if (_rrcMode) _rrcEmote=idx==1;
     sendCurrentMessage(viaLink);
     if (_rrcMode) _rrcEmote=false;

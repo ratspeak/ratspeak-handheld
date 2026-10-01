@@ -1,4 +1,5 @@
 #include "UIManager.h"
+#include "voice/VoiceInput.h"
 #include "util/PerfTrace.h"
 
 bool UIManager::begin() {
@@ -20,6 +21,8 @@ bool UIManager::begin() {
 }
 
 void UIManager::setScreen(Screen* screen) {
+    handheld::voice::VoiceInput::instance().cancel();
+    if(_voicePanel && _voicePanel->visible()) _voicePanel->hide();
     unsigned long traceStart = PerfTrace::nowMs();
     const char* fromTitle = _currentScreen ? _currentScreen->title() : "none";
     const char* toTitle = screen ? screen->title() : "none";
@@ -74,6 +77,7 @@ void UIManager::render() {
         _canvas.clearClipRect();
     }
 
+    if(_voicePanel) _voicePanel->render(_canvas);
     flush();
     _statusDirty = _contentDirty = _tabDirty = false;
 }
@@ -85,6 +89,7 @@ void UIManager::flush() {
 
 bool UIManager::handleKey(const KeyEvent& event) {
     markContentDirty();
+    if(_voicePanel && _voicePanel->handleKey(event)) return true;
     if (_currentScreen) {
         return _currentScreen->handleKey(event);
     }

@@ -10,6 +10,7 @@
 #include "protocol/RustWire.h"
 #include <Arduino.h>
 #include <string.h>
+#include <math.h>
 
 static_assert(RustLinkManager::MAX_LINKS <= RustIncomingDelivery::NoLink,
               "Receipt link-slot sentinel must not overlap a Link owner slot");
@@ -69,13 +70,14 @@ RustLinkManager::Link* RustLinkManager::findByLinkId(const uint8_t linkId[16]) {
     return nullptr;
 }
 
-RustLinkManager::Link* RustLinkManager::allocLink() {
+RustLinkManager::Link* RustLinkManager::allocLink(bool reclaimHalfOpen) {
     for (auto& l : _links) {
         auto& generation = _generations[&l - _links];
         if ((l.state == State::Free || l.state == State::Closed) && generation != UINT32_MAX) {
             ++generation; return &l;
         }
     }
+    if (!reclaimHalfOpen) return nullptr;
     // Pool full: reclaim the oldest responder half-open. Every initiator retry
     // arrives under a fresh link_id, so lost handshakes would otherwise pin all
     // slots for the full RespPending timeout (~366s) and deny link-path LXMF.
@@ -96,6 +98,7 @@ RustLinkManager::Link* RustLinkManager::allocLink() {
 
 void RustLinkManager::closeLink(Link& l) {
     const auto oldHandle = handle(l);
+    const bool notifyVoice = l.owner == Owner::Voice && l.state != State::Free && l.state != State::Closed;
     const bool notifyRrc = l.owner == Owner::Rrc && l.state != State::Free && l.state != State::Closed;
     if (l.owner == Owner::Delivery && _d.lxmf) _d.lxmf->incoming().dropLink(uint8_t(&l - _links), _generations[&l - _links]);
     if (l.state != State::Free && l.state != State::Closed) {
@@ -111,6 +114,8 @@ void RustLinkManager::closeLink(Link& l) {
     l.state = State::Closed;
     if (_request.sink && _request.slot == size_t(&l - _links)) failRequest(RequestError::LinkClosed);
     if (_rrcTx.link.slot == oldHandle.slot && _rrcTx.link.generation == oldHandle.generation) _rrcTx = {};
+    if (_voiceTx.link.slot == oldHandle.slot && _voiceTx.link.generation == oldHandle.generation) _voiceTx = {};
+    if (notifyVoice && _voiceSink) _voiceSink->onVoiceClosed(oldHandle);
     if (notifyRrc && _rrcSink) _rrcSink->onRrcClosed(oldHandle);
 }
 
@@ -133,6 +138,8 @@ void RustLinkManager::endAll() {
     _request = {};
     _rrcTx = {};
     _rrcSink = nullptr;
+    _voiceTx = {};
+    _voiceSink = nullptr;
     for (auto& l : _links) closeLink(l);
 }
 
@@ -225,7 +232,7 @@ bool RustLinkManager::ensureOwnedLink(const uint8_t dest[16], const uint8_t pubk
         closeLink(*l);  // peer went quiet past 2*keepalive; tear down and re-establish
         l = nullptr;
     }
-    if (!l) l = allocLink();
+    if (!l) l = allocLink(owner != Owner::Voice);
     if (!l) return false;  // no free slot
 
     uint8_t x25519[32], ed25519[32];
@@ -316,6 +323,11 @@ void RustLinkManager::onLrProof(Link& l, const rs_handheld_local_frame_t& f) {
     l.lastInboundMs = millis();  // activation + last_proof baseline (Link.py:434-438)
     updateKeepalive(l, l.rttSecs);
     Serial.println("[RUST-LINK] initiator link ACTIVE (LRRTT sent)");
+    if (l.owner == Owner::Voice && _voiceSink) {
+        const auto h = handle(l);
+        _voiceSink->onVoiceLink(h, false, l.iface, l.hops);
+        if (voiceActive(h)) _voiceSink->onVoiceIdentity(h, l.pubkey);
+    }
 }
 
 void RustLinkManager::updateKeepalive(Link& l, double rttSecs) {
@@ -384,19 +396,29 @@ void RustLinkManager::retryKeepalive(Link& l) {
 
 void RustLinkManager::onLinkRequest(const rs_handheld_local_frame_t& f, uint8_t ifaceId) {
     if (!_d.ourDestHash) return;
-    // Responder: a peer opened a link to our delivery dest.
+    const bool voice = _d.ourVoiceHash && !memcmp(f.destination_hash, _d.ourVoiceHash, 16);
+    if (!voice && memcmp(f.destination_hash, _d.ourDestHash, 16)) return;
+    if (voice) {
+        if (!_voiceSink || !_d.pump || !_d.pump->interfaceGeneration(ifaceId) ||
+            !_voiceSink->admitVoice(ifaceId, f.hops ? f.hops : 1)) return;
+        for (const auto& link : _links)
+            if (link.owner == Owner::Voice && link.state != State::Free && link.state != State::Closed) return;
+    }
+    // Exact destination selects both link-id binding and consumer ownership.
     uint8_t initX[32];
     if (rs_handheld_rns_link_request_parse(f.payload, f.payload_len, initX, nullptr, nullptr,
                                            nullptr) != RS_HANDHELD_OK) {
         return;
     }
     uint8_t linkId[16];
-    if (rs_handheld_rns_link_id(_d.ourDestHash, f.payload, f.payload_len, linkId) != RS_HANDHELD_OK) {
+    if (rs_handheld_rns_link_id(f.destination_hash, f.payload, f.payload_len, linkId) != RS_HANDHELD_OK) {
         return;
     }
-    Link* l = allocLink();
+    if (findByLinkId(linkId)) return;
+    Link* l = allocLink(!voice);
     if (!l) return;
     *l = Link{};
+    l->owner = voice ? Owner::Voice : Owner::Delivery;
     uint8_t respX[32];
     RustEntropy::fill(respX, sizeof(respX));
     uint8_t proof[RS_HANDHELD_LINK_PROOF_LEN];
@@ -415,12 +437,13 @@ void RustLinkManager::onLinkRequest(const rs_handheld_local_frame_t& f, uint8_t 
     l->state = State::RespPending;
     l->initiator = false;
     l->iface = ifaceId;
+    l->interfaceGeneration = _d.pump ? _d.pump->interfaceGeneration(ifaceId) : 0;
     l->haveKey = true;
     memcpy(l->linkId, linkId, 16);
     l->hops = f.hops ? f.hops : 1;  // responder establishment timeout scales per Link.py:207
     l->requestMs = millis();
     l->lastInboundMs = l->requestMs;
-    memcpy(l->peerDest, _d.ourDestHash, 16);  // responder routing placeholder, never an authenticated source
+    memcpy(l->peerDest, f.destination_hash, 16);  // responder routing placeholder, never an authenticated source
     if (rs_handheld_rns_link_register(_d.ctx, linkId) != RS_HANDHELD_OK) {
         closeLink(*l);
         return;
@@ -439,12 +462,17 @@ void RustLinkManager::onLinkData(Link& l, const rs_handheld_local_frame_t& f) {
         f.payload[0] == 0xFF) {
         return;
     }
-    l.lastInboundMs = millis();
-    if (l.initiator) l.keepalivePending = false; // peer activity makes an unsent request unnecessary
-    if (l.state == State::Stale) l.state = State::Active;  // any inbound revives (Link.py:983-984)
+    const auto credit = [&l] {
+        l.lastInboundMs = millis();
+        if (l.initiator) l.keepalivePending = false;
+        if (l.state == State::Stale) l.state = State::Active;
+    };
+    // Voice credits only accepted protocol keepalives or authenticated traffic.
+    // Invalid ciphertext must not extend an audio session's lifetime.
+    if (l.owner != Owner::Voice) credit();
 
     if (f.context == RustWire::CTX_LRRTT) {
-        if (l.initiator) return;  // Link.py:1057: only the responder consumes LRRTT
+        if (l.initiator || (l.owner == Owner::Voice && l.state != State::RespPending)) return;
         // Responder activation: decrypt the initiator's RTT and take
         // max(measured, received) for the keepalive interval (Link.py:534-541).
         uint8_t pt[32];
@@ -453,15 +481,24 @@ void RustLinkManager::onLinkData(Link& l, const rs_handheld_local_frame_t& f) {
                                          &ptLen) == RS_HANDHELD_OK) {
             double received = 0;
             double measured = (millis() - l.requestMs) / 1000.0;
+            if (l.owner == Owner::Voice && (!unpackF64(pt, ptLen, &received) || !isfinite(received) || received < 0)) return;
             if (unpackF64(pt, ptLen, &received) && received > measured) measured = received;
+            if (l.owner == Owner::Voice) credit();
             l.rttSecs = measured;
             l.state = State::Active;
             updateKeepalive(l, l.rttSecs);
             Serial.println("[RUST-LINK] responder link ACTIVE (LRRTT received)");
+            if (l.owner == Owner::Voice && _voiceSink)
+                _voiceSink->onVoiceLink(handle(l), true, l.iface, l.hops);
         }
         return;
     }
     if (f.context == RustWire::CTX_KEEPALIVE) {
+        if (l.owner == Owner::Voice) {
+            if ((l.state != State::Active && l.state != State::Stale) || f.payload_len != 1 ||
+                f.payload[0] != (l.initiator ? 0xFE : 0xFF)) return;
+            credit();
+        }
         // Responder echoes 0xFE to a 0xFF request, plaintext (Link.py:1149-1153,
         // Packet.py:205-208); an inbound 0xFE is liveness credit only.
         if (!l.initiator && f.payload_len == 1 && f.payload[0] == 0xFF) {
@@ -482,6 +519,28 @@ void RustLinkManager::onLinkData(Link& l, const rs_handheld_local_frame_t& f) {
             closeLink(l);
         }
         return;
+    }
+    if (l.owner == Owner::Voice) {
+        if ((l.state != State::Active && l.state != State::Stale) || !_voiceSink) return;
+        if (f.context == RustWire::CTX_LINKIDENTIFY && !l.initiator && !l.identified) {
+            uint8_t plaintext[128], publicKey[64]; size_t length = 0;
+            if (rs_handheld_rns_link_decrypt(l.sessionKey, f.payload, f.payload_len,
+                    plaintext, sizeof plaintext, &length) == RS_HANDHELD_OK &&
+                rs_handheld_rns_link_verify_identification(l.linkId, plaintext, length, publicKey) == RS_HANDHELD_OK) {
+                credit();
+                memcpy(l.pubkey, publicKey, sizeof l.pubkey);
+                l.identified = true; // install before callback: a repeated identity cannot replace it
+                _voiceSink->onVoiceIdentity(handle(l), l.pubkey);
+            }
+        } else if (f.context == RustWire::CTX_NONE && (l.initiator || l.identified)) {
+            uint8_t plaintext[RS_HANDHELD_LINK_MDU]; size_t length = 0;
+            if (rs_handheld_rns_link_decrypt(l.sessionKey, f.payload, f.payload_len,
+                    plaintext, sizeof plaintext, &length) == RS_HANDHELD_OK) {
+                credit();
+                _voiceSink->onVoicePacket(handle(l), plaintext, length);
+            }
+        }
+        return; // ProveNone; no Resource, delivery receipt or LXMF plaintext path
     }
     if (f.context == RustWire::CTX_RESOURCE_ADV || f.context == RustWire::CTX_RESOURCE_REQ ||
         f.context == RustWire::CTX_RESOURCE_ICL || f.context == RustWire::CTX_RESOURCE_RCL ||
@@ -554,7 +613,7 @@ void RustLinkManager::onLocalFrame(const rs_handheld_local_frame_t& f, uint8_t i
     // LRPROOF (PROOF + Lrproof) matches an initiator link by link_id (the frame dest).
     if (f.packet_type == RustWire::PT_PROOF && f.context == RustWire::CTX_LRPROOF) {
         Link* l = findByLinkId(f.destination_hash);
-        if (l && l->iface == ifaceId && (l->owner != Owner::Rrc ||
+        if (l && l->iface == ifaceId && (l->owner == Owner::Delivery ||
             (_d.pump && _d.pump->interfaceGeneration(ifaceId) == l->interfaceGeneration)) && l->initiator && l->state == State::InitRequested)
             onLrProof(*l, f);
         return;
@@ -562,14 +621,14 @@ void RustLinkManager::onLocalFrame(const rs_handheld_local_frame_t& f, uint8_t i
     // Resource delivery proof rides a PROOF packet (Python Packet.py:196) addressed to the link.
     if (f.packet_type == RustWire::PT_PROOF && f.context == RustWire::CTX_RESOURCE_PRF) {
         Link* l = findByLinkId(f.destination_hash);
-        if (l && l->iface == ifaceId && (l->owner != Owner::Rrc ||
+        if (l && l->iface == ifaceId && (l->owner == Owner::Delivery ||
             (_d.pump && _d.pump->interfaceGeneration(ifaceId) == l->interfaceGeneration))) onLinkData(*l, f);
         return;
     }
     // Link DATA (LRRTT / keepalive / resource / link-LXMF) routed by link_id.
     if (f.packet_type == RustWire::PT_DATA) {
         Link* l = findByLinkId(f.destination_hash);
-        if (l && l->iface == ifaceId && (l->owner != Owner::Rrc ||
+        if (l && l->iface == ifaceId && (l->owner == Owner::Delivery ||
             (_d.pump && _d.pump->interfaceGeneration(ifaceId) == l->interfaceGeneration))) onLinkData(*l, f);
     }
 }
@@ -748,9 +807,10 @@ size_t RustLinkManager::activeCount() const {
 void RustLinkManager::loop() {
     if (_request.sink && !requestLive()) failRequest(RequestError::Timeout);
     if (_rrcTx.sequence && !rrcTxLive()) rrcReceipt({_rrcTx.sequence, RrcReceiptSlot}, handheld::TxReceiptEvent::Dropped);
+    if (_voiceTx.sequence && !voiceTxLive()) voiceReceipt({_voiceTx.sequence, VoiceReceiptSlot}, handheld::TxReceiptEvent::Dropped);
     unsigned long now = millis();
     for (auto& l : _links) {
-        if (l.owner == Owner::Rrc && l.state != State::Free && l.state != State::Closed &&
+        if (l.owner != Owner::Delivery && l.state != State::Free && l.state != State::Closed &&
             (!_d.pump || !l.interfaceGeneration || _d.pump->interfaceGeneration(l.iface) != l.interfaceGeneration)) {
             closeLink(l); continue;
         }
@@ -790,7 +850,7 @@ void RustLinkManager::loop() {
         } else if (l.state == State::RespPending) {
             // Responder awaiting LRRTT: Link.py:207 establishment timeout
             // (per-hop x max(1,hops) + KEEPALIVE), not the stale sweep.
-            unsigned long timeout =
+            unsigned long timeout = l.owner == Owner::Voice ? 30000 :
                 ESTABLISHMENT_TIMEOUT_PER_HOP_MS * (l.hops < 1 ? 1 : l.hops) + KEEPALIVE_MS;
             if (now - l.requestMs > timeout) {
                 Serial.println("[RUST-LINK] responder link never activated; closing");
@@ -910,5 +970,97 @@ void RustLinkManager::closeRrc(Handle h) {
     auto& l = _links[h.slot];
     if (l.owner != Owner::Rrc || l.state == State::Closed || l.state == State::Free) return;
     if (rrcActive(h)) sendTeardown(l);
+    closeLink(l);
+}
+
+const RustLinkManager::Link* RustLinkManager::voiceLink(Handle h) const {
+    if (!h.valid() || _generations[h.slot] != h.generation) return nullptr;
+    const auto& l = _links[h.slot];
+    if (l.owner != Owner::Voice || l.state == State::Closed || l.state == State::Free ||
+        !_d.pump || !l.interfaceGeneration || _d.pump->interfaceGeneration(l.iface) != l.interfaceGeneration)
+        return nullptr;
+    return &l;
+}
+RustLinkManager::Link* RustLinkManager::voiceLink(Handle h) {
+    return const_cast<Link*>(static_cast<const RustLinkManager*>(this)->voiceLink(h));
+}
+bool RustLinkManager::voiceActive(Handle h) const {
+    const auto* l = voiceLink(h);
+    return l && l->state == State::Active && l->haveKey;
+}
+bool RustLinkManager::voiceIdentified(Handle h) const {
+    const auto* l = voiceLink(h);
+    return voiceActive(h) && l->identified;
+}
+bool RustLinkManager::openVoice(const uint8_t dest[16], const uint8_t pubkey[64],
+                               const rs_handheld_route_t& route, Handle& out) {
+    out = {};
+    if (!_voiceSink || !_d.pump || !_d.pump->interfaceGeneration(route.interface_id)) return false;
+    uint8_t derived[16];
+    if (rs_handheld_voice_destination(pubkey, derived) != RS_HANDHELD_OK || memcmp(derived, dest, 16)) return false;
+    for (const auto& l : _links)
+        if (l.owner == Owner::Voice && l.state != State::Free && l.state != State::Closed &&
+            (!l.initiator || memcmp(l.peerDest, dest, 16))) return false;
+    ensureOwnedLink(dest, pubkey, route, Owner::Voice);
+    auto* l = findByDest(dest, Owner::Voice);
+    if (!l) return false;
+    out = handle(*l);
+    return voiceActive(out);
+}
+bool RustLinkManager::offerVoice(Handle h, bool identify, const uint8_t* plaintext, size_t length,
+                                uint32_t token, uint64_t born, uint32_t wait) {
+    auto* l = voiceLink(h);
+    if (!l || !voiceActive(h) || _voiceTx.sequence || _voiceSequence == UINT32_MAX || !wait ||
+        (identify && !l->initiator) || (!identify && l->initiator && !l->identified)) return false;
+    uint8_t raw[500]; size_t rawLength = 0;
+    if (!buildLinkPacket(*l, identify ? RustWire::CTX_LINKIDENTIFY : RustWire::CTX_NONE,
+                        plaintext, length, raw, sizeof raw, rawLength)) return false;
+    handheld::TxLease lease;
+    if (!_d.pump->captureLeaseAt(l->iface, raw, rawLength, born, wait, lease)) return false;
+    const auto sequence = ++_voiceSequence;
+    _voiceTx = {h, born, wait, sequence, token, identify};
+    lease.setReceipt({sequence, VoiceReceiptSlot});
+    const auto offered = _d.pump->offerReceipt(raw, rawLength, lease);
+    const bool accepted = offered == handheld::TxOffer::Started || offered == handheld::TxOffer::Queued;
+    if (!accepted && _voiceTx.sequence == sequence) _voiceTx = {};
+    return accepted;
+}
+bool RustLinkManager::identifyVoice(Handle h, uint64_t born, uint32_t wait) {
+    if (voiceIdentified(h)) return true;
+    auto* l = voiceLink(h);
+    if (!l || !voiceActive(h) || !l->initiator) return false;
+    uint8_t plaintext[128];
+    if (rs_handheld_rns_link_identify(_d.ctx, l->linkId, plaintext) != RS_HANDHELD_OK) return false;
+    return offerVoice(h, true, plaintext, sizeof plaintext, 0, born, wait);
+}
+bool RustLinkManager::sendVoice(Handle h, const uint8_t* plaintext, size_t length,
+                               uint32_t token, uint64_t born, uint32_t wait) {
+    return offerVoice(h, false, plaintext, length, token, born, wait);
+}
+bool RustLinkManager::voiceTxLive() const {
+    if (!_voiceTx.sequence || !voiceActive(_voiceTx.link)) return false;
+    if ((_voiceTx.token & 0x80000000u) && (!_voiceSink || !_voiceSink->voiceMediaEligible(_voiceTx.link,_voiceTx.token))) return false;
+    const uint64_t now = _d.clock ? _d.clock->nowMs() : uint64_t(millis());
+    return now >= _voiceTx.bornMs && now - _voiceTx.bornMs < _voiceTx.waitMs;
+}
+bool RustLinkManager::voiceReceipt(handheld::TxReceipt receipt, handheld::TxReceiptEvent event) {
+    if (receipt.slot != VoiceReceiptSlot || !_voiceTx.sequence || receipt.generation != _voiceTx.sequence) return false;
+    if (event == handheld::TxReceiptEvent::Validate) return voiceTxLive();
+    const auto tx = _voiceTx;
+    const bool started = event == handheld::TxReceiptEvent::Started && voiceTxLive();
+    _voiceTx = {};
+    if (tx.identify) { if (started) _links[tx.link.slot].identified = true; }
+    else if (_voiceSink) _voiceSink->onVoiceTransmit(tx.link, tx.token, started);
+    return true;
+}
+void RustLinkManager::cancelVoiceMedia(Handle h) {
+    if (_voiceTx.link.slot == h.slot && _voiceTx.link.generation == h.generation && (_voiceTx.token & 0x80000000u))
+        voiceReceipt({_voiceTx.sequence, VoiceReceiptSlot}, handheld::TxReceiptEvent::Dropped);
+}
+void RustLinkManager::closeVoice(Handle h) {
+    if (!h.valid() || _generations[h.slot] != h.generation) return;
+    auto& l = _links[h.slot];
+    if (l.owner != Owner::Voice || l.state == State::Closed || l.state == State::Free) return;
+    if (voiceActive(h)) sendTeardown(l);
     closeLink(l);
 }

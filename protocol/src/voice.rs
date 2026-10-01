@@ -229,6 +229,85 @@ pub unsafe extern "C" fn rs_handheld_voice_codec_decode(
         }
     })
 }
+/// Encode one native frame (160/320 samples to 8 bytes), without a mode header.
+/// The worker aggregates exactly the negotiated profile's frame count.
+/// # Safety
+/// Same exclusive initialized storage and disjoint buffer contract as encode.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rs_handheld_voice_codec_encode_frame(
+    storage: *mut u8,
+    pcm: *const i16,
+    samples: usize,
+    out: *mut u8,
+    capacity: usize,
+) -> RsHandheldStatus {
+    guard(|| {
+        if !aligned::<CodecStorage>(storage) || pcm.is_null() || out.is_null() {
+            return RsHandheldStatus::ErrInvalidArg;
+        }
+        let state = unsafe { &mut *storage.cast::<CodecStorage>() };
+        if state.magic != CODEC_MAGIC || state.failed != 0 {
+            return RsHandheldStatus::ErrNotReady;
+        }
+        let native = unsafe { state.native.assume_init_mut() };
+        if samples != native.mode().samples() {
+            return RsHandheldStatus::ErrInvalidArg;
+        }
+        if capacity < native.mode().bytes() {
+            return RsHandheldStatus::ErrCapacity;
+        }
+        match native.encode(
+            unsafe { core::slice::from_raw_parts(pcm, samples) },
+            unsafe { core::slice::from_raw_parts_mut(out, 8) },
+        ) {
+            Ok(()) => RsHandheldStatus::Ok,
+            Err(_) => {
+                state.failed = 1;
+                RsHandheldStatus::ErrInternal
+            }
+        }
+    })
+}
+/// Decode one native eight-byte frame to the negotiated 160/320 sample window.
+/// # Safety
+/// Same exclusive initialized storage and disjoint buffer contract as decode.
+/// Caller validates the aggregate packet's codec, mode and full length first.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rs_handheld_voice_codec_decode_frame(
+    storage: *mut u8,
+    payload: *const u8,
+    length: usize,
+    pcm: *mut i16,
+    capacity: usize,
+) -> RsHandheldStatus {
+    guard(|| {
+        if !aligned::<CodecStorage>(storage) || payload.is_null() || pcm.is_null() {
+            return RsHandheldStatus::ErrInvalidArg;
+        }
+        let state = unsafe { &mut *storage.cast::<CodecStorage>() };
+        if state.magic != CODEC_MAGIC || state.failed != 0 {
+            return RsHandheldStatus::ErrNotReady;
+        }
+        let native = unsafe { state.native.assume_init_mut() };
+        if length != 8 {
+            return RsHandheldStatus::ErrInvalidArg;
+        }
+        let samples = native.mode().samples();
+        if capacity < samples {
+            return RsHandheldStatus::ErrCapacity;
+        }
+        match native.decode(
+            unsafe { core::slice::from_raw_parts(payload, length) },
+            unsafe { core::slice::from_raw_parts_mut(pcm, samples) },
+        ) {
+            Ok(()) => RsHandheldStatus::Ok,
+            Err(_) => {
+                state.failed = 1;
+                RsHandheldStatus::ErrInternal
+            }
+        }
+    })
+}
 /// # Safety
 /// `storage` is exclusive aligned writable storage of at least codec_size bytes.
 /// No encoder/decoder may retain access. Clears PCM histories before owner free.
@@ -381,6 +460,10 @@ pub unsafe extern "C" fn rs_handheld_voice_session_apply(
             5 if extra <= 1 => session.audio_ready(argument, extra == 1),
             6 if argument <= 1 => session.set_transmitting(argument == 1, now_ms),
             7 => session.tick(now_ms),
+            9 => match Profile::from_wire(argument) {
+                Some(profile) => session.receive_profile_media(profile, now_ms),
+                None => return RsHandheldStatus::ErrInvalidArg,
+            },
             8 => match end_reason(argument) {
                 Some(reason) => session.end(reason),
                 None => return RsHandheldStatus::ErrInvalidArg,
@@ -534,6 +617,120 @@ mod tests {
     impl Drop for Storage {
         fn drop(&mut self) {
             unsafe { dealloc(self.pointer, self.layout) };
+        }
+    }
+    #[test]
+    fn streamed_native_frames_match_whole_packet_and_preserve_error_outputs() {
+        for (profile, count, native) in [(0x20, 2560, 320), (0x30, 1600, 160)] {
+            let batch = Storage::new(
+                rs_handheld_voice_codec_size(),
+                rs_handheld_voice_codec_align(),
+            );
+            let stream = Storage::new(
+                rs_handheld_voice_codec_size(),
+                rs_handheld_voice_codec_align(),
+            );
+            let pcm: Vec<i16> = (0..count)
+                .map(|n| ((n % 81) as i32 * 300 - 12000) as i16)
+                .collect();
+            let mut expected = [0; 81];
+            let mut actual = [0; 81];
+            let mut length = 0;
+            unsafe {
+                assert_eq!(
+                    rs_handheld_voice_codec_init(batch.pointer, batch.layout.size(), profile),
+                    RsHandheldStatus::Ok
+                );
+                assert_eq!(
+                    rs_handheld_voice_codec_init(stream.pointer, stream.layout.size(), profile),
+                    RsHandheldStatus::Ok
+                );
+                assert_eq!(
+                    rs_handheld_voice_codec_encode(
+                        batch.pointer,
+                        pcm.as_ptr(),
+                        count,
+                        expected.as_mut_ptr(),
+                        81,
+                        &mut length
+                    ),
+                    RsHandheldStatus::Ok
+                );
+                for (index, frame) in pcm.chunks_exact(native).enumerate() {
+                    assert_eq!(
+                        rs_handheld_voice_codec_encode_frame(
+                            stream.pointer,
+                            frame.as_ptr(),
+                            native - 1,
+                            actual.as_mut_ptr().add(1 + index * 8),
+                            8
+                        ),
+                        RsHandheldStatus::ErrInvalidArg
+                    );
+                    assert_eq!(
+                        rs_handheld_voice_codec_encode_frame(
+                            stream.pointer,
+                            frame.as_ptr(),
+                            native,
+                            actual.as_mut_ptr().add(1 + index * 8),
+                            8
+                        ),
+                        RsHandheldStatus::Ok
+                    );
+                }
+                actual[0] = expected[0];
+                assert_eq!(&actual[..length], &expected[..length]);
+                let mut decoded = vec![0; count];
+                let mut out_count = 0;
+                assert_eq!(
+                    rs_handheld_voice_codec_decode(
+                        batch.pointer,
+                        expected.as_ptr(),
+                        length,
+                        decoded.as_mut_ptr(),
+                        count,
+                        &mut out_count
+                    ),
+                    RsHandheldStatus::Ok
+                );
+                let mut streamed = vec![123; count];
+                for (index, frame) in streamed.chunks_exact_mut(native).enumerate() {
+                    assert_eq!(
+                        rs_handheld_voice_codec_decode_frame(
+                            stream.pointer,
+                            actual.as_ptr().add(1 + index * 8),
+                            7,
+                            frame.as_mut_ptr(),
+                            native
+                        ),
+                        RsHandheldStatus::ErrInvalidArg
+                    );
+                    assert!(frame.iter().all(|v| *v == 123));
+                    assert_eq!(
+                        rs_handheld_voice_codec_decode_frame(
+                            stream.pointer,
+                            actual.as_ptr().add(1 + index * 8),
+                            8,
+                            frame.as_mut_ptr(),
+                            native - 1
+                        ),
+                        RsHandheldStatus::ErrCapacity
+                    );
+                    assert_eq!(
+                        rs_handheld_voice_codec_decode_frame(
+                            stream.pointer,
+                            actual.as_ptr().add(1 + index * 8),
+                            8,
+                            frame.as_mut_ptr(),
+                            native
+                        ),
+                        RsHandheldStatus::Ok
+                    );
+                }
+                assert_eq!(decoded, streamed);
+                rs_handheld_voice_codec_clear(batch.pointer);
+                rs_handheld_voice_codec_clear(stream.pointer);
+            }
         }
     }
     #[test]

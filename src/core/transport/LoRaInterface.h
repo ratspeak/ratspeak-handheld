@@ -74,6 +74,9 @@ public:
     }
     unsigned long splitRxTimeoutMs() const { return _splitRxTimeoutMs; }
     float singleFrameAirtimeMs() const { return _singleFrameAirtimeMs; }
+    // Voice uses the exact current physical frame length, including the RNode
+    // header, against the existing 25% pacing budget with 5% control headroom.
+    bool admitsVoice(size_t rawLength, uint32_t intervalMs, uint8_t hops) const;
     uint32_t bitrate() const { return _bitrate; }
     // Conservative local queue + packet pacing allowance, for protocol retry timers.
     uint32_t txWaitBudgetMs(uint32_t packets) const;

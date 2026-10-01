@@ -126,6 +126,8 @@ bool ProtocolRuntime::startEngines(FlashStore* flash, SDStore* sd, MessageStore*
     ld.lxmf = &_lxmf;
     ld.resources = &_resources;
     ld.ourDestHash = _destHash;
+    rs_handheld_voice_destination(_publicKey,_voiceHash);
+    ld.ourVoiceHash = _voiceHash;
     _links.begin(ld);
 
     RustResourceEngine::Deps rd;
@@ -154,6 +156,14 @@ bool ProtocolRuntime::startEngines(FlashStore* flash, SDStore* sd, MessageStore*
     ed.propagation = &_propagationNodes;
     if (!_lxmf.begin(ed)) return false;
     _rrc.begin({_ctx, &_clock, &_pump, &_links, store, _identityHash});
+    _voice.begin({_ctx,&_clock,&_pump,&_links,&_keymap,&_voiceAudio,this,
+        [](void* context,const uint8_t peer[16]) {
+            const auto* runtime=static_cast<ProtocolRuntime*>(context);
+            if(!runtime->_announceMgr) return false;
+            for(const auto& node:runtime->_announceMgr->nodes())
+                if(node.saved && node.hash.size()==16 && !memcmp(node.hash.data(),peer,16)) return true;
+            return false;
+        }});
     _enginesUp = true;
     return true;
 }
@@ -284,11 +294,13 @@ void ProtocolRuntime::stopReceive() {
     _lxmf.incoming().stopAdmissions();
     _lxmf.stopAdmissions();
     _rrc.stop();
+    _voice.stop();
 }
 void ProtocolRuntime::pollReceive() {
     handheld::assertDeviceOwner();
     _lxmf.loop();
     _rrc.loop();
+    _voice.loop(handheld::voice::VoiceWorker::stopEpoch());
 }
 
 void ProtocolRuntime::beginMaintenance(LoRaInterface& radio) {
@@ -345,6 +357,8 @@ void ProtocolRuntime::end() {
     _enginesUp = false;
     _resources.endAll();
     _rrc.end();
+    _voice.end();
+    _voiceEnabled=false;_nextVoiceAnnounce=0;
     _links.endAll();
     _propagationNodes.reset();
     _nextPropagationPoll = 0;
@@ -395,6 +409,7 @@ void ProtocolRuntime::loop() {
         _lxmf.loop();
         _links.loop();
         _rrc.loop();
+        _voice.loop(handheld::voice::VoiceWorker::stopEpoch());
         _resources.loop();
     }
     // TX is asynchronous. Do not hold the owner in flash while the modem
@@ -402,6 +417,12 @@ void ProtocolRuntime::loop() {
     if (!pollRadioBeforeBlockingWork()) return;
     _ratchets.flushPeers(_ctx, millis(), false);
     _keymap.loop(_clock.nowMs());
+    if (_enginesUp && _voiceEnabled && !_maintenanceRadio && _clock.nowMs() >= _nextVoiceAnnounce) {
+        uint8_t raw[200], seed[5];size_t length=0;RustEntropy::fill(seed,sizeof seed);
+        const bool sent=rs_handheld_voice_announce(_ctx,seed,RustClock::epochSecs(),0,raw,sizeof raw,&length)==RS_HANDHELD_OK && _pump.sendAll(raw,length);
+        _nextVoiceAnnounce=_clock.nowMs()+(sent?10800000:5000);
+    }
+
 }
 
 bool ProtocolRuntime::persistData() {
@@ -512,6 +533,13 @@ void ProtocolRuntime::onPropagationAnnounce(const rs_handheld_announce_event_t& 
     const auto generation = _pump.interfaceOnline(route.interface_id) ? _pump.interfaceGeneration(route.interface_id) : 0;
     _propagationNodes.learn(event.destination_hash, event.public_key, metadata, route, generation, now);
     _nextPropagationPoll = 0;
+}
+
+void ProtocolRuntime::onVoiceAnnounce(const rs_handheld_announce_event_t& event, uint8_t) {
+    if (!_enginesUp) return;
+    // The path table owns this aspect and its key. Durable KnownDestinations
+    // remains an LXMF delivery table; voice must not create phantom contacts.
+    (void)event;
 }
 
 void ProtocolRuntime::onRrcAnnounce(const rs_handheld_announce_event_t& event, uint8_t) {
@@ -680,8 +708,12 @@ ProtocolRuntime::AnnounceResult ProtocolRuntime::emitAnnounce(const uint8_t* app
 }
 
 void ProtocolRuntime::onOwnPathRequest(uint8_t ifaceId, const uint8_t tag[16], size_t tagLen) {
+    onEndpointPathRequest(ifaceId, tag, tagLen, 0);
+}
+
+void ProtocolRuntime::onEndpointPathRequest(uint8_t ifaceId, const uint8_t tag[16], size_t tagLen, uint32_t endpoint) {
     handheld::assertDeviceOwner();
-    if (_maintenanceRadio || !_ctx || !_identityLoaded || ifaceId >= PATH_RESPONSE_INTERFACES ||
+    if (endpoint > 1 || _maintenanceRadio || !_ctx || !_identityLoaded || ifaceId >= PATH_RESPONSE_INTERFACES ||
         !tag || tagLen == 0 || tagLen > 16) return;
     const uint32_t generation = _pump.interfaceGeneration(ifaceId);
     if (!generation) return;
@@ -699,10 +731,11 @@ void ProtocolRuntime::onOwnPathRequest(uint8_t ifaceId, const uint8_t tag[16], s
         // A fresh forthcoming broadcast serves this physical interface's burst.
         // A cached replay may already have been seen: retain a fresh followup too.
         // Rust's bounded tag cache can evict, so its duplicate gate is not a substitute.
-        if (response.replay && !response.followupTagLen &&
-            (response.tagLen != tagLen || memcmp(response.tag, tag, tagLen))) {
+        if ((response.replay || response.endpoint != endpoint) && !response.followupTagLen &&
+            (response.endpoint != endpoint || response.tagLen != tagLen || memcmp(response.tag, tag, tagLen))) {
             memcpy(response.followupTag, tag, tagLen);
             response.followupTagLen = uint8_t(tagLen);
+            response.followupEndpoint = uint8_t(endpoint);
             response.followupBornMs = now;
         }
         // Never replace the first tag, bytes, generation or either original deadline.
@@ -713,7 +746,7 @@ void ProtocolRuntime::onOwnPathRequest(uint8_t ifaceId, const uint8_t tag[16], s
     // A new request may authorize a new output generation; existing pending work cannot.
     const PathResponse* cached = nullptr;
     for (const auto& candidate : _pathResponses) {
-        if (candidate.rawLen && candidate.tagLen == tagLen &&
+        if (candidate.rawLen && candidate.endpoint == endpoint && candidate.tagLen == tagLen &&
             !memcmp(candidate.tag, tag, tagLen) && now >= candidate.packetBornMs &&
             now - candidate.packetBornMs < PATH_RESPONSE_MAX_AGE_MS) {
             cached = &candidate;
@@ -739,6 +772,7 @@ void ProtocolRuntime::onOwnPathRequest(uint8_t ifaceId, const uint8_t tag[16], s
     }
     memcpy(response.tag, tag, tagLen);
     response.tagLen = uint8_t(tagLen);
+    response.endpoint = uint8_t(endpoint);
     response.generation = generation;
     response.readyMs = now + PATH_REQUEST_GRACE_MS;
     if (response.hasLastSent && response.lastSentMs + PATH_RESPONSE_INTERVAL_MS > response.readyMs)
@@ -756,6 +790,7 @@ void ProtocolRuntime::promotePathResponse(uint8_t ifaceId, uint64_t now) {
     }
     memcpy(response.tag, response.followupTag, response.followupTagLen);
     response.tagLen = response.followupTagLen;
+    response.endpoint = response.followupEndpoint;
     response.bornMs = response.followupBornMs;
     response.followupTagLen = 0;
     response.rawLen = 0;
@@ -790,7 +825,7 @@ void ProtocolRuntime::pollPathResponses() {
         promotePathResponse(id, now);
         if (!response.pending || now < response.readyMs) continue;
         if (!response.rawLen) {
-            if (built) {
+            if (built && built->endpoint == response.endpoint) {
                 memcpy(response.raw, built->raw, built->rawLen);
                 response.rawLen = built->rawLen;
             } else {
@@ -802,7 +837,13 @@ void ProtocolRuntime::pollPathResponses() {
                     continue;
                 }
                 size_t rawLen = 0;
-                const auto result = buildAnnouncePacket(_lastAppDataLen ? _lastAppData : nullptr,
+                AnnounceResult result;
+                if (response.endpoint == 1) {
+                    uint8_t seed[5]; RustEntropy::fill(seed, sizeof seed);
+                    result = rs_handheld_voice_announce(_ctx, seed, RustClock::epochSecs(), 1,
+                        response.raw, sizeof response.raw, &rawLen) == RS_HANDHELD_OK
+                        ? AnnounceResult::Sent : AnnounceResult::Failed;
+                } else result = buildAnnouncePacket(_lastAppDataLen ? _lastAppData : nullptr,
                     _lastAppDataLen, RustWire::CTX_PATH_RESPONSE,
                     response.raw, sizeof(response.raw), rawLen);
                 if (result == AnnounceResult::Deferred) {
@@ -840,7 +881,7 @@ void ProtocolRuntime::pollPathResponses() {
             response.pending = false;
             response.lastSentMs = now;
             response.hasLastSent = true;
-            _lastAnnounceMs = millis();
+            if (!response.endpoint) _lastAnnounceMs = millis();
             Serial.printf("[RUST] path-response TX %u bytes iface=%u\n",
                           (unsigned)response.rawLen, (unsigned)id);
 #ifdef PROTOCOL_PACKET_TRACE
@@ -914,4 +955,10 @@ void ProtocolRuntime::lxmfFinishPeerDelete(const uint8_t peer[16],
         const handheld::storage::Result& result) {
     handheld::assertDeviceOwner();
     if (_enginesUp) _lxmf.finishPeerDelete(peer, result);
+}
+
+void ProtocolRuntime::configureVoice(const handheld::voice::Settings& settings) {
+    _voice.configure(settings);
+    const bool enabled=settings.enabled && _voiceAudio.capabilities();
+    if(enabled!=_voiceEnabled) {_voiceEnabled=enabled;_nextVoiceAnnounce=_clock.nowMs();}
 }
