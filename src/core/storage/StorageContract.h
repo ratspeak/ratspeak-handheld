@@ -59,6 +59,8 @@ struct Request {
     // RRC operations use a typed RrcRecord payload. For those operations only,
     // messageId[0..16] is an opaque local filename key (not an LXMF ID), offset
     // is the expected record revision, and key.counter is a page/status cursor.
+    // RrcRead without hasMessageId reads one unique counter within its context.
+    // RrcPage uses historyDirection and an exclusive local counter boundary.
     // They never participate in LXMF counts, deletion fences or history queries.
     // ReadPending: exclusive after (counter, peer), outgoing only.
     // ReadHistoryPage: peer plus exclusive (counter, incoming) in historyDirection.

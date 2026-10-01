@@ -56,7 +56,8 @@ public:
     Submission requestPurgeJournal(const uint8_t local[16]);
     // Shared ordered executor, distinct RRC schema/namespace and result owner.
     Submission requestRrc(handheld::storage::Operation, const handheld::storage::rrc::Record&,
-        const uint8_t fileKey[16] = nullptr, uint32_t cursor = 0, uint32_t expectedRevision = 0);
+        const uint8_t fileKey[16] = nullptr, uint32_t cursor = 0, uint32_t expectedRevision = 0,
+        HistoryDirection direction = HistoryDirection::Before);
     Submission requestWritePurge(const handheld::storage::purge::Journal&);
     Submission requestClearPurge(const handheld::storage::purge::Journal&);
     Submission requestHistoryPage(const std::string& peer, HistoryEntry cursor = {}, uint8_t limit = 48,

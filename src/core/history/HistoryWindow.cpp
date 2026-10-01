@@ -28,6 +28,10 @@ bool HistoryWindow::changeView() {
 void HistoryWindow::open(const uint8_t peer[16], uint32_t identity) {
     if (!peer || !identity || !changeView()) return;
     auto& c = control();
+    // An explicit open changes the full consumer context (including message
+    // family/hub, which is intentionally outside this bounded window). Keep
+    // borrowed text alive, but never publish a bank from a previous context.
+    _pages[c.active].value.info.identity = 0;
     memcpy(c.peer, peer, 16); c.identity = identity;
     c.mode = Mode::Chat; c.state = State::Loading; c.intent = Intent::Newest;
     c.newBelow = false; c.followNewest = true; c.scrollOffset = 0;

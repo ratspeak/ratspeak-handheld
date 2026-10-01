@@ -171,7 +171,9 @@ void MessageTransactions::rrcTransaction(const Request& request, uint8_t* bytes,
     result.error = marker(rrc::Kind::Tombstone, deleted); if (result.error != Error::None) return;
 
     if (request.operation == Operation::RrcPage) {
-        if (kind != rrc::Kind::Message) { result.error = Error::InvalidRecord; return; }
+        if (kind != rrc::Kind::Message || (request.historyDirection != HistoryDirection::Before &&
+            request.historyDirection != HistoryDirection::After)) { result.error = Error::InvalidRecord; return; }
+        const bool before = request.historyDirection == HistoryDirection::Before;
         uint32_t readThrough = 0; result.error = marker(rrc::Kind::ReadMarker, readThrough);
         if (result.error != Error::None) return;
         constexpr size_t Count = Budget::SmallPayload / sizeof(rrc::Selector);
@@ -192,25 +194,50 @@ void MessageTransactions::rrcTransaction(const Request& request, uint8_t* bytes,
                 if (!present || !record.counter() || record.counter() <= deleted) continue;
                 ++result.total;
                 if (record.status() == rrc::Status::Received && record.counter() > readThrough) ++result.unreadDelta;
-                if (request.key.counter && record.counter() >= request.key.counter) continue;
+                if (request.key.counter && (before ? record.counter() >= request.key.counter :
+                    record.counter() <= request.key.counter)) continue;
                 ++eligible; row.counter = record.counter(); row.revision = record.revision();
                 row.status = record.status(); row.flags = record.flags();
-                // Retain the newest bounded page, sorted by local append order.
-                size_t at = 0; while (at < used && rows[at].counter > row.counter) ++at;
+                // Retain the nearest bounded page on the requested side.
+                size_t at = 0; while (at < used && (before ? rows[at].counter > row.counter :
+                    rows[at].counter < row.counter)) ++at;
+                if (at < used && rows[at].counter == row.counter) { result.error = Error::InvalidRecord; return; }
                 if (at >= Count) continue;
                 if (used < Count) ++used;
                 for (size_t n = used - 1; n > at; --n) rows[n] = rows[n - 1];
                 rows[at] = row;
             }
         }
-        std::reverse(rows, rows + used); memcpy(bytes, rows, used * sizeof(rows[0]));
+        if (before) std::reverse(rows, rows + used);
+        memcpy(bytes, rows, used * sizeof(rows[0]));
         result.length = uint16_t(used * sizeof(rows[0])); result.more = eligible > used;
-        result.key.counter = used ? rows[0].counter : 0; result.outcome = Outcome::Committed; return;
+        result.key.counter = used ? rows[before ? 0 : used - 1].counter : 0; result.outcome = Outcome::Committed; return;
     }
 
     if (request.operation == Operation::RrcRead || request.operation == Operation::RrcStatus) {
         rrc::Record record; bool present = false;
-        result.error = rrcLoad(flash, path, context, kind, record, present, request.operation == Operation::RrcStatus);
+        if (request.operation == Operation::RrcRead && kind == rrc::Kind::Message && !request.hasMessageId) {
+            if (!request.key.counter) { result.error = Error::InvalidRecord; return; }
+            char parent[RrcPath]; rrcDirectory(context, parent);
+            if (request.key.counter > deleted && flash.exists(parent)) {
+                File directory = flash.open(parent);
+                if (!directory || !directory.isDirectory()) { result.error = Error::Read; return; }
+                unsigned visited = 0;
+                while (File file = directory.openNextFile()) {
+                    if (++visited > 4096) { result.error = Error::InvalidRecord; return; }
+                    uint8_t key[16]; char name[RrcPath];
+                    if (file.isDirectory() || !rrcEnumerate(flash, context, file.name(), key, name)) continue;
+                    file.close(); rrc::Record candidate; bool found = false;
+                    result.error = rrcLoad(flash, name, context, kind, candidate, found);
+                    if (result.error != Error::None) return;
+                    if (found && candidate.counter() == request.key.counter) {
+                        if (present) { result.error = Error::InvalidRecord; return; }
+                        present = true; record = candidate;
+                    }
+                    yield();
+                }
+            }
+        } else result.error = rrcLoad(flash, path, context, kind, record, present, request.operation == Operation::RrcStatus);
         if (result.error != Error::None) return;
         if (!present || (kind == rrc::Kind::Message && record.counter() <= deleted)) {
             if (request.operation == Operation::RrcStatus) { result.error = Error::Stale; return; }
