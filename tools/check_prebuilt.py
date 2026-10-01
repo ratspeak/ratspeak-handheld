@@ -61,6 +61,7 @@ def main() -> int:
     source_roots = {
         "rsReticulumLite": ROOT.parent / "rsReticulumLite",
         "rsLXMFLite": ROOT.parent / "rsLXMFLite",
+        "rsLXST": ROOT.parent / "rsLXST",
     }
     for name, source_root in source_roots.items():
         recorded = provenance.get(name, "")

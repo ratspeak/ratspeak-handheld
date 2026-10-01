@@ -56,6 +56,7 @@ test "$archive_inputs" = "$(python3 ../tools/release_identity.py archive-inputs)
     echo "source-graph-sha256: $archive_inputs"
     echo "rsReticulumLite: $(git -C ../../rsReticulumLite rev-parse HEAD)$( { git -C ../../rsReticulumLite diff --quiet HEAD && test -z "$(git -C ../../rsReticulumLite ls-files --others --exclude-standard 2>/dev/null)"; } 2>/dev/null || echo ' +dirty')"
     echo "rsLXMFLite: $(git -C ../../rsLXMFLite rev-parse HEAD)$( { git -C ../../rsLXMFLite diff --quiet HEAD && test -z "$(git -C ../../rsLXMFLite ls-files --others --exclude-standard 2>/dev/null)"; } 2>/dev/null || echo ' +dirty')"
+    echo "rsLXST: $(git -C ../../rsLXST rev-parse HEAD)$( { git -C ../../rsLXST diff --quiet HEAD && test -z "$(git -C ../../rsLXST ls-files --others --exclude-standard 2>/dev/null)"; } 2>/dev/null || echo ' +dirty')"
     for profile in small micro; do
         echo "$profile.sha256: $(shasum -a 256 "prebuilt/xtensa-esp32s3/$profile/libratspeak_protocol.a" | cut -d' ' -f1)"
     done

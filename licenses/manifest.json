@@ -46,13 +46,53 @@
       "M5Unified@0.2.13",
       "XPowersLib@0.3.3"
     ],
-    "cargo_lock_sha256": "15b35acd4012932649d67287a419e79c6e75fe0123065e519fbb17c583667b53",
+    "cargo_lock_sha256": "029a4a20d761f02403737735ad4398ee4bf4f2a038123cc8f6d603b62977e97b",
     "rust_toolchain": "rustc 1.95.0-nightly (95e5bda86 2026-04-15) (1.95.0.0)",
     "lite_commits": {
-      "rsReticulumLite": "cd78a589232b137990db749ef01842908df495fa",
-      "rsLXMFLite": "8ca081355639fb571d2fff8e59fe2075a2ef4439"
+      "rsReticulumLite": "071b878d59addbf2f30247ab9f659a4ba517293a",
+      "rsLXMFLite": "24ea7bb119ae3bc6fc62f93c17d75fc2b2131458",
+      "rsLXST": "fe1f1ada431ce7b8b9ebaf6f1d70e839bc46fce6"
     },
     "source_notices": {
+      "src/boards/tdeck/audio/es7210/es7210.cpp": {
+        "name": "LilyGO ES7210: es7210.cpp",
+        "commit": "1dddf6e0d3aaa74cd4e10ba02938865b99682391",
+        "source": "https://github.com/Xinyuan-LilyGO/T-Deck/blob/1dddf6e0d3aaa74cd4e10ba02938865b99682391/lib/es7210/src/es7210.cpp",
+        "license": "LicenseRef-Espressif-MIT-products",
+        "boards": [
+          "tdeck"
+        ],
+        "modes": [
+          "standalone"
+        ],
+        "notice_sha256": "7e8f718cf80a385c3fc60f659ce78b41b21b64be5f5162c03ee851a9dd1513b4"
+      },
+      "src/boards/tdeck/audio/es7210/es7210.h": {
+        "name": "LilyGO ES7210: es7210.h",
+        "commit": "1dddf6e0d3aaa74cd4e10ba02938865b99682391",
+        "source": "https://github.com/Xinyuan-LilyGO/T-Deck/blob/1dddf6e0d3aaa74cd4e10ba02938865b99682391/lib/es7210/src/es7210.h",
+        "license": "LicenseRef-Espressif-MIT-products",
+        "boards": [
+          "tdeck"
+        ],
+        "modes": [
+          "standalone"
+        ],
+        "notice_sha256": "7e8f718cf80a385c3fc60f659ce78b41b21b64be5f5162c03ee851a9dd1513b4"
+      },
+      "src/boards/tdeck/audio/es7210/audio_hal.h": {
+        "name": "LilyGO ES7210: audio_hal.h",
+        "commit": "1dddf6e0d3aaa74cd4e10ba02938865b99682391",
+        "source": "https://github.com/Xinyuan-LilyGO/T-Deck/blob/1dddf6e0d3aaa74cd4e10ba02938865b99682391/lib/es7210/src/audio_hal.h",
+        "license": "LicenseRef-Espressif-MIT-products",
+        "boards": [
+          "tdeck"
+        ],
+        "modes": [
+          "standalone"
+        ],
+        "notice_sha256": "2e86ebadf356336e30aa02dc9b77d38a5e3a251958577549b1d4bae50dc5fd35"
+      },
       "vendor/esp_idf_compat/mbedtls/ssl_tls.c": {
         "name": "Mbed TLS Finished backport: ssl_tls.c",
         "commit": "2b8e772fc1cb0732cda3bae7d1e9d6f4cfaf63d9",
@@ -145,10 +185,17 @@
         "notice_sha256": "57a974c57b6f105b9d1fc2198f4576fb0b943c3847fb6e5c83ba7eaa9237043e"
       }
     },
-    "collector_sha256": "373ebd6e229407a21cfcada414c40b60d1a27d9b425c5b408f4b21d07b8450f3"
+    "codec2_notices": {
+      "crates/lxst-codec2/NOTICE": "33cc10cd398e8e724030091025d885ec10ee16b9d95d707ad5df7fe812c17f84",
+      "crates/lxst-codec2/licenses/LGPL-2.1.txt": "9ebb6f82b7380a62ac74c5f0322c88e6744dedf2ebe1f54d6f088282b39844bf",
+      "crates/lxst-codec2/licenses/KISS-FFT-BSD-3-Clause.txt": "49eea0111dfb7038dc18f74034cc517690395ebac8f7768f999133b16e4bf064",
+      "crates/lxst-codec2/licenses/upstream-Cargo.toml": "939e2818dcb2945f52eceb71b37b512bf1796da53a05e0a69276d5a2e55f9eed",
+      "crates/lxst-codec2/licenses/upstream-README.md": "76fee2b7d3455903f4246e7412ac230a856f58b098861c4c4c9dbdecd371f94a"
+    },
+    "collector_sha256": "a31bee46b835a330178b52118bc849fd4c211d651899cbe7fb96110d9b539f40"
   },
   "bundle": "THIRD-PARTY.txt",
-  "bundle_sha256": "5767609ebbc0c7ac933250d9044292b458cf43ba0e0a3bd70285e5638497a9ff",
+  "bundle_sha256": "0e7069aa21309d9bdc6f99c6c17f41203b888c8fa927073ba787d202f1e1498d",
   "components": [
     {
       "name": "aes",
@@ -9014,6 +9061,104 @@
       "license": "MIT OR Apache-2.0"
     },
     {
+      "name": "libm",
+      "version": "0.2.16",
+      "source": "https://crates.io/crates/libm/0.2.16",
+      "boards": [
+        "tdeck",
+        "tpager",
+        "cardputer",
+        "m9"
+      ],
+      "modes": [
+        "standalone"
+      ],
+      "notices": [
+        {
+          "path": "LICENSE.txt",
+          "source": "https://docs.rs/crate/libm/0.2.16/source/LICENSE.txt",
+          "length": 14088,
+          "sha256": "3823dda7cf046602f4b4e77ec8e227863dc4736037cc85bb33d9f19febe16bb7",
+          "offset": 816616
+        }
+      ],
+      "note": "Cargo.lock dependency; includes build-time and target-conditional crates.",
+      "package_sha256": "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981",
+      "license": "MIT"
+    },
+    {
+      "name": "LilyGO ES7210: audio_hal.h",
+      "version": "1dddf6e0d3aaa74cd4e10ba02938865b99682391",
+      "source": "https://github.com/Xinyuan-LilyGO/T-Deck/blob/1dddf6e0d3aaa74cd4e10ba02938865b99682391/lib/es7210/src/audio_hal.h",
+      "license": "LicenseRef-Espressif-MIT-products",
+      "source_files": [
+        "src/boards/tdeck/audio/es7210/audio_hal.h"
+      ],
+      "boards": [
+        "tdeck"
+      ],
+      "modes": [
+        "standalone"
+      ],
+      "notices": [
+        {
+          "path": "src/boards/tdeck/audio/es7210/audio_hal.h (header)",
+          "source": "https://github.com/Xinyuan-LilyGO/T-Deck/blob/1dddf6e0d3aaa74cd4e10ba02938865b99682391/lib/es7210/src/audio_hal.h",
+          "length": 1234,
+          "sha256": "2e86ebadf356336e30aa02dc9b77d38a5e3a251958577549b1d4bae50dc5fd35",
+          "offset": 831053
+        }
+      ]
+    },
+    {
+      "name": "LilyGO ES7210: es7210.cpp",
+      "version": "1dddf6e0d3aaa74cd4e10ba02938865b99682391",
+      "source": "https://github.com/Xinyuan-LilyGO/T-Deck/blob/1dddf6e0d3aaa74cd4e10ba02938865b99682391/lib/es7210/src/es7210.cpp",
+      "license": "LicenseRef-Espressif-MIT-products",
+      "source_files": [
+        "src/boards/tdeck/audio/es7210/es7210.cpp"
+      ],
+      "boards": [
+        "tdeck"
+      ],
+      "modes": [
+        "standalone"
+      ],
+      "notices": [
+        {
+          "path": "src/boards/tdeck/audio/es7210/es7210.cpp (header)",
+          "source": "https://github.com/Xinyuan-LilyGO/T-Deck/blob/1dddf6e0d3aaa74cd4e10ba02938865b99682391/lib/es7210/src/es7210.cpp",
+          "length": 1235,
+          "sha256": "7e8f718cf80a385c3fc60f659ce78b41b21b64be5f5162c03ee851a9dd1513b4",
+          "offset": 832633
+        }
+      ]
+    },
+    {
+      "name": "LilyGO ES7210: es7210.h",
+      "version": "1dddf6e0d3aaa74cd4e10ba02938865b99682391",
+      "source": "https://github.com/Xinyuan-LilyGO/T-Deck/blob/1dddf6e0d3aaa74cd4e10ba02938865b99682391/lib/es7210/src/es7210.h",
+      "license": "LicenseRef-Espressif-MIT-products",
+      "source_files": [
+        "src/boards/tdeck/audio/es7210/es7210.h"
+      ],
+      "boards": [
+        "tdeck"
+      ],
+      "modes": [
+        "standalone"
+      ],
+      "notices": [
+        {
+          "path": "src/boards/tdeck/audio/es7210/es7210.h (header)",
+          "source": "https://github.com/Xinyuan-LilyGO/T-Deck/blob/1dddf6e0d3aaa74cd4e10ba02938865b99682391/lib/es7210/src/es7210.h",
+          "length": 1235,
+          "sha256": "7e8f718cf80a385c3fc60f659ce78b41b21b64be5f5162c03ee851a9dd1513b4",
+          "offset": 832633
+        }
+      ]
+    },
+    {
       "name": "LovyanGFX",
       "version": "1.1.16",
       "source": "https://github.com/lovyan03/LovyanGFX/tree/1.1.16",
@@ -9146,14 +9291,14 @@
           "source": "https://github.com/lvgl/lvgl/blob/v8.3.11/LICENCE.txt",
           "length": 1072,
           "sha256": "6a916130a36e83a79bb0dca6c6a7bfe60a67af7d118605e2b7b23bd5ad5c4eb0",
-          "offset": 818994
+          "offset": 836912
         },
         {
           "path": "src/extra/libs/qrcode/qrcodegen.c (header)",
           "source": "https://github.com/lvgl/lvgl/blob/v8.3.11/src/extra/libs/qrcode/qrcodegen.c",
           "length": 1233,
           "sha256": "37467bc81e53c5ba34d923b3b08514e74fed3edb2cd340b22fa1d20bd0ce2095",
-          "offset": 820119
+          "offset": 838037
         }
       ]
     },
@@ -9343,7 +9488,7 @@
           "source": "https://github.com/espressif/mbedtls/blob/2b8e772fc1cb0732cda3bae7d1e9d6f4cfaf63d9/library/common.h",
           "length": 193,
           "sha256": "86f8dde32af25c28c2e8f18bd22ae2e0dbde09e2b8422b1248ad13de8018622c",
-          "offset": 824946
+          "offset": 842864
         }
       ]
     },
@@ -9369,7 +9514,7 @@
           "source": "https://github.com/espressif/mbedtls/blob/2b8e772fc1cb0732cda3bae7d1e9d6f4cfaf63d9/include/mbedtls/ssl_internal.h",
           "length": 197,
           "sha256": "643036cd01ff4766604d196abe0d9229915b4057914a74e3db076e0f0fa3bddc",
-          "offset": 825519
+          "offset": 843437
         }
       ]
     },
@@ -9395,7 +9540,7 @@
           "source": "https://github.com/espressif/mbedtls/blob/2b8e772fc1cb0732cda3bae7d1e9d6f4cfaf63d9/library/ssl_tls.c",
           "length": 374,
           "sha256": "3205a23232dc38923b2527f347790e8f51e488e183f4deb6c2bdbe9b8decdaf7",
-          "offset": 826073
+          "offset": 843991
         }
       ]
     },
@@ -9417,7 +9562,7 @@
           "source": "https://raw.githubusercontent.com/JulietaUla/Montserrat/711e8ae6b4fa9d33d8482c9ec4871d906a345344/OFL.txt",
           "length": 4392,
           "sha256": "41f82bb4d24b304f30f7136bc47abdd083782e4265c984160f5649d1e78ea49c",
-          "offset": 826722
+          "offset": 844640
         }
       ],
       "note": "Font notices for generated LVGL fonts, including custom Montserrat glyphs."
@@ -9504,7 +9649,7 @@
           "source": "https://github.com/jgromes/RadioLib/blob/ef715e1be6643ffb6cc585cde4c33770caf875b1/license.txt",
           "length": 1068,
           "sha256": "025378110a5679f82e8a59c19cf91b8ed760dc8752e5504596ef0c0592b8a3e8",
-          "offset": 832116
+          "offset": 850034
         }
       ]
     },
@@ -9527,21 +9672,21 @@
           "source": "https://docs.rs/crate/rand_core/0.6.4/source/COPYRIGHT",
           "length": 569,
           "sha256": "90eb64f0279b0d9432accfa6023ff803bc4965212383697eee27a0f426d5f8d5",
-          "offset": 833390
+          "offset": 851308
         },
         {
           "path": "LICENSE-APACHE",
           "source": "https://docs.rs/crate/rand_core/0.6.4/source/LICENSE-APACHE",
           "length": 10282,
           "sha256": "6df43f6f4b5d4587f3d8d71e45532c688fd168afa5fe89d571cb32fa09c4ef51",
-          "offset": 833984
+          "offset": 851902
         },
         {
           "path": "LICENSE-MIT",
           "source": "https://docs.rs/crate/rand_core/0.6.4/source/LICENSE-MIT",
           "length": 1117,
           "sha256": "209fbbe0ad52d9235e37badf9cadfe4dbdc87203179c0899e738b39ade42177b",
-          "offset": 844288
+          "offset": 862206
         }
       ],
       "note": "Cargo.lock dependency; includes build-time and target-conditional crates.",
@@ -9567,14 +9712,14 @@
           "source": "https://github.com/ratspeak/ratspeak-handheld/tree/main/vendor/rnode_firmware/sx126x.cpp",
           "length": 84,
           "sha256": "b066b5b5e1aa28ead0513d81871761972754aa6df00da9edb85698392bca705c",
-          "offset": 845679
+          "offset": 863597
         },
         {
           "path": "ST7789.h (header)",
           "source": "https://github.com/ratspeak/ratspeak-handheld/blob/main/vendor/rnode_firmware/ST7789.h",
           "length": 1438,
           "sha256": "98a7b0dc7a62d1f3a5dfb91fbd339d08da7bbf6df3ebe3bb53d2f426ce1cc1ac",
-          "offset": 845791
+          "offset": 863709
         },
         {
           "path": "MIT permission and disclaimer",
@@ -9587,8 +9732,8 @@
     },
     {
       "name": "rsLXMFLite",
-      "version": "8ca081355639fb571d2fff8e59fe2075a2ef4439",
-      "source": "https://github.com/ratspeak/rsLXMFLite/tree/8ca081355639fb571d2fff8e59fe2075a2ef4439",
+      "version": "24ea7bb119ae3bc6fc62f93c17d75fc2b2131458",
+      "source": "https://github.com/ratspeak/rsLXMFLite/tree/24ea7bb119ae3bc6fc62f93c17d75fc2b2131458",
       "boards": [
         "tdeck",
         "tpager",
@@ -9601,17 +9746,17 @@
       "notices": [
         {
           "path": "LICENSE",
-          "source": "https://github.com/ratspeak/rsLXMFLite/blob/8ca081355639fb571d2fff8e59fe2075a2ef4439/LICENSE",
+          "source": "https://github.com/ratspeak/rsLXMFLite/blob/24ea7bb119ae3bc6fc62f93c17d75fc2b2131458/LICENSE",
           "length": 34523,
           "sha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
-          "offset": 847677
+          "offset": 865595
         }
       ]
     },
     {
-      "name": "rsReticulumLite",
-      "version": "cd78a589232b137990db749ef01842908df495fa",
-      "source": "https://github.com/ratspeak/rsReticulumLite/tree/cd78a589232b137990db749ef01842908df495fa",
+      "name": "rsLXST",
+      "version": "fe1f1ada431ce7b8b9ebaf6f1d70e839bc46fce6",
+      "source": "https://github.com/ratspeak/rsLXST/tree/fe1f1ada431ce7b8b9ebaf6f1d70e839bc46fce6",
       "boards": [
         "tdeck",
         "tpager",
@@ -9624,10 +9769,85 @@
       "notices": [
         {
           "path": "LICENSE",
-          "source": "https://github.com/ratspeak/rsReticulumLite/blob/cd78a589232b137990db749ef01842908df495fa/LICENSE",
+          "source": "https://github.com/ratspeak/rsLXST/blob/fe1f1ada431ce7b8b9ebaf6f1d70e839bc46fce6/LICENSE",
           "length": 34523,
           "sha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
-          "offset": 847677
+          "offset": 865595
+        }
+      ]
+    },
+    {
+      "name": "rsLXST native Codec2",
+      "version": "fe1f1ada431ce7b8b9ebaf6f1d70e839bc46fce6",
+      "source": "https://github.com/ratspeak/rsLXST/tree/fe1f1ada431ce7b8b9ebaf6f1d70e839bc46fce6/crates/lxst-codec2",
+      "boards": [
+        "tdeck",
+        "tpager",
+        "cardputer",
+        "m9"
+      ],
+      "modes": [
+        "standalone"
+      ],
+      "notices": [
+        {
+          "path": "crates/lxst-codec2/NOTICE",
+          "source": "https://github.com/ratspeak/rsLXST/blob/fe1f1ada431ce7b8b9ebaf6f1d70e839bc46fce6/crates/lxst-codec2/NOTICE",
+          "length": 1393,
+          "sha256": "33cc10cd398e8e724030091025d885ec10ee16b9d95d707ad5df7fe812c17f84",
+          "offset": 900790
+        },
+        {
+          "path": "crates/lxst-codec2/licenses/LGPL-2.1.txt",
+          "source": "https://github.com/ratspeak/rsLXST/blob/fe1f1ada431ce7b8b9ebaf6f1d70e839bc46fce6/crates/lxst-codec2/licenses/LGPL-2.1.txt",
+          "length": 26462,
+          "sha256": "9ebb6f82b7380a62ac74c5f0322c88e6744dedf2ebe1f54d6f088282b39844bf",
+          "offset": 902234
+        },
+        {
+          "path": "crates/lxst-codec2/licenses/KISS-FFT-BSD-3-Clause.txt",
+          "source": "https://github.com/ratspeak/rsLXST/blob/fe1f1ada431ce7b8b9ebaf6f1d70e839bc46fce6/crates/lxst-codec2/licenses/KISS-FFT-BSD-3-Clause.txt",
+          "length": 1476,
+          "sha256": "49eea0111dfb7038dc18f74034cc517690395ebac8f7768f999133b16e4bf064",
+          "offset": 928760
+        },
+        {
+          "path": "crates/lxst-codec2/licenses/upstream-Cargo.toml",
+          "source": "https://github.com/ratspeak/rsLXST/blob/fe1f1ada431ce7b8b9ebaf6f1d70e839bc46fce6/crates/lxst-codec2/licenses/upstream-Cargo.toml",
+          "length": 623,
+          "sha256": "939e2818dcb2945f52eceb71b37b512bf1796da53a05e0a69276d5a2e55f9eed",
+          "offset": 930294
+        },
+        {
+          "path": "crates/lxst-codec2/licenses/upstream-README.md",
+          "source": "https://github.com/ratspeak/rsLXST/blob/fe1f1ada431ce7b8b9ebaf6f1d70e839bc46fce6/crates/lxst-codec2/licenses/upstream-README.md",
+          "length": 1909,
+          "sha256": "76fee2b7d3455903f4246e7412ac230a856f58b098861c4c4c9dbdecd371f94a",
+          "offset": 930974
+        }
+      ],
+      "license": "LGPL-2.1-only AND MIT AND BSD-3-Clause"
+    },
+    {
+      "name": "rsReticulumLite",
+      "version": "071b878d59addbf2f30247ab9f659a4ba517293a",
+      "source": "https://github.com/ratspeak/rsReticulumLite/tree/071b878d59addbf2f30247ab9f659a4ba517293a",
+      "boards": [
+        "tdeck",
+        "tpager",
+        "cardputer",
+        "m9"
+      ],
+      "modes": [
+        "standalone"
+      ],
+      "notices": [
+        {
+          "path": "LICENSE",
+          "source": "https://github.com/ratspeak/rsReticulumLite/blob/071b878d59addbf2f30247ab9f659a4ba517293a/LICENSE",
+          "length": 34523,
+          "sha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
+          "offset": 865595
         }
       ]
     },
@@ -9650,14 +9870,14 @@
           "source": "https://github.com/esp-rs/rust-build/releases/tag/v1.95.0.0",
           "length": 425661,
           "sha256": "90567e2718bf7fd65a71a3a43c5596488e80e5f51ed02bfea6fec54458b5f3d1",
-          "offset": 882855
+          "offset": 933538
         },
         {
           "path": "lib/rustlib/src/rust/library/compiler-builtins/LICENSE.txt",
           "source": "https://github.com/esp-rs/rust-build/releases/tag/v1.95.0.0",
           "length": 15078,
           "sha256": "ab6eec6caf0fa5775e411c7a8bc6a45c4ef2956b0980b157ab74fc5cd62a928b",
-          "offset": 1308585
+          "offset": 1359268
         }
       ],
       "note": "Full upstream library notice is retained as a conservative superset of core/alloc use."
@@ -9688,7 +9908,7 @@
           "source": "https://docs.rs/crate/rustc_version/0.4.1/source/LICENSE-MIT",
           "length": 1071,
           "sha256": "c9a75f18b9ab2927829a208fc6aa2cf4e63b8420887ba29cdb265d6619ae82d5",
-          "offset": 1323976
+          "offset": 1374659
         }
       ],
       "note": "Cargo.lock dependency; includes build-time and target-conditional crates.",
@@ -9718,7 +9938,7 @@
           "source": "https://github.com/Lora-net/sx126x_driver/blob/a10c5dfdf89788c6ac805e9fe98889de44175aa2/src/sx126x.c",
           "length": 1837,
           "sha256": "57a974c57b6f105b9d1fc2198f4576fb0b943c3847fb6e5c83ba7eaa9237043e",
-          "offset": 1325400
+          "offset": 1376083
         }
       ]
     },
@@ -9781,7 +10001,7 @@
           "source": "https://docs.rs/crate/sha2/0.10.9/source/LICENSE-MIT",
           "length": 1138,
           "sha256": "b4eb00df6e2a4d22518fcaa6a2b4646f249b3a3c9814509b22bd2091f1392ff1",
-          "offset": 1327916
+          "offset": 1378599
         }
       ],
       "note": "Cargo.lock dependency; includes build-time and target-conditional crates.",
@@ -9840,7 +10060,7 @@
           "source": "https://docs.rs/crate/subtle/2.6.1/source/LICENSE",
           "length": 1582,
           "sha256": "d1fc1bc0d155df60b2e7705b6b2ae02a05c96f948e1cec6e2fb86360b09f346b",
-          "offset": 1329624
+          "offset": 1380307
         }
       ],
       "note": "Cargo.lock dependency; includes build-time and target-conditional crates.",
@@ -9881,6 +10101,105 @@
       "license": "MIT OR Apache-2.0"
     },
     {
+      "name": "syn",
+      "version": "3.0.6",
+      "source": "https://crates.io/crates/syn/3.0.6",
+      "boards": [
+        "tdeck",
+        "tpager",
+        "cardputer",
+        "m9"
+      ],
+      "modes": [
+        "standalone"
+      ],
+      "notices": [
+        {
+          "path": "LICENSE-APACHE",
+          "source": "https://docs.rs/crate/syn/3.0.6/source/LICENSE-APACHE",
+          "length": 9723,
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "offset": 805605
+        },
+        {
+          "path": "LICENSE-MIT",
+          "source": "https://docs.rs/crate/syn/3.0.6/source/LICENSE-MIT",
+          "length": 1023,
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "offset": 183235
+        }
+      ],
+      "note": "Cargo.lock dependency; includes build-time and target-conditional crates.",
+      "package_sha256": "8593e8e72159ed2257d083c7a454a85cbf854f37a0966d8d483aff8c8a3ebcee",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "thiserror",
+      "version": "2.0.21",
+      "source": "https://crates.io/crates/thiserror/2.0.21",
+      "boards": [
+        "tdeck",
+        "tpager",
+        "cardputer",
+        "m9"
+      ],
+      "modes": [
+        "standalone"
+      ],
+      "notices": [
+        {
+          "path": "LICENSE-APACHE",
+          "source": "https://docs.rs/crate/thiserror/2.0.21/source/LICENSE-APACHE",
+          "length": 9723,
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "offset": 805605
+        },
+        {
+          "path": "LICENSE-MIT",
+          "source": "https://docs.rs/crate/thiserror/2.0.21/source/LICENSE-MIT",
+          "length": 1023,
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "offset": 183235
+        }
+      ],
+      "note": "Cargo.lock dependency; includes build-time and target-conditional crates.",
+      "package_sha256": "09e52cb86a36cede5cb101bf8908837b3e4c6e5e59fe7fd85c23fb56200d189e",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "thiserror-impl",
+      "version": "2.0.21",
+      "source": "https://crates.io/crates/thiserror-impl/2.0.21",
+      "boards": [
+        "tdeck",
+        "tpager",
+        "cardputer",
+        "m9"
+      ],
+      "modes": [
+        "standalone"
+      ],
+      "notices": [
+        {
+          "path": "LICENSE-APACHE",
+          "source": "https://docs.rs/crate/thiserror-impl/2.0.21/source/LICENSE-APACHE",
+          "length": 9723,
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "offset": 805605
+        },
+        {
+          "path": "LICENSE-MIT",
+          "source": "https://docs.rs/crate/thiserror-impl/2.0.21/source/LICENSE-MIT",
+          "length": 1023,
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "offset": 183235
+        }
+      ],
+      "note": "Cargo.lock dependency; includes build-time and target-conditional crates.",
+      "package_sha256": "fe5197923287db20a58125f0bc85c062f7f2c892de97b18c356f9efb14b28524",
+      "license": "MIT OR Apache-2.0"
+    },
+    {
       "name": "typenum",
       "version": "1.20.1",
       "source": "https://crates.io/crates/typenum/1.20.1",
@@ -9899,21 +10218,21 @@
           "source": "https://docs.rs/crate/typenum/1.20.1/source/LICENSE",
           "length": 17,
           "sha256": "db11fec9946737df39ca3898d9cd8c10ec6f6c3a884a6802b0ad0b81b4e8f23a",
-          "offset": 1331789
+          "offset": 1383641
         },
         {
           "path": "LICENSE-APACHE",
           "source": "https://docs.rs/crate/typenum/1.20.1/source/LICENSE-APACHE",
           "length": 10835,
           "sha256": "516b24e051bf5630880ebbd55c40a25ce9552ebaf8970a53e8976eb70e522406",
-          "offset": 1331831
+          "offset": 1383683
         },
         {
           "path": "LICENSE-MIT",
           "source": "https://docs.rs/crate/typenum/1.20.1/source/LICENSE-MIT",
           "length": 1083,
           "sha256": "a825bd853ab71619a4923d7b4311221427848070ff44d990da39b0b274c1683f",
-          "offset": 1342688
+          "offset": 1394540
         }
       ],
       "note": "Cargo.lock dependency; includes build-time and target-conditional crates.",
@@ -9953,7 +10272,7 @@
           "source": "https://docs.rs/crate/unicode-ident/1.0.24/source/LICENSE-UNICODE",
           "length": 1995,
           "sha256": "f7db81051789b729fea528a63ec4c938fdcb93d9d61d97dc8cc2e9df6d47f2a1",
-          "offset": 1344196
+          "offset": 1396048
         }
       ],
       "note": "Cargo.lock dependency; includes build-time and target-conditional crates.",
@@ -9986,7 +10305,7 @@
           "source": "https://docs.rs/crate/version_check/0.9.5/source/LICENSE-MIT",
           "length": 1085,
           "sha256": "b7e650f3fce5c53249d1cdc608b54df156a97edd636cf9d23498d0cfe7aec63e",
-          "offset": 1346504
+          "offset": 1398356
         }
       ],
       "note": "Cargo.lock dependency; includes build-time and target-conditional crates.",
@@ -10012,7 +10331,7 @@
           "source": "https://docs.rs/crate/x25519-dalek/2.0.1/source/LICENSE",
           "length": 1555,
           "sha256": "bebc725b8cb1ba1ed1798cb505cf31bf9bce4cbe942baf358b642666ba8186bd",
-          "offset": 1347799
+          "offset": 1399651
         }
       ],
       "note": "Cargo.lock dependency; includes build-time and target-conditional crates.",
@@ -10040,35 +10359,35 @@
           "source": "https://github.com/espressif/crosstool-NG/releases/tag/esp-2021r2-patch5",
           "length": 35147,
           "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
-          "offset": 1349647
+          "offset": 1401499
         },
         {
           "path": "gcc/COPYING3.LIB",
           "source": "https://github.com/espressif/crosstool-NG/releases/tag/esp-2021r2-patch5",
           "length": 7639,
           "sha256": "a853c2ffec17057872340eee242ae4d96cbf2b520ae27d903e1b2fef1a5f9d1c",
-          "offset": 1384821
+          "offset": 1436673
         },
         {
           "path": "gcc/COPYING.RUNTIME",
           "source": "https://github.com/espressif/crosstool-NG/releases/tag/esp-2021r2-patch5",
           "length": 3324,
           "sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74",
-          "offset": 1392490
+          "offset": 1444342
         },
         {
           "path": "newlib/COPYING.NEWLIB",
           "source": "https://github.com/espressif/crosstool-NG/releases/tag/esp-2021r2-patch5",
           "length": 59777,
           "sha256": "dec5d419a7a4b27c064c8367a21e5d7b58aefc162719dc169bc4f82a88994859",
-          "offset": 1395846
+          "offset": 1447698
         },
         {
           "path": "newlib/COPYING.LIBGLOSS",
           "source": "https://github.com/espressif/crosstool-NG/releases/tag/esp-2021r2-patch5",
           "length": 22261,
           "sha256": "334f3446894be102933b75f3fea18690dd967c2e9c2782f24f4f944ec1ad7496",
-          "offset": 1455657
+          "offset": 1507509
         }
       ],
       "note": "Runtime libraries only; toolchain is not redistributed in firmware packages."
@@ -10099,7 +10418,7 @@
           "source": "https://docs.rs/crate/zeroize/1.9.0/source/LICENSE-MIT",
           "length": 1082,
           "sha256": "8c7516d4b27b1e495be5e38b612298b63de48d05f49cdac94f70f3cd70f8864b",
-          "offset": 1478217
+          "offset": 1530069
         }
       ],
       "note": "Cargo.lock dependency; includes build-time and target-conditional crates.",
@@ -10132,7 +10451,7 @@
           "source": "https://docs.rs/crate/zeroize_derive/1.5.0/source/LICENSE-MIT",
           "length": 1082,
           "sha256": "b8c6939380a400f53e11923d50fcc4dd2fa1ba8339fd9d04cda38a0251b6c9b0",
-          "offset": 1479612
+          "offset": 1531464
         }
       ],
       "note": "Cargo.lock dependency; includes build-time and target-conditional crates.",

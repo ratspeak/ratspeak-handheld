@@ -38,7 +38,12 @@ ARDUINO_REFS = {
 # The pinned digest covers the entire original leading comment, including every
 # redistribution condition and disclaimer; source checks remain offline.
 SX126X_REF = "a10c5dfdf89788c6ac805e9fe98889de44175aa2"
+CODEC2_NOTICES = {'crates/lxst-codec2/NOTICE': '33cc10cd398e8e724030091025d885ec10ee16b9d95d707ad5df7fe812c17f84', 'crates/lxst-codec2/licenses/LGPL-2.1.txt': '9ebb6f82b7380a62ac74c5f0322c88e6744dedf2ebe1f54d6f088282b39844bf', 'crates/lxst-codec2/licenses/KISS-FFT-BSD-3-Clause.txt': '49eea0111dfb7038dc18f74034cc517690395ebac8f7768f999133b16e4bf064', 'crates/lxst-codec2/licenses/upstream-Cargo.toml': '939e2818dcb2945f52eceb71b37b512bf1796da53a05e0a69276d5a2e55f9eed', 'crates/lxst-codec2/licenses/upstream-README.md': '76fee2b7d3455903f4246e7412ac230a856f58b098861c4c4c9dbdecd371f94a'}
 SOURCE_NOTICES = {
+    'src/boards/tdeck/audio/es7210/es7210.cpp': {'name': 'LilyGO ES7210: es7210.cpp', 'commit': '1dddf6e0d3aaa74cd4e10ba02938865b99682391', 'source': 'https://github.com/Xinyuan-LilyGO/T-Deck/blob/1dddf6e0d3aaa74cd4e10ba02938865b99682391/lib/es7210/src/es7210.cpp', 'license': 'LicenseRef-Espressif-MIT-products', 'boards': ['tdeck'], 'modes': ['standalone'], 'notice_sha256': '7e8f718cf80a385c3fc60f659ce78b41b21b64be5f5162c03ee851a9dd1513b4'},
+    'src/boards/tdeck/audio/es7210/es7210.h': {'name': 'LilyGO ES7210: es7210.h', 'commit': '1dddf6e0d3aaa74cd4e10ba02938865b99682391', 'source': 'https://github.com/Xinyuan-LilyGO/T-Deck/blob/1dddf6e0d3aaa74cd4e10ba02938865b99682391/lib/es7210/src/es7210.h', 'license': 'LicenseRef-Espressif-MIT-products', 'boards': ['tdeck'], 'modes': ['standalone'], 'notice_sha256': '7e8f718cf80a385c3fc60f659ce78b41b21b64be5f5162c03ee851a9dd1513b4'},
+    'src/boards/tdeck/audio/es7210/audio_hal.h': {'name': 'LilyGO ES7210: audio_hal.h', 'commit': '1dddf6e0d3aaa74cd4e10ba02938865b99682391', 'source': 'https://github.com/Xinyuan-LilyGO/T-Deck/blob/1dddf6e0d3aaa74cd4e10ba02938865b99682391/lib/es7210/src/audio_hal.h', 'license': 'LicenseRef-Espressif-MIT-products', 'boards': ['tdeck'], 'modes': ['standalone'], 'notice_sha256': '2e86ebadf356336e30aa02dc9b77d38a5e3a251958577549b1d4bae50dc5fd35'},
+
     "vendor/esp_idf_compat/mbedtls/ssl_tls.c": {
         "name": "Mbed TLS Finished backport: ssl_tls.c",
         "commit": "2b8e772fc1cb0732cda3bae7d1e9d6f4cfaf63d9",
@@ -159,6 +164,7 @@ def input_pins() -> dict:
         "rust_toolchain": load_identity(ROOT)["archive_toolchain"],
         "lite_commits": source_pins(ROOT, role="firmware"),
         "source_notices": source_notice_inputs(),
+        "codec2_notices": CODEC2_NOTICES,
         "collector_sha256": digest(Path(__file__).read_bytes()),
     }
 
@@ -310,6 +316,14 @@ class Collector:
             component = self.component(name, ref, f"https://github.com/ratspeak/{name}/tree/{ref}", modes=["standalone"])
             data = subprocess.check_output(["git", "show", f"{ref}:LICENSE"], cwd=ROOT.parent / name)
             self.add(component, "LICENSE", data, f"https://github.com/ratspeak/{name}/blob/{ref}/LICENSE")
+        ref = input_pins()["lite_commits"]["rsLXST"]
+        component = self.component("rsLXST native Codec2", ref, f"https://github.com/ratspeak/rsLXST/tree/{ref}/crates/lxst-codec2", modes=["standalone"])
+        component["license"] = "LGPL-2.1-only AND MIT AND BSD-3-Clause"
+        for path, expected in CODEC2_NOTICES.items():
+            data = subprocess.check_output(["git", "show", f"{ref}:{path}"], cwd=ROOT.parent / "rsLXST")
+            if digest(data) != expected:
+                raise ValueError("native Codec2 notice differs from reviewed source: " + path)
+            self.add(component, path, data, f"https://github.com/ratspeak/rsLXST/blob/{ref}/{path}")
         arduino_json, _ = self.pio_library("ArduinoJson", "7.4.3", "bblanchon/ArduinoJson", "v7.4.3", ALL)
         arduino_json["modes"] = ["standalone"]
         graphics, graphics_root = self.pio_library("LovyanGFX", "1.1.16", "lovyan03/LovyanGFX", "1.1.16", ["tdeck", "tpager", "m9"])
@@ -539,6 +553,11 @@ def check_bundle(output=ROOT / "licenses", *, check_inputs=True):
                 or component["notices"][0]["path"] != "LICENSE"
                 or component["notices"][0]["source"] != f"https://github.com/ratspeak/{name}/blob/{version}/LICENSE"):
             raise ValueError("Lite notice source differs from the pinned revision: " + name)
+    codec2 = [c for c in manifest["components"] if c["name"] == "rsLXST native Codec2"]
+    if len(codec2) != 1 or codec2[0]["version"] != manifest["inputs"]["lite_commits"].get("rsLXST"):
+        raise ValueError("missing native Codec2 notices for selected rsLXST")
+    if {n["path"]:n["sha256"] for n in codec2[0]["notices"]} != manifest["inputs"].get("codec2_notices"):
+        raise ValueError("native Codec2 license inventory differs")
     for version in ARDUINO_REFS:
         if ("Arduino-ESP32", version) not in identities:
             raise ValueError("missing Arduino framework license: " + version)

@@ -64,6 +64,7 @@ def main() -> int:
         siblings = {
             "rsReticulumLite": "Cargo.toml",
             "rsLXMFLite": "Cargo.toml",
+            "rsLXST": "Cargo.toml",
             "rsReticulum": "Cargo.toml",
             "rsLXMF": "Cargo.toml",
         }

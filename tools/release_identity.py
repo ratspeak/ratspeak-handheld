@@ -28,8 +28,9 @@ SOURCE_VARIABLES = {
     "rsLXMFLite": "LXMF_LITE_COMMIT",
     "rsReticulum": "RNS_FULL_COMMIT",
     "rsLXMF": "LXMF_FULL_COMMIT",
+    "rsLXST": "LXST_COMMIT",
 }
-SOURCE_ROLES = {name: "firmware" if name.endswith("Lite") else "trusted-validation"
+SOURCE_ROLES = {name: "firmware" if name.endswith("Lite") or name == "rsLXST" else "trusted-validation"
                 for name in SOURCE_VARIABLES}
 SHA = re.compile(r"[0-9a-f]{40}")
 SEMVER = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?")
