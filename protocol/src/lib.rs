@@ -403,6 +403,8 @@ mod rrc_secret;
 pub use proof::*;
 pub use rrc::*;
 pub use rrc_secret::*;
+mod voice;
+pub use voice::*;
 mod link;
 pub use link::*;
 mod resource;

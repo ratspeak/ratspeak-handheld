@@ -28,6 +28,8 @@ profile-small = []
 profile-micro = []
 
 [dependencies]
+lxst-codec2 = { path = "../../rsLXST/crates/lxst-codec2" }
+lxst-embedded = { path = "../../rsLXST/crates/lxst-embedded" }
 # The embedded Reticulum port (rsReticulumLite) for identity/announce/transport/proof/link/resource,
 # and the split LXMF codec (rsLXMFLite). Cross-repo path deps; both are no_std and stay faithful to
 # the trusted ../rsReticulum / ../rsLXMF.

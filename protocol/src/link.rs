@@ -48,6 +48,37 @@ pub unsafe extern "C" fn rs_handheld_rns_link_identify(
     })
 }
 
+/// Verify a decrypted 128-byte LINKIDENTIFY on its exact ACTIVE Link.
+/// C++ must retain the first verified identity and suppress repeat callbacks.
+///
+/// # Safety
+/// `link_id` reads 16 bytes, `data` reads `data_len`, `out_public` writes 64
+/// bytes; all regions are valid, correctly aligned and non-overlapping.
+/// Output is unchanged on any error. No Link state or caller policy is inferred.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rs_handheld_rns_link_verify_identification(
+    link_id: *const [u8; 16],
+    data: *const u8,
+    data_len: usize,
+    out_public: *mut [u8; 64],
+) -> RsHandheldStatus {
+    guard(|| {
+        if link_id.is_null() || data.is_null() || out_public.is_null() || data_len != 128 {
+            return RsHandheldStatus::ErrInvalidArg;
+        }
+        // SAFETY: exact length checked; disjoint regions guaranteed by caller.
+        let plaintext = unsafe { core::slice::from_raw_parts(data, data_len) };
+        match rns_link::verify_identification(unsafe { &*link_id }, plaintext) {
+            Some(public) => {
+                // SAFETY: required output was checked and caller owns 64 bytes.
+                unsafe { *out_public = public };
+                RsHandheldStatus::Ok
+            }
+            None => RsHandheldStatus::ErrCrypto,
+        }
+    })
+}
+
 /// Build a LINKREQUEST payload (initiator → destination) into `out`, `*out_len` its length (67).
 /// `x25519_priv` (32) + `ed25519_seed` (32) are the initiator's per-link EPHEMERAL key material
 /// (caller entropy; `no_std`: no RNG). The initiator MUST retain `x25519_priv` to derive the session
@@ -384,4 +415,69 @@ pub unsafe extern "C" fn rs_handheld_rns_link_decrypt(
             Err(_) => RsHandheldStatus::ErrCrypto,
         }
     })
+}
+
+#[cfg(test)]
+mod identification_tests {
+    use super::*;
+    #[test]
+    fn identification_ffi_commits_only_a_verified_peer() {
+        let identity = LocalIdentity::from_private_key(&[0x53; 64]);
+        let mut data = [0; 128];
+        rns_link::build_identification(&identity, &[0x41; 16], &mut data).unwrap();
+        let mut public = [0xa5; 64];
+        // SAFETY: all test buffers have exact lengths and disjoint ownership.
+        unsafe {
+            assert_eq!(
+                rs_handheld_rns_link_verify_identification(
+                    core::ptr::null(),
+                    data.as_ptr(),
+                    128,
+                    &mut public
+                ),
+                RsHandheldStatus::ErrInvalidArg
+            );
+            assert_eq!(
+                rs_handheld_rns_link_verify_identification(
+                    &[0x41; 16],
+                    data.as_ptr(),
+                    127,
+                    &mut public
+                ),
+                RsHandheldStatus::ErrInvalidArg
+            );
+            assert_eq!(
+                rs_handheld_rns_link_verify_identification(
+                    &[0x42; 16],
+                    data.as_ptr(),
+                    128,
+                    &mut public
+                ),
+                RsHandheldStatus::ErrCrypto
+            );
+            assert_eq!(public, [0xa5; 64]);
+            assert_eq!(
+                rs_handheld_rns_link_verify_identification(
+                    &[0x41; 16],
+                    data.as_ptr(),
+                    128,
+                    &mut public
+                ),
+                RsHandheldStatus::Ok
+            );
+            assert_eq!(&public, identity.public_key());
+            data[127] ^= 1;
+            public.fill(0xa5);
+            assert_eq!(
+                rs_handheld_rns_link_verify_identification(
+                    &[0x41; 16],
+                    data.as_ptr(),
+                    128,
+                    &mut public
+                ),
+                RsHandheldStatus::ErrCrypto
+            );
+            assert_eq!(public, [0xa5; 64]);
+        }
+    }
 }

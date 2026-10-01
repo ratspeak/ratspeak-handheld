@@ -893,6 +893,11 @@ rs_handheld_status_t rs_handheld_rns_seed_seen_message(rs_handheld_rns_t *ctx, c
 /* ACTIVE initiator only: build LINKIDENTIFY plaintext, then encrypt on that Link. */
 rs_handheld_status_t rs_handheld_rns_link_identify(const rs_handheld_rns_t *ctx,
                                                 const uint8_t link_id[16], uint8_t out[128]);
+/* ACTIVE Link only: verify decrypted LINKIDENTIFY; retain first identity in the
+ * Link owner and suppress duplicate callbacks. Output unchanged on error. */
+rs_handheld_status_t rs_handheld_rns_link_verify_identification(const uint8_t link_id[16],
+                                                const uint8_t *data, size_t data_len,
+                                                uint8_t out_public[64]);
 rs_handheld_status_t rs_handheld_rns_link_request_build(const uint8_t x25519_priv[32],
                                               const uint8_t ed25519_seed[32], uint8_t mode,
                                               uint32_t mtu, uint8_t *out, size_t out_cap,
@@ -1230,6 +1235,64 @@ rs_handheld_status_t rs_handheld_rns_peer_ratchet_remember(rs_handheld_rns_t *ct
                                                            const uint8_t ratchet[32],
                                                            uint64_t wall_secs, uint64_t uptime_ms,
                                                            int32_t *out_changed);
+
+/* Live LXST: caller-owned, serialized state; no capture/playback is started by
+ * Rust. Allocate final storage with the queried size AND alignment. PCM is mono
+ * 8 kHz signed 16-bit; native profile payloads include their Codec2 mode byte.
+ * Profile 0x20 = 2560 samples/65 bytes; 0x30 = 1600 samples/81 bytes.
+ * Neither 700C nor Opus/memo containers are enabled through this boundary. */
+typedef struct { uint32_t kind, value; } rs_handheld_voice_event_t;
+typedef struct {
+    uint32_t audio_generation, status, profile, ended, flags, event_count;
+    rs_handheld_voice_event_t events[8];
+} rs_handheld_voice_result_t;
+typedef struct { uint16_t offset, length; uint8_t codec, reserved[3]; } rs_handheld_voice_frame_t;
+typedef struct {
+    uint32_t signal_count, frame_count;
+    uint32_t signals[8];
+    rs_handheld_voice_frame_t frames[4];
+} rs_handheld_voice_packet_t;
+
+#define RS_HANDHELD_VOICE_LINK_READY 1u
+#define RS_HANDHELD_VOICE_PEER_VERIFIED 2u
+#define RS_HANDHELD_VOICE_ANSWER 3u
+#define RS_HANDHELD_VOICE_SIGNAL 4u
+#define RS_HANDHELD_VOICE_AUDIO_READY 5u /* argument=audio_generation, extra=success */
+#define RS_HANDHELD_VOICE_PTT 6u         /* argument=pressed; fresh edge only */
+#define RS_HANDHELD_VOICE_TICK 7u
+#define RS_HANDHELD_VOICE_END 8u
+/* Event kinds: 1 send signal; 2 identify; 3 select profile; 4 prepare;
+ * 5 reset; 6 open audio; 7 start receive; 8 dial tone; 9 terminate;
+ * 10 close Link; 11 ring; 12 switch profile; 13 ignored signal;
+ * 20 capture(value=0/1); 21 flush media; 22 ended(value=end reason).
+ * End reasons: 1 local, 2 remote, 3 rejected, 4 busy, 5 timeout,
+ * 6 unsupported profile, 7 audio unavailable, 8 route lost. */
+size_t rs_handheld_voice_codec_size(void);
+size_t rs_handheld_voice_codec_align(void);
+size_t rs_handheld_voice_session_size(void);
+size_t rs_handheld_voice_session_align(void);
+rs_handheld_status_t rs_handheld_voice_codec_init(uint8_t *storage, size_t capacity, uint32_t profile);
+rs_handheld_status_t rs_handheld_voice_codec_encode(uint8_t *storage, const int16_t *pcm, size_t samples,
+                                                 uint8_t *out, size_t capacity, size_t *out_len);
+rs_handheld_status_t rs_handheld_voice_codec_decode(uint8_t *storage, const uint8_t *payload, size_t length,
+                                                 int16_t *pcm, size_t capacity, size_t *out_samples);
+void rs_handheld_voice_codec_clear(uint8_t *storage);
+/* allowed: bit 0 admits VLBW, bit 1 admits LBW; only already qualified local
+ * routes/codecs may be admitted. Every bool is 0 or 1. */
+rs_handheld_status_t rs_handheld_voice_session_init(uint8_t *storage, size_t capacity, uint32_t incoming,
+                                                 uint32_t preferred, uint32_t allowed, uint32_t capture,
+                                                 uint32_t playback, uint64_t now_ms);
+/* PeerVerified requires actual cryptographic Link identity verification.
+ * Fence every call by current session/view/interface generation. Results carry
+ * scalar state/events only; PCM never traverses the Service/UI mailbox. */
+rs_handheld_status_t rs_handheld_voice_session_apply(uint8_t *storage, uint32_t operation,
+                                                  uint32_t argument, uint32_t extra, uint64_t now_ms,
+                                                  rs_handheld_voice_result_t *out);
+rs_handheld_status_t rs_handheld_voice_packet_view(const uint8_t *data, size_t length,
+                                                rs_handheld_voice_packet_t *out);
+rs_handheld_status_t rs_handheld_voice_packet_encode(const uint32_t *signals, size_t count,
+                                                  uint32_t codec, const uint8_t *payload, size_t length,
+                                                  uint8_t *out, size_t capacity, size_t *out_len);
 
 #ifdef __cplusplus
 } /* extern "C" */
