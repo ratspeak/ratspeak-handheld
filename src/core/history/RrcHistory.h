@@ -31,10 +31,15 @@ inline bool fail(storage::Result& result, storage::Error error = storage::Error:
 
 inline bool decode(const disk::Record& record, const disk::Context& context, rs_handheld_rrc_view_t& view) {
     if (!record.valid(record.length()) || !record.matches(context) || record.kind() != disk::Kind::Message || record.flags() ||
-        rs_handheld_rrc_decode(record.payload(), record.payloadLength(), &view) != RS_HANDHELD_OK ||
-        view.body_kind != 1 || (view.meta.kind != 20 && view.meta.kind != 21 && view.meta.kind != 22 && view.meta.kind != 40)) return false;
+        rs_handheld_rrc_decode(record.payload(), record.payloadLength(), &view) != RS_HANDHELD_OK) return false;
     const bool incoming = record.status() == disk::Status::Received;
     if (incoming == !std::memcmp(view.meta.source, context.local, 16)) return false;
+    if (view.meta.kind == 50) {
+        const uint8_t empty[16]{};
+        return incoming && view.body_kind == 2 && !view.meta.has_destination &&
+            !std::memcmp(context.conversation,empty,16) && handheld::rrc::hubText::source(view.meta.source,context.hub);
+    }
+    if (view.body_kind != 1 || (view.meta.kind != 20 && view.meta.kind != 21 && view.meta.kind != 22 && view.meta.kind != 40)) return false;
     uint8_t key[16]{};
     if (view.room.length) {
         uint8_t room[64]; size_t length = 0;
@@ -87,7 +92,9 @@ inline bool detail(const disk::Record& record,const disk::Context& context,handh
     char invited[65];out.invitation=record.status()==disk::Status::Received &&
         handheld::rrc::hubText::source(view.meta.source,context.hub) && handheld::rrc::hubText::invitation(record.payload(),view,invited);
     std::memcpy(out.nickname,record.payload()+view.nickname.offset,std::min(size_t(32),size_t(view.nickname.length)));
-    out.length=view.text.length;std::memcpy(out.text,record.payload()+view.text.offset,out.length);return true;
+    const bool unsupported=view.meta.kind==50;
+    out.length=unsupported?sizeof(handheld::rrc::UnsupportedResourceText)-1:view.text.length;
+    std::memcpy(out.text,unsupported?reinterpret_cast<const uint8_t*>(handheld::rrc::UnsupportedResourceText):record.payload()+view.text.offset,out.length);return true;
 }
 
 // Input/output share the caller's existing 512-byte read scratch. Only one
@@ -139,12 +146,15 @@ inline bool project(const disk::Context& context, const HistoryWindow::Query& qu
     std::snprintf(title, sizeof title, "%s%.*s%s%s", view.meta.kind == 22 ? "* " : "",
         int(nickLength), reinterpret_cast<const char*>(record.payload() + view.nickname.offset), nickLength ? " / " : "", id);
     if(boundary) std::snprintf(title,sizeof title,"Local history");
-    const auto* body=boundary?reinterpret_cast<const uint8_t*>(ObservationText):record.payload()+view.text.offset;
+    const bool unsupported=view.meta.kind==50;
+    const auto* body=boundary?reinterpret_cast<const uint8_t*>(ObservationText):unsupported?
+        reinterpret_cast<const uint8_t*>(handheld::rrc::UnsupportedResourceText):record.payload()+view.text.offset;
     storage::StoredRecordHeader header;
     std::memcpy(header.source, context.conversation, 16); std::memcpy(header.destination, context.conversation, 16);
     header.counter = record.counter(); header.revision = record.revision(); header.timestamp = timestamp(view.meta.timestamp_ms);
     header.incoming = query.cursor.incoming; header.status = displayedStatus(record.status());
-    header.titleLength = std::strlen(title); header.contentLength = boundary?sizeof ObservationText-1:view.text.length;
+    header.titleLength = std::strlen(title); header.contentLength = boundary?sizeof ObservationText-1:
+        unsupported?sizeof(handheld::rrc::UnsupportedResourceText)-1:view.text.length;
     const size_t total = header.titleLength + header.contentLength;
     if (query.offset > total) return fail(result, storage::Error::Stale);
     const size_t copied = std::min(total - query.offset, std::min(capacity, size_t(query.capacity)) - sizeof header);

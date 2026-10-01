@@ -575,14 +575,18 @@ void RustRrcEngine::onRrcPacket(Handle handle, const uint8_t* data, size_t lengt
     } else if (kind == 11 || kind == 13) {
         char name[65]; if (!normalized(data + view.room.offset, view.room.length, name, sizeof name)) return;
         auto* room = findRoom(name); if (!room) return; applyRoomControl(data, length, view, *room);
-    } else if (kind == 20 || kind == 21 || kind == 22 || kind == 40) {
-        if ((_status.phase != Phase::Online && kind != 40) || view.body_kind != 1) return;
+    } else if (kind == 20 || kind == 21 || kind == 22 || kind == 40 || kind == 50) {
+        if ((_status.phase != Phase::Online && kind != 40) ||
+            (kind == 50 ? view.body_kind != 2 : view.body_kind != 1)) return;
         char name[65]{}; Room* room = nullptr;
         if (view.room.length) {
             if (!normalized(data + view.room.offset, view.room.length, name, sizeof name)) return;
             room = findRoom(name);
-            if ((!room || !room->wanted) && (!hub || (kind!=21 && kind!=40))) return;
+            if ((!room || !room->wanted) && (!hub || (kind!=21 && kind!=40 && kind!=50))) return;
         } else if (!hub && !view.meta.has_destination) return;
+        // Preserve the original authenticated envelope, but never acquire the
+        // shared Resource workspace. Legacy hubs can ignore HELLO capability 0.
+        if (kind == 50) room = nullptr;
         char invited[65];
         if(hub && hubText::invitation(data,view,invited)) room=nullptr; // One discoverable invitation inbox: Hub notices.
         Receive* pending = nullptr;
@@ -650,6 +654,7 @@ void RustRrcEngine::pollReceive() {
                 if(decoded && live(item.link) && item.confirming && item.room<RoomCapacity &&
                     _rooms[item.room].view.phase==RoomPhase::Joined) _rooms[item.room].view.speaking=Speaking::Allowed;
                 if(!result.duplicate && decoded && live(item.link)) alert(record,view,item.room);
+                if(decoded && live(item.link) && view.meta.kind==50) notice(UnsupportedResourceText);
                 // A durable completion from a lost Link may update history,
                 // but cannot apply control observations to its replacement.
                 if (!result.duplicate && decoded && live(item.link) &&

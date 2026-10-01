@@ -9,6 +9,7 @@ constexpr size_t HubCapacity = 8, RoomCapacity = 4, PeopleCapacity = 24, DedupCa
 constexpr size_t HubCapacity = 16, RoomCapacity = 8, PeopleCapacity = 64, DedupCapacity = 128;
 #endif
 constexpr size_t PacketCapacity = 431, DraftCapacity = 400, KeyCapacity = 160;
+inline constexpr char UnsupportedResourceText[] = "Hub sent an unsupported attachment or long greeting. Text chat remains available.";
 constexpr size_t HubViewCapacity = HubCapacity * 2;
 enum class Phase : uint8_t { Disconnected, Finding, Connecting, Identifying, Greeting, Online, Recovering };
 enum class RoomPhase : uint8_t { Saved, Joining, Joined, Leaving, Recovering, NeedsKey, Error, Available };
