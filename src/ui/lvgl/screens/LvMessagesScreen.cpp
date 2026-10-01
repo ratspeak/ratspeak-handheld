@@ -18,7 +18,8 @@ constexpr int AvatarSize = 32;
 constexpr int TextX = 54;
 constexpr int NavigationHeight = 30;
 constexpr int NavigationSpace = NavigationHeight + 6;
-constexpr int RowHeight = (Theme::CONTENT_H - 19 - NavigationSpace) / 2;
+constexpr int FamilyHeight = 24;
+constexpr int RowHeight = (Theme::CONTENT_H - FamilyHeight - NavigationSpace) / 2;
 void peerText(const uint8_t* peer, char (&out)[33]) {
     constexpr char hex[] = "0123456789abcdef";
     for (size_t i=0;i<16;++i) { out[2*i]=hex[peer[i]>>4]; out[2*i+1]=hex[peer[i]&15]; }
@@ -92,7 +93,7 @@ lv_obj_t* createEmptyState(lv_obj_t* parent) {
 }
 
 bool LvMessagesScreen::bound() const {
-    if (!_active || !_screen || !_service) return false;
+    if (!_active || !_screen || !_service || !_rrc.navigation.direct()) return false;
     const auto& window=_service->conversationWindow();
     return window.visible() && window.statusReady() && _boundRevision==window.revision() &&
         _boundIdentity==window.identityGeneration() && _boundIdentity==_service->status().generation;
@@ -104,9 +105,23 @@ void LvMessagesScreen::createUI(lv_obj_t* parent) {
     _screen=parent;
     lv_obj_set_layout(parent,0);lv_obj_clear_flag(parent,LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_pad_all(parent,0,0);lv_obj_set_style_bg_color(parent,lv_color_hex(Theme::BG),0);
-    _caption=label(parent,&lv_font_rsdeck_10,Theme::TEXT_SECONDARY,8,2,Theme::CONTENT_W-16);
+    for (size_t n=0;n<2;++n) {
+        auto* button=_family[n]=lv_btn_create(parent);
+        lv_obj_set_pos(button,n*92,0);lv_obj_set_size(button,92,FamilyHeight);
+        lv_obj_add_style(button,LvTheme::styleListBtn(),0);
+        lv_obj_add_style(button,LvTheme::styleListBtnFocused(),LV_STATE_FOCUSED);
+        lv_obj_set_style_pad_all(button,0,0);
+        auto* text=label(button,&lv_font_rsdeck_12,Theme::TEXT_PRIMARY,0,0,92);
+        lv_obj_set_style_text_align(text,LV_TEXT_ALIGN_CENTER,0);lv_label_set_text(text,n?"Hubs":"Direct");lv_obj_center(text);
+        lv_obj_set_user_data(button,reinterpret_cast<void*>(n));
+        lv_obj_add_event_cb(button,[](lv_event_t* e) {
+            static_cast<LvMessagesScreen*>(lv_event_get_user_data(e))->switchFamily(!reinterpret_cast<uintptr_t>(lv_obj_get_user_data(lv_event_get_target(e))));
+        },LV_EVENT_CLICKED,this);
+        lv_group_add_obj(LvInput::group(),button);
+    }
+    _caption=label(parent,&lv_font_rsdeck_10,Theme::TEXT_SECONDARY,192,5,Theme::CONTENT_W-200);
     _list=lv_obj_create(parent);
-    lv_obj_set_pos(_list,0,19);lv_obj_set_size(_list,Theme::CONTENT_W,Theme::CONTENT_H-51);
+    lv_obj_set_pos(_list,0,FamilyHeight);lv_obj_set_size(_list,Theme::CONTENT_W,Theme::CONTENT_H-FamilyHeight-NavigationSpace);
     lv_obj_add_style(_list,LvTheme::styleList(),0);
     lv_obj_add_style(_list,LvTheme::styleScrollbar(),LV_PART_SCROLLBAR);
     lv_obj_set_layout(_list,LV_LAYOUT_FLEX);lv_obj_set_flex_flow(_list,LV_FLEX_FLOW_COLUMN);
@@ -120,7 +135,7 @@ void LvMessagesScreen::createUI(lv_obj_t* parent) {
     lv_obj_set_style_text_align(_empty,LV_TEXT_ALIGN_CENTER,0);
     _emptyState=createEmptyState(parent);
     _update=lv_btn_create(parent);
-    lv_obj_set_pos(_update,Theme::CONTENT_W-116,0);lv_obj_set_size(_update,112,18);
+    lv_obj_set_pos(_update,Theme::CONTENT_W-116,3);lv_obj_set_size(_update,112,18);
     lv_obj_add_style(_update,LvTheme::styleListBtn(),0);
     lv_obj_add_style(_update,LvTheme::styleListBtnFocused(),LV_STATE_FOCUSED);
     lv_obj_set_style_pad_all(_update,0,0);
@@ -148,12 +163,17 @@ void LvMessagesScreen::createUI(lv_obj_t* parent) {
 }
 void LvMessagesScreen::onEnter() {
     _active=true;
+    _rrc.visible(true);
+    _rrc.notice=[this](const char* text) { notice(text); };
+    _rrc.send=[this](const handheld::rrc::Command& command,const uint8_t* body,size_t length) {
+        return _service && _service->rrcCommand(command,body,length) ? handheld::rrc::Code::Ok : handheld::rrc::Code::Busy;
+    };
     _loadStarted=millis();_loadPending=true;
 #if HAS_TOUCH
     _focusActive=false;
 #endif
     hideActionMenu();
-    if (_service) _service->watchConversations();
+    if (_service && _rrc.navigation.direct()) _service->watchConversations();
     refreshUI();
 }
 void LvMessagesScreen::detachRows() {
@@ -165,7 +185,7 @@ void LvMessagesScreen::detachRows() {
 }
 void LvMessagesScreen::onExit() {
     if (bound()) reportViewport();
-    _active=false;hideActionMenu();detachRows();
+    _active=false;_rrc.visible(false);clearRrc();hideActionMenu();detachRows();
     if (_service) {
         auto& window=_service->conversationWindow();
         _service->closeConversations();
@@ -175,10 +195,15 @@ void LvMessagesScreen::onExit() {
 void LvMessagesScreen::destroyUI() {
     onExit();_list=nullptr;_caption=nullptr;_empty=nullptr;_update=nullptr;_emptyState=nullptr;
     for (auto& button:_navigation) button=nullptr;
+    for (auto& button:_family) button=nullptr;
     LvScreen::destroyUI();
 }
 void LvMessagesScreen::refreshUI() {
     if (!_screen || !_service) return;
+    pollRrc();
+    lv_label_set_text(lv_obj_get_child(_family[1],0),_rrc.navigation.secondLabel());
+    for (size_t n=0;n<2;++n) lv_obj_set_style_bg_color(_family[n],lv_color_hex((_rrc.navigation.direct()==(n==0))?Theme::PRIMARY_SUBTLE:Theme::BG),0);
+    if (!_rrc.navigation.direct()) { renderRrc(); return; }
     auto& window=_service->conversationWindow();
     if (!_active || !window.visible() || window.identityGeneration()!=_service->status().generation) {
         hideActionMenu();detachRows();
@@ -240,12 +265,12 @@ void LvMessagesScreen::bindRows() {
         lv_group_add_obj(LvInput::group(),row);
         // LVGL owns each bounded avatar buffer until its canvas is deleted.
         if (auto* pixels=lv_mem_alloc(LxmFaceAvatar::bufferSize(AvatarSize))) {
-            auto avatar=LxmFaceAvatar::create(row,12,16,AvatarSize,pixels,Theme::PRIMARY_SUBTLE,
+            auto avatar=LxmFaceAvatar::create(row,12,(RowHeight-AvatarSize)/2,AvatarSize,pixels,Theme::PRIMARY_SUBTLE,
                                               value.unreadCount?Theme::PRIMARY:Theme::BORDER);
             lv_obj_add_event_cb(avatar.canvas,[](lv_event_t* event) { lv_mem_free(lv_event_get_user_data(event)); },LV_EVENT_DELETE,pixels);
             LxmFaceAvatar::render(avatar.canvas,String(peer));
         }
-        widgets.name=label(row,&lv_font_rsdeck_14,Theme::TEXT_PRIMARY,TextX,4,Theme::CONTENT_W-TextX-58);
+        widgets.name=label(row,&lv_font_rsdeck_14,Theme::TEXT_PRIMARY,TextX,2,Theme::CONTENT_W-TextX-58);
         // DOT only truncates after exhausting the label's height; keep the preview's line clear.
         lv_obj_set_height(widgets.name,lv_font_get_line_height(&lv_font_rsdeck_14));
         lv_label_set_long_mode(widgets.name,LV_LABEL_LONG_DOT);
@@ -261,16 +286,18 @@ void LvMessagesScreen::bindRows() {
                 lv_label_set_text(time,clock);
             }
         }
-        widgets.preview=label(row,&lv_font_rsdeck_12,Theme::TEXT_SECONDARY,TextX,25,Theme::CONTENT_W-TextX-8);
+        widgets.preview=label(row,&lv_font_rsdeck_12,Theme::TEXT_SECONDARY,TextX,22,Theme::CONTENT_W-TextX-8);
+        lv_obj_set_height(widgets.preview,lv_font_get_line_height(&lv_font_rsdeck_12));
         // CLIP never mutates borrowed bytes; DOT is forbidden for bank pointers.
         lv_label_set_text_static(widgets.preview,(value.flags&Row::Unavailable)?"Message unavailable":
             value.previewLength?value.preview:"No preview");
         if (value.flags&Row::PreviewTruncated) {
             lv_obj_set_width(widgets.preview,Theme::CONTENT_W-TextX-23);
-            auto* more=label(row,&lv_font_rsdeck_12,Theme::TEXT_MUTED,Theme::CONTENT_W-19,25,15);
+            auto* more=label(row,&lv_font_rsdeck_12,Theme::TEXT_MUTED,Theme::CONTENT_W-19,22,15);
             lv_label_set_text_static(more,"...");
         }
-        widgets.status=label(row,&lv_font_rsdeck_10,Theme::TEXT_MUTED,TextX,46,Theme::CONTENT_W-TextX-8);
+        widgets.status=label(row,&lv_font_rsdeck_10,Theme::TEXT_MUTED,TextX,RowHeight-16,Theme::CONTENT_W-TextX-8);
+        lv_obj_set_height(widgets.status,lv_font_get_line_height(&lv_font_rsdeck_10));
     }
     updateStatuses();
     lv_obj_update_layout(_list);
@@ -340,6 +367,8 @@ void LvMessagesScreen::updateCaptions() {
     lv_label_set_text_static(lv_obj_get_child(_update,0),retry?"Retry":"Check updates");
     if (update) lv_obj_clear_flag(_update,LV_OBJ_FLAG_HIDDEN);
     else lv_obj_add_flag(_update,LV_OBJ_FLAG_HIDDEN);
+    if (update) lv_obj_add_flag(_caption,LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_clear_flag(_caption,LV_OBJ_FLAG_HIDDEN);
     for (size_t i=0;i<4;++i) {
         const bool enabled=window && _active && !window->loading() && (i<2?window->canPrevious():window->canNext());
         if (enabled) lv_obj_clear_state(_navigation[i],LV_STATE_DISABLED);
@@ -347,9 +376,10 @@ void LvMessagesScreen::updateCaptions() {
     }
     // Keep paging controls visible at a stable position, including empty lists.
     // Recovery stays in the header; both previews always fit above the arrows.
-    const int top=19;
+    const int top=FamilyHeight;
     _binding=true;
     const int height=Theme::CONTENT_H-top-NavigationSpace;
+    lv_obj_align(_emptyState,LV_ALIGN_TOP_MID,0,top+(height-94)/2);
     if (lv_obj_get_y(_list)!=top || lv_obj_get_height(_list)!=height) {
         lv_obj_set_y(_list,top);lv_obj_set_height(_list,height);lv_obj_update_layout(_list);
     }
@@ -501,6 +531,7 @@ bool LvMessagesScreen::handleLongPress() {
 }
 bool LvMessagesScreen::handleKey(const KeyEvent& event) {
     if (!_service || !_active) return false;
+    if (!_rrc.navigation.direct()) return handleRrcKey(event);
     if (_lpState!=LP_NONE) {
         if (_actionIdentity!=_service->status().generation) {hideActionMenu();return true;}
         const bool confirm=_lpState==LP_CONFIRM_DELETE;const unsigned count=confirm?2:3;
@@ -524,3 +555,5 @@ bool LvMessagesScreen::handleKey(const KeyEvent& event) {
 #endif
     return false;
 }
+
+#include "LvRrcBrowser.inc"

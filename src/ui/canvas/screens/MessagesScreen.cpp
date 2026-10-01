@@ -9,10 +9,101 @@ namespace {
 constexpr int NavigationHeight = 18;
 }
 
+void MessagesScreen::switchFamily() {
+    exitContextMenu(); _rrc.navigation.direct(!_rrc.navigation.direct());
+    _rrc.refresh();
+    if (_rrc.navigation.direct()) _conversations.resume(1);
+    else _conversations.close();
+}
+void MessagesScreen::pollRrc() {
+    if (!_backend) return;
+    _rrc.observe(_backend->rrcStatus(),1);
+    if (!_rrc.needsRows()) return;
+    using Page = handheld::ui::RrcNavigation::Page;
+    using namespace handheld::rrc;
+    const auto view = _rrc.beginRows();
+    if (!_rrc.completeRows(view,true)) return;
+    switch (_rrc.navigation.page()) {
+    case Page::Hubs: { HubView rows[HubViewCapacity]; const auto count = _backend->rrcHubs(rows,HubViewCapacity); _rrc.rows(rows,count); break; }
+    case Page::Channels: { RoomView rows[RoomCapacity]; const auto count = _backend->rrcRooms(rows,RoomCapacity); _rrc.rows(rows,count); break; }
+    case Page::People: { PersonView rows[PeopleCapacity]; const auto count = _backend->rrcPeople(_rrc.navigation.conversation().room,rows,PeopleCapacity); _rrc.rows(rows,count); break; }
+    case Page::Directory: { DirectoryView rows[5]; const auto count = _backend->rrcDirectory(rows,5,_rrc.navigation.offset()); _rrc.rows(rows,count,false,true); break; }
+    default: break;
+    }
+}
+void MessagesScreen::prepareRrcForm() {
+    if (!_rrc.form() || _rrcFormView == _rrc.navigation.revision()) return;
+    _rrcInput.clearSensitive(); _rrcInput.setMaxLength(_rrc.formLimit());
+    _rrcInput.setActive(true); _rrcFormView = _rrc.navigation.revision(); _rememberKey = false;
+    _rrcInput.setSubmitCallback([this](const std::string& value) {
+        if (_backend && _rrc.submit(value.data(),value.size(),_backend->rrcStatus(),_rememberKey)) {
+            _rrcInput.clearSensitive(); _rrcFormView = 0;
+        }
+    });
+}
+void MessagesScreen::renderRrc(M5Canvas& canvas, int y) {
+    if (!_backend) return;
+    const auto status = _backend->rrcStatus();
+    canvas.setTextColor(Theme::TEXT_SECONDARY);
+    if (_deleteNotice || _rrc.navigation.page()!=handheld::ui::RrcNavigation::Page::Channels) {
+        ScrollList::renderRow(canvas,_deleteNotice ? _deleteNotice : _rrc.heading(),0,y,Theme::CONTENT_W,false);
+        y += Theme::LIST_ROW_H;
+    }
+    if (_rrc.form()) {
+        prepareRrcForm();
+        if (_rrc.navigation.page() == handheld::ui::RrcNavigation::Page::RoomKey) {
+            canvas.drawString(_rememberKey ? "Remember: yes (Ctrl+R)" : "Remember: no (Ctrl+R)",4,y);
+            y += Theme::CHAR_H + 2;
+        }
+        _rrcInput.render(canvas,0,y,Theme::CONTENT_W);
+        return;
+    }
+    if (!_rrc.ready()) { canvas.drawString("Loading...",4,y); return; }
+    const size_t visible = std::max(1,(Theme::CONTENT_Y + Theme::CONTENT_H-y)/Theme::LIST_ROW_H);
+    const auto selected = _rrc.navigation.selected();
+    const auto first = selected < _rrc.count() && selected >= visible ? selected-visible+1 : 0;
+    for (size_t n = first; n < _rrc.count() && n < first+visible; ++n) {
+        char text[112]; _rrc.label(n,status,text,sizeof text);
+        ScrollList::renderRow(canvas,text,0,y,Theme::CONTENT_W,n==selected);
+        y += Theme::LIST_ROW_H;
+        if (n == 0 && _rrc.navigation.page() == handheld::ui::RrcNavigation::Page::Channels)
+            canvas.drawFastHLine(2,y-1,Theme::CONTENT_W-4,Theme::DIVIDER);
+    }
+}
+bool MessagesScreen::handleRrcKey(const KeyEvent& event) {
+    if (!_backend) return true;
+    if (_rrc.form()) {
+        prepareRrcForm();
+        if (event.escape && !event.repeat) { _rrcInput.clearSensitive(); _rrc.back(); return true; }
+        if (event.ctrl && (event.character=='r' || event.character=='R')) { if (!event.repeat) _rememberKey=!_rememberKey; return true; }
+        return _rrcInput.handleKey(event);
+    }
+    if (event.escape || event.backspace) { if (!event.repeat) _rrc.back(); return true; }
+    auto selected = _rrc.navigation.selected();
+    if (event.navUp()) { _rrc.navigation.select(selected >= _rrc.count() ? _rrc.count()-1 : selected ? selected-1 : 0); return true; }
+    if (event.navDown()) { _rrc.navigation.select(selected >= _rrc.count() ? 0 : std::min(selected+1,_rrc.count()-1)); return true; }
+    if (event.enter) { if (!event.repeat) _rrc.activate(selected,_backend->rrcStatus()); return true; }
+    if (event.character=='r' || event.character=='R') { _rrc.refresh(); return true; }
+    return false;
+}
+
 void MessagesScreen::onEnter() {
     _showingContext = false; _visible = true; _pageFocus = -1;
+    _rrc.visible(true);
+    _rrc.notice = [this](const char* text) { _deleteNotice = text; _deleteNoticeSince = millis(); };
+    _rrc.send = [this](const handheld::rrc::Command& value, const uint8_t* body, size_t length) {
+        if (!_backend) return handheld::rrc::Code::Offline;
+        auto command = value;
+        command.revision = ++_rrcCommand;
+        return _backend->rrcCommand(command,body,length);
+    };
     // Cardputer identity switches commit through an orderly restart.
-    _conversations.resume(1);
+    if (_rrc.navigation.direct()) _conversations.resume(1);
+}
+void MessagesScreen::onExit() {
+    _visible = false; _conversations.close(); _rrc.visible(false);
+    // Secret forms never survive leaving the browser.
+    _rrcInput.clearSensitive(); _rrcFormView = 0;
 }
 
 std::string MessagesScreen::peerHex(size_t index) const {
@@ -38,6 +129,8 @@ std::string MessagesScreen::peerLabel(const std::string& peer) const {
 }
 
 bool MessagesScreen::pollConversations(bool allowAdmission) {
+    const auto rrcRevision = _rrc.revision();
+    if (allowAdmission) pollRrc();
     if (!_lxmf) return false;
     const auto publication = _conversations.revision(), statuses = _conversations.statusRevision();
     const auto state = _conversations.state(); const auto error = _conversations.error();
@@ -65,7 +158,7 @@ bool MessagesScreen::pollConversations(bool allowAdmission) {
         _pageFocus = pageEnabled(2) ? 2 : pageEnabled(1) ? 1 : -1;
     return publication != _conversations.revision() || statuses != _conversations.statusRevision() ||
         state != _conversations.state() || error != _conversations.error() || updated != _conversations.updated() ||
-        pageFocus != _pageFocus;
+        pageFocus != _pageFocus || rrcRevision != _rrc.revision();
 }
 
 void MessagesScreen::renderList(M5Canvas& canvas, int y, int height) {
@@ -196,6 +289,11 @@ void MessagesScreen::render(M5Canvas& canvas) {
     canvas.fillRect(0, y + 2, 3, headerH - 4, Theme::ACCENT);
     canvas.setTextColor(Theme::ACCENT);
     Theme::useUiFont(canvas);
+    if (!_rrc.navigation.direct()) {
+        canvas.drawString((std::string("Direct  |  [") + _rrc.navigation.secondLabel() + "]   Tab").c_str(),8,y+2);
+        canvas.drawFastHLine(0,y+headerH,Theme::CONTENT_W,Theme::DIVIDER);
+        renderRrc(canvas,y+headerH+2); return;
+    }
     bool unavailable = false;
     for (size_t i = 0; i < _conversations.count(); ++i)
         unavailable |= bool(_conversations.row(i)->flags & handheld::storage::ConversationView::Unavailable);
@@ -203,7 +301,7 @@ void MessagesScreen::render(M5Canvas& canvas) {
         unavailable || _conversations.state() == Conversations::State::Retrying ? "Read failed; R to retry" :
         _conversations.statusRefreshDelayed() ? "Status refresh delayed (R)" :
         nullptr;
-    const auto heading = notice ? std::string(notice) : "Page " + std::to_string(_conversations.pageNumber());
+    const auto heading = notice ? std::string(notice) : std::string("[Direct]  |  ") + _rrc.navigation.secondLabel() + "   Tab";
     canvas.drawString(heading.c_str(), 8, y + 2);
     canvas.drawFastHLine(0, y + headerH, Theme::CONTENT_W, Theme::DIVIDER);
     y += headerH + 2;
@@ -252,6 +350,8 @@ void MessagesScreen::movePageFocus(int direction) {
 }
 
 bool MessagesScreen::handleKey(const KeyEvent& event) {
+    if (event.tab && !event.repeat && !_rrc.form() && !_showingContext) { switchFamily(); return true; }
+    if (!_rrc.navigation.direct()) return handleRrcKey(event);
     if (event.repeat && (event.backspace || event.forwardDelete)) return true;
     if (_showingContext) {
         if (event.escape || event.backspace) {

@@ -18,6 +18,11 @@ public:
     uint64_t revision() const { return _revision; }
     bool setText(const std::string& text);
     void clear();
+    void clearSensitive() {
+        volatile char* bytes = _text.empty() ? nullptr : &_text[0];
+        for (size_t n = 0; n < _text.size(); ++n) bytes[n] = 0;
+        clear();
+    }
     // Reserve before an owner admits work that requires retaining this text.
     // Existing field editors keep their ordinary length policy.
     bool reserveTextCapacity(size_t capacity);

@@ -4,6 +4,8 @@
 #include "widgets/ScrollList.h"
 #include "reticulum/LXMFManager.h"
 #include "history/ConversationWindow.h"
+#include "ui/RrcBrowser.h"
+#include "widgets/TextInput.h"
 
 class AnnounceManager;
 class ProtocolBackend;
@@ -14,7 +16,7 @@ public:
     bool handleKey(const KeyEvent& event) override;
     const char* title() const override { return "Messages"; }
     void onEnter() override;
-    void onExit() override { _visible = false; _conversations.close(); }
+    void onExit() override;
 
     void setLXMFManager(LXMFManager* lxmf) { _lxmf = lxmf; }
     void setAnnounceManager(AnnounceManager* am) { _am = am; }
@@ -23,6 +25,7 @@ public:
     // Callback to open a conversation
     using OpenConversationCb = std::function<void(const std::string& peerHex)>;
     void setOpenCallback(OpenConversationCb cb) { _openCb = cb; }
+    void setRrcOpenCallback(handheld::ui::RrcBrowser::Open cb) { _rrc.open = std::move(cb); }
 
     // Callback to add contact
     using AddContactCb = std::function<void(const std::string& peerHex)>;
@@ -34,6 +37,15 @@ public:
     bool pollDeletion();
 
 private:
+    void pollRrc();
+    void renderRrc(M5Canvas&, int y);
+    bool handleRrcKey(const KeyEvent&);
+    void switchFamily();
+    void prepareRrcForm();
+    handheld::ui::RrcBrowser _rrc;
+    TextInput _rrcInput;
+    uint32_t _rrcFormView = 0, _rrcCommand = 0;
+    bool _rememberKey = false;
     using Conversations = handheld::history::ConversationList;
     std::string peerHex(size_t index) const;
     std::string peerLabel(const std::string& peer) const;

@@ -2,6 +2,7 @@
 
 #include "UIManager.h"
 #include "runtime/ServiceClient.h"
+#include "ui/RrcBrowser.h"
 #include <functional>
 #include <string>
 
@@ -12,6 +13,7 @@ public:
     void setAnnounceManager(handheld::NodeView* nodes) { _am = nodes; }
     void setBackend(handheld::ProtocolView* backend) { _backend = backend; }
     void setOpenCallback(OpenCallback callback) { _onOpen = callback; }
+    void setRrcOpenCallback(handheld::ui::RrcBrowser::Open callback) { _rrc.open = std::move(callback); }
     void setUIManager(UIManager* ui) { _ui = ui; }
     void createUI(lv_obj_t* parent) override;
     void destroyUI() override;
@@ -23,6 +25,17 @@ public:
     const char* title() const override { return "Messages"; }
 
 private:
+    void switchFamily(bool direct);
+    void pollRrc();
+    void renderRrc();
+    void clearRrc();
+    void submitRrc();
+    bool handleRrcKey(const KeyEvent&);
+    handheld::ui::RrcBrowser _rrc;
+    lv_obj_t* _family[2]{};
+    lv_obj_t *_rrcPanel = nullptr, *_rrcText = nullptr, *_rrcRemember = nullptr;
+    lv_obj_t* _rrcRows[12]{};
+    uint32_t _rrcRendered = 0, _rrcFormView = 0, _rrcRetryAt = 0;
     using Window = handheld::history::ConversationList;
     using Row = Window::Row;
     struct RowWidgets { lv_obj_t *row = nullptr, *name = nullptr, *preview = nullptr, *status = nullptr; };
