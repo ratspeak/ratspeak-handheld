@@ -1411,6 +1411,7 @@ void LvSettingsScreen::rebuildItemList() {
     for (int i = _catRangeStart; i < _catRangeEnd; i++) {
         const auto& item = _items[i];
         const bool fullValue = strcmp(item.label, "Manual node") == 0;
+        const bool deliveryPolicy = strcmp(item.label, "Delivery") == 0;
         bool selected = (i == _selectedIdx);
         bool editable = isEditable(i);
         bool rebootPending = settingNeedsReboot(item);
@@ -1463,7 +1464,7 @@ void LvSettingsScreen::rebuildItemList() {
             item.type == SettingType::ACTION ? Theme::TEXT_PRIMARY :
             !editable ? Theme::TEXT_MUTED : Theme::TEXT_SECONDARY;
         lv_obj_set_style_text_color(nameLbl, lv_color_hex(nameColor), 0);
-        clipLabel(nameLbl, Theme::CONTENT_W - 136);
+        clipLabel(nameLbl, Theme::CONTENT_W - (deliveryPolicy ? 176 : 136));
         lv_label_set_text(nameLbl, item.label);
         lv_obj_align(nameLbl, LV_ALIGN_LEFT_MID, 8, fullValue || (_freqEditing && selected) ? -9 : 0);
 
@@ -1522,7 +1523,7 @@ void LvSettingsScreen::rebuildItemList() {
             lv_obj_set_style_text_font(valLbl, fullValue ? &lv_font_rsdeck_10 : font, 0);
             lv_obj_set_style_text_color(valLbl, lv_color_hex(valColor), 0);
             lv_obj_set_style_text_align(valLbl, LV_TEXT_ALIGN_RIGHT, 0);
-            clipLabel(valLbl, fullValue ? Theme::CONTENT_W - 16 : _freqEditing && selected ? 180 : 124);
+            clipLabel(valLbl, fullValue ? Theme::CONTENT_W - 16 : _freqEditing && selected ? 180 : deliveryPolicy ? 156 : 124);
             lv_label_set_text(valLbl, valStr.c_str());
             lv_obj_align(valLbl, LV_ALIGN_RIGHT_MID, -8, fullValue ? 10 : _freqEditing && selected ? -9 : 0);
             // Cache value label for the actively edited item (in-place updates)

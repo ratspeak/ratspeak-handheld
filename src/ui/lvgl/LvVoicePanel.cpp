@@ -32,7 +32,7 @@ void LvVoicePanel::build() {
     _root=lv_obj_create(lv_layer_top());lv_obj_set_size(_root,Theme::SCREEN_W,Theme::SCREEN_H);lv_obj_center(_root);
     lv_obj_add_style(_root,LvTheme::styleModal(),0);lv_obj_set_style_pad_all(_root,10,0);lv_obj_clear_flag(_root,LV_OBJ_FLAG_SCROLLABLE);
     auto label=[&](const char* text,int y) {
-        auto* l=lv_label_create(_root);lv_obj_set_width(l,Theme::SCREEN_W-24);lv_obj_set_height(l,18);lv_obj_set_pos(l,0,y);
+        auto* l=lv_label_create(_root);lv_obj_set_width(l,Theme::SCREEN_W-24);lv_obj_set_height(l,lv_font_get_line_height(&lv_font_rsdeck_14));lv_obj_set_pos(l,0,y);
         lv_obj_set_style_text_font(l,&lv_font_rsdeck_14,0);lv_obj_set_style_text_color(l,lv_color_hex(Theme::TEXT_PRIMARY),0);
         lv_label_set_long_mode(l,LV_LABEL_LONG_DOT);lv_label_set_text(l,text);return l;
     };

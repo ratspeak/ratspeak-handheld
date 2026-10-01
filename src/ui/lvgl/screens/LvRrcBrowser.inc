@@ -73,14 +73,14 @@ void LvMessagesScreen::renderRrc() {
     lv_obj_set_flex_flow(_rrcPanel,LV_FLEX_FLOW_COLUMN);lv_obj_add_style(_rrcPanel,LvTheme::styleScrollbar(),LV_PART_SCROLLBAR);
     if (_rrc.navigation.page()!=handheld::ui::RrcNavigation::Page::Channels) {
         auto* title=label(_rrcPanel,&lv_font_rsdeck_12,Theme::TEXT_SECONDARY,0,0,Theme::CONTENT_W-16);
-        lv_label_set_text(title,_rrc.heading());lv_obj_set_height(title,16);
+        lv_label_set_text(title,_rrc.heading());lv_obj_set_height(title,lv_font_get_line_height(&lv_font_rsdeck_12));
     }
     auto button=[this](const char* text,size_t index) {
         auto* item=lv_btn_create(_rrcPanel);lv_obj_set_size(item,Theme::CONTENT_W-12,29);
         lv_obj_add_style(item,LvTheme::styleListBtn(),0);lv_obj_add_style(item,LvTheme::styleListBtnFocused(),LV_STATE_FOCUSED);
         lv_obj_set_style_pad_all(item,4,0);lv_obj_clear_flag(item,LV_OBJ_FLAG_SCROLLABLE);
         auto* caption=label(item,&lv_font_rsdeck_12,Theme::TEXT_PRIMARY,0,0,Theme::CONTENT_W-24);
-        lv_obj_set_height(caption,16);lv_label_set_long_mode(caption,LV_LABEL_LONG_DOT);lv_label_set_text(caption,text);
+        lv_obj_set_height(caption,lv_font_get_line_height(&lv_font_rsdeck_12));lv_label_set_long_mode(caption,LV_LABEL_LONG_DOT);lv_label_set_text(caption,text);
         lv_obj_set_user_data(item,reinterpret_cast<void*>(index));lv_group_add_obj(LvInput::group(),item);return item;
     };
     if (_rrc.form()) {
