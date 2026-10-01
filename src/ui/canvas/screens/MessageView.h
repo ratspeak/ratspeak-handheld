@@ -25,6 +25,7 @@ public:
     void setMessageStore(MessageStore* store) { _store = store; }
     void setAnnounceManager(AnnounceManager* am) { _am = am; }
     bool setPeerHex(const std::string& peerHex);
+    bool prepareMaintenance() { _rrcSendRequested=false;return leaveRrcDraft(); }
     bool setRrcConversation(const handheld::rrc::Conversation&, const char* insert = nullptr);
     bool pollRrc(bool allowAdmission = true);
     void notifyNewMessage(const handheld::storage::RecordKey&);

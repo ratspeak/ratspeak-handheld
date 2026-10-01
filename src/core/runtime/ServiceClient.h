@@ -113,6 +113,9 @@ public:
     uint32_t lifecycleStarted = 0;
     std::function<void(const char*)> onNotice;
     std::function<void()> onConfigApplied;
+    // UI-owned foreground state must be durable before closing admission. The
+    // guard may request a save and decline this attempt, retaining the editor.
+    std::function<bool()> beforeLifecycle;
     NodeView nodes;
     ProtocolView protocol;
     UserConfig config;

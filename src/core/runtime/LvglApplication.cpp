@@ -898,6 +898,7 @@ void handheld::lvgl_application::setup() {
         if (strcmp(message, "New message") == 0) audio.requestMessage();
     };
     serviceClient.onConfigApplied = applyUiSettings;
+    serviceClient.beforeLifecycle = [] { return lvMessageView.prepareMaintenance(); };
     deviceService.pollNetwork = serviceNetworkPoll;
     deviceService.networkStatus = [](handheld::Status& status) {
 #if HAS_GPS

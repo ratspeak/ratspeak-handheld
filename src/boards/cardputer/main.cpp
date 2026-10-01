@@ -306,6 +306,9 @@ static bool requestMaintenance(handheld::Operation operation) {
         return true;
     }
     if (!maintenance.accepting()) return false;
+    if (operation!=handheld::Operation::FactoryReset && !messageView.prepareMaintenance()) {
+        settingsScreen.setMaintenanceBlockReason("Channel draft not saved; retry");return false;
+    }
     handheld::Request request;
     request.id = ++maintenanceNextId; request.generation = 1;
     request.operation = operation; request.admittedAt = millis();

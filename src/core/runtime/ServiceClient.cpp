@@ -83,6 +83,10 @@ uint32_t ServiceClient::requestPropagationNodes(PropagationCompletion completion
 uint32_t ServiceClient::action(Operation op, const std::string& peer, const std::string& body,
                               uint32_t argument, Completion completion) {
     if (peer.size() > 32) { tell("Invalid destination"); return 0; }
+    // Factory reset explicitly discards local data. Failed-maintenance recovery
+    // already has its own rendered data-loss warning and fresh restart request.
+    if (lifecycleOperation(op) && op!=Operation::FactoryReset && _mailbox.accepting() &&
+        beforeLifecycle && !beforeLifecycle()) return 0;
     Request request; request.operation = op; request.argument = argument;
     strlcpy(request.peer, peer.c_str(), sizeof(request.peer));
     return submit(request, body, 0, [this, completion](const Result& result, const char*) {

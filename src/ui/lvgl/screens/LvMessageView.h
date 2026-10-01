@@ -23,6 +23,7 @@ public:
     bool handleLongPress() override;
 
     bool setPeerHex(const std::string& hex);
+    bool prepareMaintenance() { _rrcSendRequested=false;return leaveRrcDraft(); }
     bool setRrcConversation(const handheld::rrc::Conversation&, const char* insert = nullptr);
     void pollRrc(); // App-owned, including hidden drafts and send completions.
     void setBackend(handheld::ProtocolView* backend) { _backend = backend; }

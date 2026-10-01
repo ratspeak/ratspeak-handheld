@@ -50,6 +50,8 @@ public:
     void applyCommitted(bool refreshCandidate = true);
     void setMaintenanceCallback(std::function<bool(handheld::Operation)> cb) { _maintenanceCb = cb; }
 
+    void setMaintenanceBlockReason(const char* reason) { _maintenanceReason=reason; }
+
     // Callback for back navigation
     using BackCallback = std::function<void()>;
     void setBackCallback(BackCallback cb) { _backCb = cb; }
@@ -132,6 +134,7 @@ private:
     BackCallback _backCb;
     SaveCallback _saveCb;
     std::function<bool(handheld::Operation)> _maintenanceCb;
+    const char* _maintenanceReason = "Maintenance unavailable";
 
     // WiFi scan state
     struct WiFiNetwork { String ssid; int32_t rssi; uint8_t encType; };

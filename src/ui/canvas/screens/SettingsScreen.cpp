@@ -1147,5 +1147,6 @@ void SettingsScreen::factoryReset() {
 }
 
 void SettingsScreen::requestMaintenance(handheld::Operation operation) {
-    if (!_maintenanceCb || !_maintenanceCb(operation)) showToast("Maintenance unavailable");
+    _maintenanceReason="Maintenance unavailable";
+    if (!_maintenanceCb || !_maintenanceCb(operation)) showToast(_maintenanceReason);
 }
