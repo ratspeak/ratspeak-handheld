@@ -37,6 +37,7 @@
 #include "screens/LvNodesScreen.h"
 #include "screens/LvMessagesScreen.h"
 #include "LvVoicePanel.h"
+#include "voice/VoiceInput.h"
 #include "screens/LvMessageView.h"
 #include "screens/LvContactsScreen.h"
 #include "screens/LvSettingsScreen.h"
@@ -1443,8 +1444,7 @@ void loop() {
     }
 
     lvVoicePanel.poll(powerMgr.isScreenOn() && serviceClient.available() && serviceClient.status().state==handheld::ServiceState::Running && !lvHelpOverlay.isVisible() && !lvQrOverlay.isVisible() && !lvPowerOffOverlay.isVisible());
-    if(lvVoicePanel.takeIncoming()) {powerMgr.activity();audio.playMessage();}
-    if(handheld::voice::active(serviceClient.status().voice.phase) && powerMgr.isScreenOn()) powerMgr.activity();
+    if(lvVoicePanel.active() && powerMgr.isScreenOn()) powerMgr.activity();
     audio.loop();
     powerMgr.loop();
     if (powerMgr.screenSleepGestureFired()) {

@@ -69,6 +69,12 @@ int visitChatLines(const History& history, bool rrc, Visitor visit) {
         const auto color = row.unavailable() || (history.statusReady() && row.status == (rrc ? uint8_t(handheld::storage::rrc::Status::Failed) : uint8_t(LXMFStatus::FAILED))) ? Theme::ERROR :
             history.statusReady() && row.status == (rrc ? uint8_t(handheld::storage::rrc::Status::Unconfirmed) : uint8_t(LXMFStatus::UNCONFIRMED)) ? Theme::WARNING : Theme::PRIMARY;
         const char* source = history.text(index);
+        if(!rrc && row.hasAudio()) {
+            char audio[40];
+            if(row.nativeAudio()) snprintf(audio,sizeof audio,"Voice message  0:%02u",row.audioSeconds());
+            else snprintf(audio,sizeof audio,"%s",row.audioLabel());
+            emit(index,audio,Theme::ACCENT);
+        }
         size_t at = 0;
         do {
             char segment[width + 1]; size_t used = 0;
@@ -272,10 +278,11 @@ void MessageView::render(M5Canvas& canvas) {
     canvas.drawFastHLine(0, inputY - 2, Theme::CONTENT_W, Theme::DIVIDER);
     if (_history.mode() == History::Mode::Full) {
         canvas.setTextColor(Theme::TEXT_SECONDARY);
-        canvas.drawString("Arrows: read  R: refresh", 2, inputY + 2);
+        canvas.drawString(!_rrcMode && _history.span(0) && _history.span(0)->hasAudio()?"Enter: voice  Arrows: read":"Arrows: read  R: refresh", 2, inputY + 2);
     } else if (_history.focusedSpan() < _history.spanCount()) {
         canvas.setTextColor(Theme::TEXT_SECONDARY);
-        canvas.drawString(_rrcMode?"Enter: actions  R: refresh":"Enter: read  R: refresh", 2, inputY + 2);
+        const auto* row=_history.span(_history.focusedSpan());
+        canvas.drawString(_rrcMode?"Enter: actions  R: refresh":row && row->hasAudio()?"Enter: open  V: voice":"Enter: read  R: refresh", 2, inputY + 2);
     } else if (_rrcMode && (!rrcWritable() || !_rrcLoaded)) {
         canvas.setTextColor(Theme::TEXT_SECONDARY);
         canvas.drawString(!rrcWritable()?"Hub notices are read-only":"Loading draft...",2,inputY+2);
@@ -288,7 +295,7 @@ void MessageView::render(M5Canvas& canvas) {
 }
 
 bool MessageView::handleKey(const KeyEvent& event) {
-    if(!_rrcMode && event.ctrl && (event.character=='v' || event.character=='V')) {if(!event.repeat && _voice)_voice(_peerHex.c_str());return true;}
+    if(!_rrcMode && event.ctrl && (event.character=='v' || event.character=='V')) {if(!event.repeat && _voice)_voice(_peerHex.c_str(),0,false);return true;}
     if(_rrcMode && _rrcTools.visible()) {
         if(event.escape || event.backspace) {if(!event.repeat) closeRrcTools();return true;}
         if(event.up || event.left) {_rrcTools.move(-1);return true;}
@@ -297,6 +304,12 @@ bool MessageView::handleKey(const KeyEvent& event) {
         return true;
     }
     const bool full = _history.mode() == History::Mode::Full;
+    const auto* audioRow=_history.span(full?0:_history.focusedSpan());
+    if(!_rrcMode && audioRow && audioRow->hasAudio() && !event.repeat &&
+       ((event.enter && (full || !audioRow->more())) || (!event.ctrl && (event.character=='v' || event.character=='V')))) {
+        if(_voice) _voice(_peerHex.c_str(),audioRow->counter,audioRow->incoming());
+        return true;
+    }
     if (!_draftReady && !full && event.enter && !event.repeat) {
         onEnter();
         return true;

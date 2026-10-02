@@ -30,6 +30,7 @@ public:
     void begin();
     void setVoicePanel(LvVoicePanel* panel) {_voicePanel=panel;}
     void openVoice(const char* peer) {if(_voicePanel)_voicePanel->start(peer);}
+    void openVoiceMessage(const char* peer,uint32_t counter,bool incoming) {if(_voicePanel)_voicePanel->startMessage(peer,counter,incoming);}
 
     // Screen management
     void setScreen(LvScreen* screen);

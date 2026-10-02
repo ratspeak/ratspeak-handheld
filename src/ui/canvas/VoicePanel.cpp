@@ -2,72 +2,57 @@
 #include "protocol/ProtocolBackend.h"
 #include "storage/Hex.h"
 #include "Theme.h"
-using namespace handheld::voice;
+using namespace handheld::memo;
 void VoicePanel::begin(ProtocolBackend* backend) {
     _backend=backend;
-    _model.begin(this,[](void* context,const Command& c) {
+    _model.begin(this,[](void* context,const Command& c,uint32_t serial) {
         auto& self=*static_cast<VoicePanel*>(context);
-        const auto code=self._backend?self._backend->voiceCommand(c):Code::Off;
-        if(code!=Code::Ok) self._model.failed(code);
-        return true; // Synchronous failure is already displayed precisely.
+        self._model.acknowledge(serial,self._backend?self._backend->memoCommand(c):Code::AudioUnavailable);
+        return true;
     });
 }
-void VoicePanel::poll(bool foregroundAllowed) {if(_backend)_model.update(_backend->voiceStatus(),foregroundAllowed);}
-void VoicePanel::start(const char* hex) {
-    uint8_t peer[16];if(hex && handheld::storage::decodeHex(hex,strlen(hex),peer,16)) _model.start(peer);
+void VoicePanel::poll(bool allowed) {if(_backend)_model.update(_backend->memoStatus(),allowed);}
+void VoicePanel::start(const char* hex) {startMessage(hex,0,false);}
+void VoicePanel::startMessage(const char* hex,uint32_t counter,bool incoming) {
+    uint8_t peer[16];if(hex && handheld::storage::decodeHex(hex,strlen(hex),peer,16)) _model.open(peer,counter,incoming);
 }
 void VoicePanel::render(M5Canvas& canvas) {
+    if(!visible()) return;
     const auto& s=_model.status();
-    if(!visible()) {
-        if(active()) {canvas.fillRect(110,0,130,14,Theme::PRIMARY_SUBTLE);canvas.setTextColor(Theme::PRIMARY);canvas.drawString("Voice  Ctrl+V",116,2);}
-        return;
-    }
     canvas.fillRect(0,0,240,135,Theme::BG);Theme::useSmallFont(canvas);
-    canvas.setTextColor(Theme::ACCENT);canvas.drawString("LIVE VOICE",6,5);
+    canvas.setTextColor(Theme::ACCENT);canvas.drawString("VOICE MESSAGE",6,5);
     char peer[33];handheld::storage::encodeHex(_model.peer(),16,peer);
-    canvas.setTextColor(Theme::TEXT_SECONDARY);canvas.drawString(peer,6,21);
-    canvas.setTextColor(s.phase==Phase::Talking?Theme::PRIMARY:Theme::TEXT_PRIMARY);
-    auto lines=[&](const char* text,int y) {
-        size_t count=strlen(text);
-        if(count>38) {
-            count=38;
-            while(count && text[count]!=' ') --count;
-            if(!count) count=38;
-        }
-        char line[39]{};memcpy(line,text,count);canvas.drawString(line,6,y);
-        text+=count;while(*text==' ') ++text;
-        if(*text) {strncpy(line,text,38);line[38]=0;canvas.drawString(line,6,y+10);}
-    };
-    lines(_model.text(),39);
-    const bool ready=_model.ready() && !_model.pending();
-    char detail[48]{};
-    if(ready && s.iface!=UINT8_MAX) snprintf(detail,sizeof detail,"%s  %lu:%02lu  Volume %u%%",
-        s.iface==0?"LoRa":"WiFi/TCP",(unsigned long)(s.elapsedMs/60000),(unsigned long)(s.elapsedMs/1000%60),s.volume);
-    canvas.setTextColor(Theme::TEXT_SECONDARY);
-    if(ready) canvas.drawString(detail,6,65);else lines(_model.guidance(),65);
-    if(s.phase==Phase::Incoming) {
-        canvas.setTextColor(Theme::PRIMARY);canvas.drawString("Enter: accept",6,96);
-        canvas.setTextColor(Theme::TEXT_SECONDARY);canvas.drawString("Esc: decline",6,113);
-    } else if(ready) {
-        canvas.fillRoundRect(4,81,232,15,3,Theme::PRIMARY_SUBTLE);
-        canvas.setTextColor(Theme::PRIMARY);
-        canvas.drawString((s.capabilities&1)?(s.iface==0?"Hold Space: talk (up to 10s)":"Hold Space: talk (up to 30s)"):"Listen only: no microphone",8,84);
-        canvas.setTextColor(Theme::TEXT_SECONDARY);
-        canvas.drawString("E: end   +/-: volume",6,101);canvas.drawString("Esc: back   Ctrl+V: return",6,117);
-    } else if(active()) {
-        canvas.drawString("E: cancel   Esc: back",6,113);
-    } else {
-        if(_model.canRetry()) {canvas.setTextColor(Theme::PRIMARY);canvas.drawString("Enter: retry voice",6,101);}
-        canvas.setTextColor(Theme::TEXT_SECONDARY);canvas.drawString("Esc: back",6,117);
+    canvas.setTextColor(Theme::TEXT_SECONDARY);canvas.drawString(peer,6,19);
+    canvas.setTextColor(s.phase==Phase::Recording?Theme::ERROR:Theme::TEXT_PRIMARY);
+    canvas.drawString(_model.text(),6,36);
+    const auto ms=(s.phase==Phase::Recording || s.phase==Phase::Playing || s.phase==Phase::Stopping)?s.frames*40:uint32_t(s.length)*10;
+    char detail[48];snprintf(detail,sizeof detail,"0:%02lu%s   Volume %u%%",(unsigned long)((ms+999)/1000),
+        s.phase==Phase::Recording?" / 0:15":"",s.volume);
+    if(s.reason==Code::UnsupportedAudio || s.reason==Code::AudioUnavailable) snprintf(detail,sizeof detail,"Volume %u%%",s.volume);
+    canvas.setTextColor(Theme::TEXT_SECONDARY);canvas.drawString(detail,6,51);
+    canvas.drawString(_model.guidance(),6,66);
+    const int count=int(_model.count()),width=(228-(count-1)*4)/(count?count:1);
+    for(int i=0;i<count;++i) {
+        const bool selected=unsigned(i)==_model.focus();
+        const auto choice=_model.choice(i);
+        const int x=6+i*(width+4);
+        canvas.fillRoundRect(x,83,width,21,3,selected?Theme::PRIMARY_SUBTLE:Theme::BG_SURFACE);
+        canvas.drawRoundRect(x,83,width,21,3,selected?Theme::PRIMARY:Theme::BORDER);
+        canvas.setTextColor(choice==Ui::Choice::Stop || choice==Ui::Choice::ConfirmDiscard?Theme::ERROR:selected?Theme::PRIMARY:Theme::TEXT_PRIMARY);
+        const auto* label=Ui::label(choice);
+        canvas.drawString(label,x+(width-int(strlen(label))*6)/2,90);
     }
+    canvas.setTextColor(Theme::TEXT_SECONDARY);
+    canvas.drawString("Arrows: choose  Enter: select",6,111);
+    canvas.drawString("Esc: back      +/-: volume",6,123);
 }
 bool VoicePanel::handleKey(const KeyEvent& e) {
-    if(!visible()) {if(active() && e.ctrl && (e.character=='v' || e.character=='V')) {show();return true;}return false;}
+    if(!visible()) return false;
     if(e.repeat) return true;
-    const auto phase=_model.status().phase;
-    if(e.escape || e.backspace) {if(phase==Phase::Incoming)_model.action(Action::Decline);else hide();}
-    else if(e.enter) {if(phase==Phase::Incoming)_model.action(Action::Accept);else if(_model.canRetry())_model.retry();else if(!handheld::voice::active(phase))hide();}
-    else if(e.character=='e' || e.character=='E') _model.action(Action::End);
+    if(e.escape || e.backspace) hide();
+    else if(e.navPrevious()) _model.move(-1);
+    else if(e.navNext() || e.tab) _model.move(1);
+    else if(e.enter) _model.choose(_model.choice(_model.focus()));
     else if(e.character=='+') _model.volume(10);
     else if(e.character=='-') _model.volume(-10);
     return true;

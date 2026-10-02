@@ -51,6 +51,14 @@ public:
         storage::Error statusError = storage::Error::None;
         uint8_t flags = 0;
         storage::Error readError = storage::Error::None;
+        // Uses the former padding byte; no history arena growth. Low six bits
+        // hold rounded seconds, high bits the audio presentation class. Playback
+        // re-reads the exact record and verifies its full media descriptor.
+        uint8_t audio = 0;
+        bool hasAudio() const { return audio != 0; }
+        bool nativeAudio() const { return (audio & 0xc0) == 0x40; }
+        uint8_t audioSeconds() const { return audio & 0x3f; }
+        const char* audioLabel() const { return nativeAudio() ? "Voice message" : audio == 0x80 ? "Unsupported audio" : "Audio unavailable"; }
         bool incoming() const { return flags & Incoming; }
         bool unavailable() const { return flags & Unavailable; }
         bool more() const { return !unavailable() && sourceOffset + sourceLength < uint32_t(titleLength) + contentLength; }

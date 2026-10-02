@@ -1,21 +1,22 @@
 #pragma once
 #include "Screen.h"
-#include "voice/VoiceUi.h"
+#include "voice/MemoUi.h"
 class ProtocolBackend;
 class VoicePanel : public Screen {
 public:
     void begin(ProtocolBackend*);
     void poll(bool foregroundAllowed);
     void start(const char* peerHex);
+    void startMessage(const char* peerHex,uint32_t counter,bool incoming);
     void show() {_model.show();}
     void hide() {_model.hide();}
-    bool takeIncoming() {return _model.takeIncoming();}
+    bool takeIncoming() {return false;}
     bool visible() const {return _model.visible();}
-    bool active() const {return handheld::voice::active(_model.status().phase);}
+    bool active() const {return _model.active();}
     void render(M5Canvas&) override;
     bool handleKey(const KeyEvent&) override;
-    const char* title() const override {return "Live voice";}
+    const char* title() const override {return "Voice message";}
 private:
     ProtocolBackend* _backend=nullptr;
-    handheld::voice::VoiceUi _model;
+    handheld::memo::Ui _model;
 };

@@ -86,7 +86,7 @@ private:
     void refreshComposerPlaceholder();
     void updateComposerText();
     void composerEdited();
-    int sendMenuCount() const {return _rrcMode || !_service || !_service->status().voice.capabilities?3:4;}
+    int sendMenuCount() const {return _rrcMode || !_service || !(_service->status().memo.capabilities&1)?3:4;}
     void showSendModeMenu();
     void hideSendModeMenu();
     void updateSendModeMenu();

@@ -22,7 +22,7 @@ public:
         const auto index=unsigned(source);
         if(index>1 || _held[index]==down) return;
         const bool already=_held[0] || _held[1];_held[index]=down;
-        if(!down) {_pending=false;VoiceWorker::emergencyStop();}
+        if(!down) {_pending=false;if(_enabled) VoiceWorker::emergencyStop();}
         else if(_enabled && !already) {_pending=true;_epoch=VoiceWorker::stopEpoch();}
     }
     void poll() { if(_enabled && (_held[0] || _held[1])) VoiceWorker::keepInputAlive(); }

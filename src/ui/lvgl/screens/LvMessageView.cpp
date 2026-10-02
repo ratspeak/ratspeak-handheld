@@ -274,7 +274,7 @@ void LvMessageView::createUI(lv_obj_t* parent) {
         self->goBack();
     }, LV_EVENT_CLICKED, this);
 
-    if(!_rrcMode && _service && _service->status().voice.capabilities) {
+    if(!_rrcMode && _service && (_service->status().memo.capabilities&1)) {
         lv_obj_set_width(_lblHeader,Theme::CONTENT_W-92);lv_obj_set_width(_lblHeaderMeta,Theme::CONTENT_W-92);
         auto* voice=lv_btn_create(_header);lv_obj_add_style(voice,LvTheme::styleBtn(),0);lv_obj_set_size(voice,58,28);lv_obj_align(voice,LV_ALIGN_RIGHT_MID,-3,0);
         auto* label=lv_label_create(voice);lv_label_set_text(label,"Voice");lv_obj_set_style_text_font(label,&lv_font_rsdeck_12,0);lv_obj_center(label);
@@ -499,6 +499,10 @@ void LvMessageView::readFull(size_t index) {
     if(_rrcMode) {openRrcTools(index);return;}
     auto& window = _service->historyWindow();
     const auto* row = window.span(index);
+    if(row && row->hasAudio() && (!row->more() || window.mode()==HistoryWindow::Mode::Full)) {
+        if(_ui) _ui->openVoiceMessage(_peerHex.c_str(),row->counter,row->incoming());
+        return;
+    }
     if (!row || !row->more() || window.mode() != HistoryWindow::Mode::Chat) return;
     saveScroll(); window.focusSpan(index);
     if (window.openFull(index)) { _scrollToEnd = false; refreshUI(); }
@@ -696,6 +700,7 @@ void LvMessageView::appendMessage(size_t index, const Span& span, const char* te
 
     const lv_font_t* font = &lv_font_rsdeck_12;
     int textW = textWidthForBubble(text, span.textLength);
+    if(span.hasAudio() && textW<152) textW=152;
     // Leave a gap between the clock and the longest storage-status caption.
     if (!span.incoming() && textW < 152) textW = 152;
     if (_service && _service->historyWindow().mode() == HistoryWindow::Mode::Full) textW = Theme::CONTENT_W - 40;
@@ -759,6 +764,13 @@ void LvMessageView::appendMessage(size_t index, const Span& span, const char* te
                 textColor = Theme::TEXT_PRIMARY; break;
         }
     }
+    if(!_rrcMode && span.hasAudio()) {
+        auto* audio=lv_label_create(box);lv_obj_set_style_text_font(audio,font,0);
+        lv_obj_set_style_text_color(audio,lv_color_hex(Theme::ACCENT),0);
+        lv_obj_set_width(audio,textW);lv_label_set_long_mode(audio,LV_LABEL_LONG_WRAP);
+        if(span.nativeAudio()) lv_label_set_text_fmt(audio,"Voice message  0:%02u",span.audioSeconds());
+        else lv_label_set_text(audio,span.audioLabel());
+    }
     lv_obj_t* lbl = lv_label_create(box);
     lv_obj_set_style_text_font(lbl, font, 0);
     lv_obj_set_style_text_color(lbl, lv_color_hex(span.unavailable() ? Theme::TEXT_MUTED : textColor), 0);
@@ -766,16 +778,16 @@ void LvMessageView::appendMessage(size_t index, const Span& span, const char* te
     lv_obj_set_width(lbl, textW);
     lv_label_set_text_static(lbl, text);
 
-    if ((span.more() || (_rrcMode && !span.unavailable())) && _service && _service->historyWindow().mode() == HistoryWindow::Mode::Chat) {
+    if (_service && ((!_rrcMode && span.hasAudio()) || ((span.more() || (_rrcMode && !span.unavailable())) && _service->historyWindow().mode() == HistoryWindow::Mode::Chat))) {
         auto* button = _readButtons[index] = lv_btn_create(box);
-        lv_obj_set_size(button, 78, 20); lv_obj_add_style(button, LvTheme::styleBtn(), 0);
+        lv_obj_set_size(button, span.hasAudio()?110:78, 24); lv_obj_add_style(button, LvTheme::styleBtn(), 0);
         lv_obj_set_style_pad_all(button, 0, 0);
         lv_obj_set_user_data(button, (void*)(uintptr_t)index);
         lv_obj_add_event_cb(button, [](lv_event_t* e) {
             auto* self = static_cast<LvMessageView*>(lv_event_get_user_data(e));
             self->readFull(uintptr_t(lv_obj_get_user_data(lv_event_get_target(e))));
         }, LV_EVENT_CLICKED, this);
-        auto* label = lv_label_create(button); lv_label_set_text(label, _rrcMode?"Actions":"Read full");
+        auto* label = lv_label_create(button); lv_label_set_text(label, _rrcMode?"Actions":span.hasAudio() && (!span.more() || _service->historyWindow().mode()==HistoryWindow::Mode::Full)?"Voice message":"Read full");
         lv_obj_set_style_text_font(label, &lv_font_rsdeck_10, 0); lv_obj_center(label);
     }
 
@@ -965,6 +977,10 @@ void LvMessageView::sendCurrentMessage(bool viaLink) {
 }
 
 bool LvMessageView::handleKey(const KeyEvent& event) {
+    if(!_rrcMode && boundWindow() && _service->historyWindow().mode()==HistoryWindow::Mode::Full &&
+       event.enter && !event.repeat && _service->historyWindow().span(0) && _service->historyWindow().span(0)->hasAudio()) {
+        readFull(0);return true;
+    }
     if(_rrcMode && _rrcTools.visible()) {
         if(event.character==0x1B || event.del || event.character==0x08) {if(!event.repeat) closeRrcTools();return true;}
         if(event.up || event.left) {_rrcTools.move(-1);updateSendModeMenu();return true;}
@@ -1122,7 +1138,7 @@ void LvMessageView::showSendModeMenu() {
         _sendLabels[i] = lv_label_create(row);
         lv_obj_set_style_text_font(_sendLabels[i], &lv_font_rsdeck_12, 0);
         if(_rrcTools.visible()) {char label[64];_rrcTools.label(i,label,sizeof label);lv_label_set_text(_sendLabels[i],label);}
-        else lv_label_set_text(_sendLabels[i],i==sendMenuCount()-1?"Cancel":sendMenuCount()==4 && i==2?"Live voice":_rrcMode && i==1?"Send as action":labels[i]);
+        else lv_label_set_text(_sendLabels[i],i==sendMenuCount()-1?"Cancel":sendMenuCount()==4 && i==2?"Voice message":_rrcMode && i==1?"Send as action":labels[i]);
         lv_obj_center(_sendLabels[i]);
         _sendRows[i] = row;
     }

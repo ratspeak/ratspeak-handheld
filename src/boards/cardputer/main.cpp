@@ -804,7 +804,7 @@ void setup() {
     messageView.setLXMFManager(&lxmf);
     messageView.setBackend(backend);
     voicePanel.begin(backend);ui.setVoicePanel(&voicePanel);
-    messageView.setVoiceCallback([](const char* peer) {voicePanel.start(peer);});
+    messageView.setVoiceCallback([](const char* peer,uint32_t counter,bool incoming) {voicePanel.startMessage(peer,counter,incoming);});
     messageView.setAnnounceManager(announceManager);
     messageView.setBackCallback([]() {
         ui.setScreen(&messagesScreen);
@@ -1056,7 +1056,6 @@ void loop() {
         audio.playMessage();
     }
     voicePanel.poll(power.isScreenOn() && maintenance.accepting() && !helpOverlay.isVisible());
-    if(voicePanel.takeIncoming()) {power.activity();audio.playMessage();}
     if(voicePanel.active() || voicePanel.visible()) ui.markAllDirty();
     if(voicePanel.active() && power.isScreenOn()) power.activity();
     audio.loop();
