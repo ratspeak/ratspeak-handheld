@@ -709,6 +709,36 @@ rs_handheld_status_t rs_handheld_rns_lxmf_build_link(const rs_handheld_rns_t *ct
                                            uint8_t *out, size_t out_cap, size_t *out_len,
                                            uint8_t out_dest_hash[16], uint8_t out_message_id[32]);
 
+/* Recorded voice uses native LXMF 700C mode 0x03; it is not an LXST mode byte.
+ * These product limits are separate from the whole-message Resource ceiling. */
+#define RS_HANDHELD_MEMO_MODE 0x03u
+#define RS_HANDHELD_MEMO_RECORD_BYTES 1500u
+#define RS_HANDHELD_MEMO_PLAY_BYTES 3000u
+#define RS_HANDHELD_MEDIA_PLAINTEXT_MAX 383u
+
+typedef struct rs_handheld_memo_info {
+    uint32_t frames, duration_ms, sample_rate, frame_samples, frame_bytes, codec_profile;
+} rs_handheld_memo_info_t;
+/* Inspect before playback: 700C only, nonempty integral native frames, <=30s.
+ * Returns UNSUPPORTED for another mode, INVALID_ARG for framing, CAPACITY for
+ * duration. Does not allocate or begin audio. Output unchanged on failure. */
+rs_handheld_status_t rs_handheld_memo_inspect(uint8_t mode, size_t byte_length,
+                                            rs_handheld_memo_info_t *out);
+/* Exact signed packed size, excluding recipient stamp/propagation overhead. */
+rs_handheld_status_t rs_handheld_lxmf_audio_packed_size(size_t title_len, size_t content_len,
+                                            uint8_t mode, size_t audio_len, size_t *out_size);
+/* Signed native FIELD_AUDIO for Direct or PN wrapping. Inputs/output must be
+ * disjoint. Empty inputs may be NULL. The whole-message bound is enforced before
+ * allocation/signing. Scalar outputs unchanged on failure. Framing does not
+ * establish codec support: inspect newly recorded media separately. */
+rs_handheld_status_t rs_handheld_rns_lxmf_build_audio(const rs_handheld_rns_t *ctx,
+                                            const uint8_t recipient_public_key[64], double timestamp,
+                                            const uint8_t *title, size_t title_len,
+                                            const uint8_t *content, size_t content_len,
+                                            uint8_t mode, const uint8_t *audio, size_t audio_len,
+                                            uint8_t *out, size_t out_cap, size_t *out_len,
+                                            uint8_t out_dest_hash[16], uint8_t out_message_id[32]);
+
 /* Validate a FULL packed LXMF message received over a link / assembled from a resource:
  * dest(16) || source(16) || signature(64) || msgpack payload. The active identity must be the
  * delivery dest (RS_HANDHELD_ERR_CRYPTO on mismatch/forgery); source_public_key is recalled by the
@@ -742,6 +772,36 @@ rs_handheld_status_t rs_handheld_rns_lxmf_parse_link_view(const rs_handheld_rns_
                                            const uint8_t *data, size_t data_len,
                                            const uint8_t source_public_key[64],
                                            rs_handheld_lxmf_view_t *out_view);
+
+/* State 0 absent, 1 well-framed, 2 malformed. Unknown modes are well-framed;
+ * memo_inspect separately decides playback support. No malformed field can
+ * invalidate independently authenticated text or imply successful playback. */
+typedef struct rs_handheld_audio_view {
+    uint32_t state, mode, offset, length;
+} rs_handheld_audio_view_t;
+typedef struct rs_handheld_media_view {
+    rs_handheld_lxmf_view_t message;
+    rs_handheld_audio_view_t audio;
+} rs_handheld_media_view_t;
+/* Authenticated text/audio spans borrow the exact packed input. No spans/key
+ * are published on authentication failure. No proof/storage/playback side effect. */
+rs_handheld_status_t rs_handheld_rns_lxmf_parse_media_view(const rs_handheld_rns_t *ctx,
+                                            const uint8_t *data, size_t data_len,
+                                            const uint8_t source_public_key[64],
+                                            rs_handheld_media_view_t *out_view);
+/* Opportunistic equivalent: the exact hint from peek_source_hint and the
+ * caller's recalled source key, with spans into caller-owned plaintext scratch.
+ * The existing source discovery/unknown-source retry policy stays caller-owned.
+ * Scratch must have at least
+ * MEDIA_PLAINTEXT_MAX bytes. Contents unspecified on failure; NEVER consume then.
+ * Retain scratch unchanged until storage has copied all admitted spans. All
+ * input/output regions are disjoint; metadata unchanged on failure. */
+rs_handheld_status_t rs_handheld_rns_lxmf_parse_hint_media(const rs_handheld_rns_t *ctx,
+                                            const uint8_t *data, size_t data_len,
+                                            uint8_t key_hint, const uint8_t source_public_key[64],
+                                            uint8_t *plain, size_t plain_cap,
+                                            rs_handheld_media_view_t *out_view);
+
 
 /* ---- Proof / delivery-status / dedup: byte-exact with Python RNS 1.3.8 ----
  * A proof of receipt is the receiver's Ed25519 signature over the proven packet's full 32-byte hash:

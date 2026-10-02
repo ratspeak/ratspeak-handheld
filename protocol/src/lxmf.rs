@@ -729,7 +729,7 @@ pub unsafe extern "C" fn rs_handheld_rns_lxmf_parse_link(
     })
 }
 
-fn validated_direct_view<'a>(
+pub(super) fn validated_direct_view<'a>(
     ctx: &RsHandheldRns,
     data: &'a [u8],
     source_public_key: &[u8; PUBLIC_KEY_LENGTH],
@@ -748,7 +748,7 @@ fn validated_direct_view<'a>(
 
 /// Validated direct payload spans borrowing the immutable input. No body copy is retained.
 #[repr(C)]
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 pub struct RsHandheldLxmfView {
     pub message_id: [u8; 32],
     pub source_hash: [u8; DESTINATION_LENGTH],

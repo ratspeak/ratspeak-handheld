@@ -408,6 +408,8 @@ pub use rrc::*;
 pub use rrc_secret::*;
 mod voice;
 pub use voice::*;
+mod memo;
+pub use memo::*;
 mod voice_endpoint;
 use voice_endpoint::VOICE_DESTINATION_NAME;
 pub use voice_endpoint::*;
