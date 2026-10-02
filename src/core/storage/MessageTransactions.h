@@ -34,7 +34,7 @@ public:
     bool nextRecord(Cursor&, RecordKey&);
     bool nextPeer(Cursor&, char peerHex[33]); // unordered unique peers, one pass per root
     bool nextPeer(const char* afterHex, char peerHex[33], Error&);
-    Error load(const RecordKey&, MessageDocument&, StoredRecordHeader&);
+    Error load(const RecordKey&, MessageDocument&, StoredRecordHeader&, uint8_t* selectedMedium = nullptr);
     uint32_t deletedThrough(const uint8_t peer[16]);
     uint32_t nextCounter() const { return _nextCounter; }
     uint64_t mutationEpoch() const { return _mutationEpoch; } // caller holds lease
@@ -75,7 +75,13 @@ private:
     static bool filename(const char*, uint32_t&, bool&);
     Error inspect(const RecordKey&, unsigned medium, const char* suffix, MessageDocument&, StoredRecordHeader&,
                   bool* parsed = nullptr);
-    Error commit(const RecordKey&, MessageDocument&, bool creating, Result&);
+    Error commit(const RecordKey&, MessageDocument&, bool creating, Result&, const uint8_t* audio = nullptr,
+                 uint8_t referenceOnlyMedium = UINT8_MAX);
+    File openAudio(const RecordKey&, unsigned medium, const StoredRecordHeader&,
+                   uint8_t* output = nullptr, size_t offset = 0, size_t length = 0);
+    Error ensureAudio(const RecordKey&, unsigned medium, const StoredRecordHeader&, const uint8_t* bytes);
+    bool removeAudio(const RecordKey&, unsigned medium);
+    void readAudio(const Request&, uint8_t*, size_t, Result&);
     void create(const Request&, uint8_t*, Result&);
     void update(const Request&, Result&);
     void markRead(const Request&, Result&);

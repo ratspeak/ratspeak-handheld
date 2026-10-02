@@ -3,6 +3,7 @@
 #include "RustInterfacePump.h"
 #include "RustLinkManager.h"
 #include "runtime/TaskOwner.h"
+#include "storage/AudioRecord.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -125,8 +126,9 @@ RustIncomingDelivery::ReceiveResult RustIncomingDelivery::accept(const MessageVi
     if (!_accepting) return {ReceiveCode::Rejected, {}, ReceiveError::Stopped};
     const bool held = seed.kind == Kind::Propagation;
     if (!message.messageId || !message.source || !std::isfinite(message.timestamp) ||
-        !Budget::validBody(message.titleLength, message.contentLength) ||
+        !audio::validBody(message.titleLength, message.contentLength, message.audio) || message.audio.checksum ||
         (message.titleLength && !message.title) || (message.contentLength && !message.content) ||
+        (message.audio.length && !message.audioBytes) ||
         (seed.kind != Kind::NoProof && !held && (!seed.raw || !seed.length || seed.length > 128)) ||
         (held && message.reaction))
         return {ReceiveCode::Rejected, {}, ReceiveError::Invalid};
@@ -199,8 +201,9 @@ RustIncomingDelivery::ReceiveResult RustIncomingDelivery::accept(const MessageVi
     memcpy(request.destination, _d.ourDestHash, 16); memcpy(request.messageId, message.messageId, 32);
     request.hasMessageId = true; request.timestamp = message.timestamp; request.status = uint8_t(LXMFStatus::DELIVERED);
     request.titleLength = uint16_t(message.titleLength); request.contentLength = uint16_t(message.contentLength);
+    request.audio = message.audio;
     request.identityGeneration = incoming->identityGeneration; request.peerGeneration = incoming->visibilityGeneration;
-    const auto admitted = _d.store->requestSave(request, message.title, message.content);
+    const auto admitted = _d.store->requestSave(request, message.title, message.content, message.audioBytes);
     if (!admitted.accepted()) {
         retireReceipt(proof); releaseRow(ref);
         const bool retry = admitted.rejection == Rejection::Busy || admitted.rejection == Rejection::NoMemory;

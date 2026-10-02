@@ -46,10 +46,14 @@ void secureZero(uint8_t* data, size_t len) {
     volatile uint8_t* p = data;
     while (len--) *p++ = 0;
 }
-bool sendableBody(size_t titleLength, size_t contentLength) {
+bool sendableBody(size_t titleLength, size_t contentLength, const handheld::storage::AudioMetadata& audio = {}) {
     size_t packed = 0;
-    return handheld::storage::Budget::validBody(titleLength, contentLength) &&
-        rs_handheld_lxmf_packed_size(titleLength, contentLength, &packed) == RS_HANDHELD_OK &&
+    if (!handheld::storage::Budget::validBody(titleLength, contentLength) || audio.state > 1 ||
+        audio.length > handheld::storage::Budget::MaxMessageBody - titleLength - contentLength) return false;
+    const auto status = audio.state == 1 ?
+        rs_handheld_lxmf_audio_packed_size(titleLength, contentLength, audio.mode, audio.length, &packed) :
+        rs_handheld_lxmf_packed_size(titleLength, contentLength, &packed);
+    return status == RS_HANDHELD_OK &&
         packed <= RS_HANDHELD_RESOURCE_DATA_MAX;
 }
 }  // namespace
@@ -118,6 +122,7 @@ RustLxmfEngine::Ticket RustLxmfEngine::allocate() {
 void RustLxmfEngine::releaseBody(Ticket ticket) {
     if (_body.slot == ticket.slot && _body.generation == ticket.generation) {
         _body.slot = UINT8_MAX; _body.generation = 0; _body.length = 0; _body.targets = 0;
+        _body.audioReady = false;
     }
 }
 void RustLxmfEngine::retire(Ticket ticket) {
@@ -132,11 +137,27 @@ void RustLxmfEngine::retire(Ticket ticket) {
 
 RustLxmfEngine::Submission RustLxmfEngine::submit(const uint8_t dest[16], const uint8_t* title,
     size_t titleLength, const uint8_t* content, size_t contentLength, bool preferLink) {
+    return submitMedia(dest, title, titleLength, content, contentLength, preferLink, {}, nullptr);
+}
+
+RustLxmfEngine::Submission RustLxmfEngine::submitAudio(const uint8_t dest[16], const uint8_t* title,
+    size_t titleLength, const uint8_t* content, size_t contentLength, uint8_t mode,
+    const uint8_t* bytes, size_t length) {
+    rs_handheld_memo_info_t info;
+    if (!bytes || length > RS_HANDHELD_MEMO_RECORD_BYTES ||
+        rs_handheld_memo_inspect(mode, length, &info) != RS_HANDHELD_OK) return {{}, Rejection::Invalid};
+    return submitMedia(dest, title, titleLength, content, contentLength, true,
+        {0, uint16_t(length), mode, 1}, bytes);
+}
+
+RustLxmfEngine::Submission RustLxmfEngine::submitMedia(const uint8_t dest[16], const uint8_t* title,
+    size_t titleLength, const uint8_t* content, size_t contentLength, bool preferLink,
+    const handheld::storage::AudioMetadata& audio, const uint8_t* audioBytes) {
     if (!_accepting) return {{}, Rejection::Stopped};
     if (_recovering) return {{}, Rejection::Recovering};
     if (!dest || (titleLength && !title) || (contentLength && !content)) return {{}, Rejection::Invalid};
     if (_deleting && !memcmp(_deletingPeer, dest, 16)) return {{}, Rejection::Fenced};
-    if (!sendableBody(titleLength, contentLength)) return {{}, Rejection::TooLarge};
+    if (!sendableBody(titleLength, contentLength, audio)) return {{}, Rejection::TooLarge};
     const Ticket ticket = allocate();
     auto* value = row(ticket);
     if (!value) {
@@ -154,6 +175,7 @@ RustLxmfEngine::Submission RustLxmfEngine::submit(const uint8_t dest[16], const 
     memcpy(request.destination, dest, 16); request.timestamp = value->timestamp;
     request.identityGeneration = _identityGeneration;
     request.titleLength = titleLength; request.contentLength = contentLength;
+    request.audio = audio;
     if (_d.propagation && _d.propagation->settings().enabled) {
         const bool always = _d.propagation->settings().delivery == handheld::propagation::Delivery::Always;
         request.deliveryPolicy = always ? handheld::messaging::DeliveryPolicy::Always : handheld::messaging::DeliveryPolicy::Auto;
@@ -161,7 +183,7 @@ RustLxmfEngine::Submission RustLxmfEngine::submit(const uint8_t dest[16], const 
         if (always) value->desired = value->durable = LXMFStatus::PROP_QUEUED;
     }
     request.status = uint8_t(value->desired);
-    const auto admission = _d.store->requestSave(request, title, content);
+    const auto admission = _d.store->requestSave(request, title, content, audioBytes);
     if (!admission.accepted()) {
         retire(ticket);
         return {{}, static_cast<Rejection>(admission.rejection)};
@@ -302,7 +324,7 @@ void RustLxmfEngine::settleStorage(Ticket ticket) {
     handheld::storage::StoredRecordHeader header;
     bool validHeader = false, foreignIdentity = false;
     if (result.outcome == Outcome::Committed &&
-        (operation == Operation::ReadRecord || operation == Operation::ReadPending) && result.length) {
+        (operation == Operation::ReadRecord || operation == Operation::ReadAudio || operation == Operation::ReadPending) && result.length) {
         validHeader = result.length >= sizeof(header) && _d.store->readPayload(held, &header, sizeof(header));
         foreignIdentity = validHeader && memcmp(header.source, _d.ourDestHash, 16);
         validHeader = validHeader && !foreignIdentity && !header.incoming && header.counter == result.key.counter &&
@@ -310,14 +332,30 @@ void RustLxmfEngine::settleStorage(Ticket ticket) {
         if (operation == Operation::ReadRecord) {
             validHeader = validHeader && value->counter == result.key.counter &&
                 !memcmp(value->peer, result.key.peer, 16) &&
-                sendableBody(header.titleLength, header.contentLength) &&
+                sendableBody(header.titleLength, header.contentLength, header.audio) &&
                 result.length == sizeof(header) + header.titleLength + header.contentLength && !result.more &&
                 result.nextOffset == header.titleLength + header.contentLength &&
                 _body.slot == ticket.slot && _body.generation == ticket.generation;
             if (validHeader) {
                 _body.header = header;
+                _body.audioReady = header.audio.state != 1;
+                if (header.audio.state == 1) value->flags |= PreferLink;
                 validHeader = _d.store->readPayload(held, _body.bytes,
                     header.titleLength + header.contentLength, sizeof(header));
+            }
+        } else if (operation == Operation::ReadAudio) {
+            const auto& original = _body.header;
+            validHeader = validHeader && _body.slot == ticket.slot && _body.generation == ticket.generation &&
+                value->counter == result.key.counter && !memcmp(value->peer, result.key.peer, 16) &&
+                header.revision == original.revision && header.timestamp == original.timestamp &&
+                header.titleLength == original.titleLength && header.contentLength == original.contentLength &&
+                !memcmp(&header.audio, &original.audio, sizeof(header.audio)) && header.audio.state == 1 &&
+                sendableBody(header.titleLength, header.contentLength, header.audio) &&
+                result.length == sizeof(header) + header.audio.length && !result.more && result.nextOffset == header.audio.length;
+            if (validHeader) {
+                validHeader = _d.store->readPayload(held, _body.bytes + header.titleLength + header.contentLength,
+                                                  header.audio.length, sizeof(header));
+                _body.audioReady = validHeader;
             }
         }
     }
@@ -364,7 +402,7 @@ void RustLxmfEngine::settleStorage(Ticket ticket) {
                         value->flags |= RelayRequired; value->phase = Phase::Relay;
                         value->desired = LXMFStatus::PROP_QUEUED;
                     }
-                    if (!sendableBody(header.titleLength, header.contentLength)) {
+                    if (!sendableBody(header.titleLength, header.contentLength, header.audio)) {
                         value->error = Error::InvalidRecord; value->phase = Phase::Settled;
                         value->flags |= Suppressed | BlockedRecord;
                         setStatus(ticket, LXMFStatus::FAILED);
@@ -372,7 +410,7 @@ void RustLxmfEngine::settleStorage(Ticket ticket) {
                 }
             }
         }
-    } else if (operation == Operation::ReadRecord) {
+    } else if (operation == Operation::ReadRecord || operation == Operation::ReadAudio) {
         if (value->flags & Suppressed || value->desired == LXMFStatus::DELIVERED) {
             releaseBody(ticket); value->phase = Phase::Settled;
         } else if (result.outcome != Outcome::Committed) {
@@ -663,9 +701,8 @@ void RustLxmfEngine::attempt(Ticket ticket) {
     // bytes. The FFI's temporary signing scratch is a separate heap allocation.
     auto& packed = _d.resources->_codec;
     uint8_t destination[16]; size_t length = 0;
-    const auto built = rs_handheld_rns_lxmf_build_link(_d.ctx, value->publicKey, value->timestamp,
-        _body.bytes, header.titleLength, _body.bytes + header.titleLength, header.contentLength,
-        packed, RS_HANDHELD_RESOURCE_DATA_MAX, &length, destination, value->messageId);
+    const auto built = buildBody(value->publicKey, value->timestamp,
+        packed, RS_HANDHELD_RESOURCE_DATA_MAX, length, destination, value->messageId);
     if (built != RS_HANDHELD_OK || memcmp(destination, value->peer, 16)) {
         releaseBody(ticket); value->phase = Phase::Settled; setStatus(ticket, LXMFStatus::FAILED); return;
     }
@@ -781,6 +818,12 @@ void RustLxmfEngine::advance(Ticket ticket) {
         return;
     }
     if (!_accepting) return;
+    if (value->phase == Phase::Reading && _body.slot == ticket.slot &&
+        _body.generation == ticket.generation && !_body.audioReady) {
+        const auto admission = _d.store->requestAudio(key(*value), 0, 4096);
+        if (admission.accepted()) hold(*value, admission, Operation::ReadAudio);
+        return;
+    }
     if (value->phase == Phase::Stamp) {
         if (_relay.ticket == ticket && !_relay.work.busy()) { value->phase = Phase::Ready; value->nextAttempt = 0; }
         return;
@@ -897,12 +940,19 @@ void RustLxmfEngine::onDataFrame(const rs_handheld_local_frame_t& f, uint8_t ifa
         Serial.println("[RUST-LXMF] inbound: source key unknown; dropping");
         return;
     }
-    rs_handheld_lxmf_message_t msg;
-    if (rs_handheld_rns_lxmf_parse_hint(_d.ctx, f.payload, f.payload_len, keyHint, pub, &msg) !=
+    rs_handheld_media_view_t media = {};
+    uint8_t plaintext[RS_HANDHELD_MEDIA_PLAINTEXT_MAX];
+    if (rs_handheld_rns_lxmf_parse_hint_media(_d.ctx, f.payload, f.payload_len, keyHint, pub,
+                                            plaintext, sizeof(plaintext), &media) !=
         RS_HANDHELD_OK) {
         Serial.println("[RUST-LXMF] inbound parse/validate failed");
         return;
     }
+    const auto& msg = media.message;
+    if (msg.title_offset > sizeof(plaintext) || msg.title_len > sizeof(plaintext) - msg.title_offset ||
+        msg.content_offset > sizeof(plaintext) || msg.content_len > sizeof(plaintext) - msg.content_offset ||
+        media.audio.offset > sizeof(plaintext) || media.audio.length > sizeof(plaintext) - media.audio.offset ||
+        media.audio.state > 2 || media.audio.mode > UINT8_MAX) return;
     if (_d.keymap) _d.keymap->learn(src, pub, _d.clock->nowMs());
     uint8_t raw[128]; size_t rawLen = 0;
     RustIncomingDelivery::ReceiptSeed seed;
@@ -911,9 +961,11 @@ void RustLxmfEngine::onDataFrame(const rs_handheld_local_frame_t& f, uint8_t ifa
     const uint64_t epoch = RustClock::epochSecs();
     RustIncomingDelivery::MessageView view;
     view.messageId = msg.message_id; view.source = msg.source_hash;
-    view.title = msg.title; view.titleLength = msg.title_len;
-    view.content = msg.content; view.contentLength = msg.content_len;
+    view.title = plaintext + msg.title_offset; view.titleLength = msg.title_len;
+    view.content = plaintext + msg.content_offset; view.contentLength = msg.content_len;
     view.timestamp = epoch ? double(epoch) : msg.timestamp; view.reaction = msg.is_reaction != 0;
+    view.audio = {0, uint16_t(media.audio.length), uint8_t(media.audio.mode), uint8_t(media.audio.state)};
+    view.audioBytes = plaintext + media.audio.offset;
     _incoming.accept(view, seed);
 }
 
@@ -935,10 +987,14 @@ RustIncomingDelivery::ReceiveResult RustLxmfEngine::onDirectPayload(
         requestUnknownSource(src);
         return {Code::Rejected, {}, Error::SourceUnknown};
     }
-    rs_handheld_lxmf_view_t parsed = {};
-    if (rs_handheld_rns_lxmf_parse_link_view(_d.ctx, packed, len, pub, &parsed) != RS_HANDHELD_OK ||
+    rs_handheld_media_view_t media = {};
+    const auto& parsed = media.message;
+    if (rs_handheld_rns_lxmf_parse_media_view(_d.ctx, packed, len, pub, &media) != RS_HANDHELD_OK ||
         parsed.title_offset > len || parsed.title_len > len - parsed.title_offset ||
         parsed.content_offset > len || parsed.content_len > len - parsed.content_offset ||
+        media.audio.offset > len || media.audio.length > len - media.audio.offset ||
+        media.audio.length > handheld::storage::Budget::MaxMessageBody ||
+        media.audio.state > 2 || media.audio.mode > UINT8_MAX ||
         !handheld::storage::Budget::validBody(parsed.title_len, parsed.content_len))
         return {Code::Rejected, {}, Error::Invalid};
     if (_d.keymap) _d.keymap->learn(parsed.source_hash, pub, _d.clock->nowMs());
@@ -948,6 +1004,8 @@ RustIncomingDelivery::ReceiveResult RustLxmfEngine::onDirectPayload(
     view.title = packed + parsed.title_offset; view.titleLength = parsed.title_len;
     view.content = packed + parsed.content_offset; view.contentLength = parsed.content_len;
     view.timestamp = epoch ? double(epoch) : parsed.timestamp; view.reaction = parsed.is_reaction != 0;
+    view.audio = {0, uint16_t(media.audio.length), uint8_t(media.audio.mode), uint8_t(media.audio.state)};
+    view.audioBytes = packed + media.audio.offset;
     return _incoming.accept(view, seed);
 }
 
@@ -1168,6 +1226,20 @@ void RustLxmfEngine::advanceRelay(Ticket ticket) {
         finishRelay(ticket, _relay.emitted ? LXMFStatus::PROP_UNCONFIRMED : LXMFStatus::PROP_UNAVAILABLE, true);
 }
 
+rs_handheld_status_t RustLxmfEngine::buildBody(const uint8_t publicKey[64], double timestamp,
+    uint8_t* output, size_t capacity, size_t& length, uint8_t destination[16], uint8_t id[32]) {
+    const auto& header = _body.header;
+    if (!_body.audioReady) return RS_HANDHELD_ERR_NOT_READY;
+    if (header.audio.state == 1)
+        return rs_handheld_rns_lxmf_build_audio(_d.ctx, publicKey, timestamp,
+            _body.bytes, header.titleLength, _body.bytes + header.titleLength, header.contentLength,
+            header.audio.mode, _body.bytes + header.titleLength + header.contentLength, header.audio.length,
+            output, capacity, &length, destination, id);
+    return rs_handheld_rns_lxmf_build_link(_d.ctx, publicKey, timestamp,
+        _body.bytes, header.titleLength, _body.bytes + header.titleLength, header.contentLength,
+        output, capacity, &length, destination, id);
+}
+
 void RustLxmfEngine::prepareRelay(Ticket ticket) {
     using Stage = RelayWork::Stage;
     auto* value = row(ticket);
@@ -1175,9 +1247,8 @@ void RustLxmfEngine::prepareRelay(Ticket ticket) {
     auto& packed = _d.resources->_codec;
     const auto& header = _body.header;
     uint8_t destination[16], messageId[32]; size_t length = 0, entrySize = 0, uploadSize = 0;
-    const bool valid = rs_handheld_rns_lxmf_build_link(_d.ctx, value->publicKey, value->timestamp,
-        _body.bytes, header.titleLength, _body.bytes + header.titleLength, header.contentLength,
-        packed, RS_HANDHELD_RESOURCE_DATA_MAX, &length, destination, messageId) == RS_HANDHELD_OK &&
+    const bool valid = buildBody(value->publicKey, value->timestamp,
+        packed, RS_HANDHELD_RESOURCE_DATA_MAX, length, destination, messageId) == RS_HANDHELD_OK &&
         !memcmp(destination, value->peer, 16) &&
         (!header.hasMessageId || !memcmp(header.messageId, messageId, 32)) &&
         (!_relay.prepared || !memcmp(_relay.preparedId, messageId, 32)) &&

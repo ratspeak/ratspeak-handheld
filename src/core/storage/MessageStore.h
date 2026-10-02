@@ -37,11 +37,13 @@ public:
     Submission requestSave(const LXMFMessage&, uint32_t identityGeneration = 0, uint32_t peerGeneration = 0);
     // Validated create metadata plus borrowed spans, copied into the owned slot
     // before return. No title/content allocation is required by the producer.
-    Submission requestSave(const Request&, const void* title, const void* content);
+    Submission requestSave(const Request&, const void* title, const void* content, const void* audio = nullptr);
     Submission requestStatus(const RecordKey&, LXMFStatus, uint32_t identityGeneration = 0, uint32_t peerGeneration = 0);
     Submission requestMarkRead(const std::string& peer, uint32_t identityGeneration = 0, uint32_t peerGeneration = 0);
     Submission requestDelete(const std::string& peer, uint32_t identityGeneration = 0, uint32_t peerGeneration = 0);
     Submission requestRecord(const RecordKey&, uint32_t offset = 0, uint16_t capacity = 4096);
+    // Same fixed header followed by a verified slice of the raw audio sidecar.
+    Submission requestAudio(const RecordKey&, uint32_t offset = 0, uint16_t capacity = 512);
     Submission requestPending(const RecordKey& after = {});
     // Immutable recipient-encrypted entry bound to this original outgoing record.
     // Load: committed length zero means never prepared; a missing committed file

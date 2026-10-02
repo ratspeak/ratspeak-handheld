@@ -6,6 +6,7 @@
 #include "StorageJsonAllocator.h"
 #include "StorageJsonArena.h"
 #include "LegacyMessageArena.h"
+#include "AudioRecord.h"
 #include <Arduino.h>
 #include <cmath>
 #include <cstdlib>
@@ -41,6 +42,15 @@ inline bool recordHeader(JsonVariantConst document, StoredRecordHeader& header) 
     header.contentLength = document["content"].as<JsonString>().size();
     header.hasMessageId = !document["msgid"].isNull();
     header.prepared = document["prop_prepared"] | false;
+    header.audio = {};
+    if (!document["audio"].isNull()) {
+        const auto media = document["audio"].as<JsonArrayConst>();
+        if (media.size() != 4 || !media[0].is<uint8_t>() || !media[1].is<uint8_t>() ||
+            !media[2].is<uint16_t>() || !media[3].is<uint32_t>()) return false;
+        header.audio = {media[3].as<uint32_t>(), media[2].as<uint16_t>(),
+                        media[1].as<uint8_t>(), media[0].as<uint8_t>()};
+        if (!audio::valid(header.audio)) return false;
+    }
     if (header.prepared && (header.incoming || !header.hasMessageId ||
                             header.deliveryPolicy == messaging::DeliveryPolicy::DirectOnly)) return false;
     if (header.hasMessageId) {
@@ -48,6 +58,14 @@ inline bool recordHeader(JsonVariantConst document, StoredRecordHeader& header) 
         if (!decodeHex(id.c_str(), id.size(), header.messageId, 32)) return false;
     }
     return true;
+}
+
+inline bool recordAudio(JsonDocument& document, const AudioMetadata& media) {
+    if (!audio::valid(media)) return false;
+    if (!media.state) { document.remove("audio"); return true; }
+    auto value = document["audio"].to<JsonArray>();
+    value.add(media.state); value.add(media.mode); value.add(media.length); value.add(media.checksum);
+    return !document.overflowed();
 }
 
 // The pinned JsonDeserializer resolves keys/nesting before invoking its filter.

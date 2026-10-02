@@ -43,6 +43,9 @@ public:
     bool begin(const Deps& deps);
     Submission submit(const uint8_t dest[16], const uint8_t* title, size_t titleLength,
                       const uint8_t* content, size_t contentLength, bool preferLink = false);
+    Submission submitAudio(const uint8_t dest[16], const uint8_t* title, size_t titleLength,
+                           const uint8_t* content, size_t contentLength, uint8_t mode,
+                           const uint8_t* audio, size_t audioLength);
     handheld::outgoing::Poll poll(Ticket, InitialResult&) const;
     bool acknowledge(Ticket);
     bool cancel(Ticket);
@@ -106,6 +109,7 @@ private:
         uint32_t generation = 0;
         uint16_t length = 0;
         uint8_t slot = UINT8_MAX, targets = 0;
+        bool audioReady = false;
     };
     static_assert(sizeof(OutgoingRow) <= 320, "Review outgoing descriptor budget");
     static_assert(sizeof(BodyWorkspace) <= 4096, "Review outgoing body workspace budget");
@@ -118,6 +122,11 @@ private:
     void hold(OutgoingRow&, handheld::storage::Submission, handheld::storage::Operation);
     void releaseBody(Ticket);
     void settleStorage(Ticket);
+    Submission submitMedia(const uint8_t dest[16], const uint8_t* title, size_t titleLength,
+        const uint8_t* content, size_t contentLength, bool preferLink,
+        const handheld::storage::AudioMetadata&, const uint8_t* audio);
+    rs_handheld_status_t buildBody(const uint8_t publicKey[64], double timestamp,
+        uint8_t* output, size_t capacity, size_t& length, uint8_t destination[16], uint8_t id[32]);
     void advance(Ticket);
     void attempt(Ticket);
     void preparePacket(Ticket, const uint8_t*, size_t, uint8_t interfaceId, bool broadcast);

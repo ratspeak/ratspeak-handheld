@@ -57,6 +57,8 @@ public:
         size_t titleLength = 0, contentLength = 0;
         double timestamp = 0;
         bool reaction = false;
+        handheld::storage::AudioMetadata audio;
+        const uint8_t* audioBytes = nullptr;
     };
     struct Deps {
         rs_handheld_rns_t* ctx = nullptr;

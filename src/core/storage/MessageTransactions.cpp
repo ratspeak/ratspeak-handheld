@@ -236,7 +236,9 @@ Error MessageTransactions::inspect(const RecordKey& key, unsigned which, const c
     return Error::None;
 }
 
-Error MessageTransactions::load(const RecordKey& key, MessageDocument& document, StoredRecordHeader& header) {
+Error MessageTransactions::load(const RecordKey& key, MessageDocument& document, StoredRecordHeader& header,
+                                uint8_t* selectedMedium) {
+    if (selectedMedium) *selectedMedium = UINT8_MAX;
     Error markerError;
     const auto cutoff = deletedThrough(key.peer, document, nullptr, &markerError);
     if (markerError != Error::None) return markerError;
@@ -280,8 +282,10 @@ Error MessageTransactions::load(const RecordKey& key, MessageDocument& document,
     for (unsigned which = 0; which < 2; ++which)
         if (primaryValid[which] && backupValid[which] && backupRevision[which] > primaryRevision[which])
             _preferBackup |= uint8_t(1u << which);
-    if (loaded == best) return Error::None;
-    return inspect(key, unsigned(best) / 2, best % 2 ? ".bak" : "", document, header);
+    const auto error = loaded == best ? Error::None :
+        inspect(key, unsigned(best) / 2, best % 2 ? ".bak" : "", document, header);
+    if (error == Error::None && selectedMedium) *selectedMedium = uint8_t(best / 2);
+    return error;
 }
 
 bool MessageTransactions::begin(FlashStore* flash, SDStore* sd, bool external, bool deferred) {
@@ -333,11 +337,53 @@ bool MessageTransactions::reserveCounter(uint32_t& counter) {
     return true;
 }
 
-Error MessageTransactions::commit(const RecordKey& key, MessageDocument& document, bool creating, Result& result) {
+File MessageTransactions::openAudio(const RecordKey& key, unsigned which, const StoredRecordHeader& header,
+                                   uint8_t* output, size_t offset, size_t length) {
+    auto store = medium(which);
+    if (!store.isReady() || header.audio.state != 1) return {};
+    for (const char* suffix : {".audio", ".audio.bak"}) {
+        char candidate[128]; path(key, which, candidate, suffix);
+        File file = store.open(candidate);
+        if (audio::verify(file, key, header, output, offset, length)) return file;
+    }
+    return {};
+}
+
+Error MessageTransactions::ensureAudio(const RecordKey& key, unsigned which,
+                                      const StoredRecordHeader& header, const uint8_t* bytes) {
+    if (header.audio.state != 1) return Error::None;
+    if (openAudio(key, which, header)) return Error::None;
+    auto store = medium(which); char target[128]; path(key, which, target, ".audio");
+    if (bytes) {
+        if (audio::digest(key, header.source, header.destination, header.audio, bytes) != header.audio.checksum)
+            return Error::Verify;
+        MemorySource source(bytes, header.audio.length);
+        return store.write(target, source);
+    }
+    auto original = openAudio(key, 1 - which, header);
+    if (!original) return Error::Read;
+    audio::FileSource source(original, header.audio.length,
+        audio::seed(key, header.source, header.destination, header.audio), header.audio.checksum);
+    return store.write(target, source);
+}
+
+bool MessageTransactions::removeAudio(const RecordKey& key, unsigned which) {
+    auto store = medium(which); bool removed = true;
+    for (const char* suffix : {".audio", ".audio.bak", ".audio.tmp"}) {
+        char candidate[128]; path(key, which, candidate, suffix);
+        if (store.exists(candidate) && !store.remove(candidate)) removed = false;
+    }
+    return removed;
+}
+
+Error MessageTransactions::commit(const RecordKey& key, MessageDocument& document, bool creating, Result& result,
+                                  const uint8_t* media, uint8_t referenceOnlyMedium) {
     JsonSource source(document);
     if (source.error() != Error::None) return source.error();
     if (document.document().overflowed() || source.length() > (creating ? Budget::MaxNewJson : Budget::MaxStoredFile))
         return Error::InvalidRecord;
+    StoredRecordHeader header;
+    if (!recordHeader(document.document(), header)) return Error::InvalidRecord;
     bool committed = false; Error error = Error::Unavailable;
     for (unsigned which = 0; which < 2; ++which) {
         auto store = medium(which); auto& outcome = which == 0 ? result.flash : result.sd;
@@ -353,7 +399,17 @@ Error MessageTransactions::commit(const RecordKey& key, MessageDocument& documen
             else if (!creating && (_preferBackup & (1u << which)) &&
                      (!store.remove(filePath) || !store.rename(backup, filePath))) outcome.error = Error::Rename;
             else if (!store.ensureDir(parent)) outcome.error = Error::Write;
-            else outcome.error = store.write(filePath, source);
+            else {
+                // Each medium commits its immutable blob before the referencing
+                // JSON. Neither a partial mirror nor an orphan is delivery proof.
+                outcome.error = ensureAudio(key, which, header, media);
+                // Read/status changes may retain an already committed media
+                // reference on the copy load() selected, even if its audio was
+                // subsequently lost. They cannot create a new mirror or prove
+                // receipt of a new/resubmitted message without durable audio.
+                if (!creating && which == referenceOnlyMedium) outcome.error = Error::None;
+                if (outcome.error == Error::None) outcome.error = store.write(filePath, source);
+            }
         } catch (const std::bad_alloc&) { outcome.error = Error::Allocation; }
         catch (...) { outcome.error = Error::Internal; }
         outcome.committed = outcome.error == Error::None;
@@ -380,7 +436,21 @@ void MessageTransactions::create(const Request& request, uint8_t* bytes, Result&
                 !memcmp(header.messageId, request.messageId, 32)) {
                 result.key = key; result.revision = header.revision; result.duplicate = true;
                 result.oldStatus = result.newStatus = header.status;
-                result.error = commit(key, document, false, result);
+                auto media = request.audio;
+                const auto* audioBytes = bytes + request.titleLength + request.contentLength;
+                if (media.state == 1) media.checksum = audio::digest(key, request.source, request.destination, media, audioBytes);
+                if (!header.audio.state && media.state) {
+                    // Older firmware stored authenticated text but discarded the
+                    // audio field. A verified resend can enrich that same MID.
+                    if (header.revision == UINT32_MAX) { result.error = Error::RevisionExhausted; return; }
+                    if (!recordAudio(document.document(), media)) { result.error = Error::Allocation; return; }
+                    document.document()["store_revision"] = ++header.revision;
+                    result.revision = header.revision;
+                    result.enriched = true;
+                } else if (memcmp(&media, &header.audio, sizeof(media))) {
+                    result.error = Error::Verify; return;
+                }
+                result.error = commit(key, document, false, result, media.state == 1 ? audioBytes : nullptr);
                 if (result.error == Error::None) result.outcome = Outcome::Committed;
                 return;
             }
@@ -393,7 +463,11 @@ void MessageTransactions::create(const Request& request, uint8_t* bytes, Result&
     if (!reserveCounter(result.key.counter)) {
         result.error = _nextCounter == UINT32_MAX ? Error::CounterExhausted : Error::Write; return;
     }
-    result.error = commit(result.key, document, true, result);
+    auto media = request.audio;
+    const auto* audioBytes = bytes + request.titleLength + request.contentLength;
+    if (media.state == 1) media.checksum = audio::digest(result.key, request.source, request.destination, media, audioBytes);
+    if (!recordAudio(document.document(), media)) { result.error = Error::Allocation; return; }
+    result.error = commit(result.key, document, true, result, media.state == 1 ? audioBytes : nullptr);
     if (result.error != Error::None) return;
     result.revision = 1; result.countDelta = 1; result.conversationDelta = conversationExists ? 0 : 1;
     result.unreadDelta = request.key.incoming && !request.read ? 1 : 0;
@@ -403,7 +477,8 @@ void MessageTransactions::create(const Request& request, uint8_t* bytes, Result&
 
 void MessageTransactions::update(const Request& request, Result& result) {
     MessageDocument document; StoredRecordHeader header;
-    result.error = load(request.key, document, header);
+    uint8_t selectedMedium;
+    result.error = load(request.key, document, header, &selectedMedium);
     if (result.error != Error::None) return;
     result.oldStatus = header.status; result.newStatus = request.status;
     if (!messaging::validDelivery(request.status, header.deliveryPolicy, header.incoming) ||
@@ -411,7 +486,7 @@ void MessageTransactions::update(const Request& request, Result& result) {
         result.error = Error::Stale; return;
     }
     if (header.status == request.status) {
-        result.revision = header.revision; result.error = commit(request.key, document, false, result);
+        result.revision = header.revision; result.error = commit(request.key, document, false, result, nullptr, selectedMedium);
         if (result.error == Error::None) result.outcome = Outcome::Committed;
         return;
     }
@@ -422,7 +497,7 @@ void MessageTransactions::update(const Request& request, Result& result) {
     if (header.revision == UINT32_MAX) { result.error = Error::RevisionExhausted; return; }
     document.document()["status"] = request.status;
     document.document()["store_revision"] = header.revision + 1;
-    result.error = commit(request.key, document, false, result);
+    result.error = commit(request.key, document, false, result, nullptr, selectedMedium);
     if (result.error == Error::None) { result.revision = header.revision + 1; result.outcome = Outcome::Committed; }
 }
 
@@ -432,13 +507,14 @@ void MessageTransactions::markRead(const Request& request, Result& result) {
     MessageDocument document; StoredRecordHeader header; Error failure = Error::None;
     while (nextRecord(cursor, key)) {
         if (!key.incoming || (request.key.counter && key.counter > request.key.counter)) continue;
-        const auto error = load(key, document, header);
+        uint8_t selectedMedium;
+        const auto error = load(key, document, header, &selectedMedium);
         if (error != Error::None) { failure = error; continue; }
         if (header.read) continue;
         if (header.revision == UINT32_MAX) { failure = Error::RevisionExhausted; continue; }
         document.document()["read"] = true; document.document()["store_revision"] = header.revision + 1;
         Result changed;
-        const auto saved = commit(key, document, false, changed);
+        const auto saved = commit(key, document, false, changed, nullptr, selectedMedium);
         if (saved != Error::None) { failure = saved; continue; }
         ++result.total; result.outcome = Outcome::Committed;
         if (result.unreadDelta > INT32_MIN) --result.unreadDelta;
@@ -531,9 +607,31 @@ void MessageTransactions::read(const Request& request, uint8_t* bytes, size_t ca
     result.revision = header.revision; result.outcome = Outcome::Committed;
 }
 
+void MessageTransactions::readAudio(const Request& request, uint8_t* bytes, size_t capacity, Result& result) {
+    capacity = std::min(capacity, size_t(request.readCapacity));
+    if (capacity <= sizeof(StoredRecordHeader)) { result.error = Error::InvalidRecord; return; }
+    MessageDocument document; StoredRecordHeader header;
+    result.error = load(request.key, document, header);
+    if (result.error != Error::None) return;
+    if (header.audio.state != 1 || request.offset > header.audio.length) {
+        result.error = Error::InvalidRecord; return;
+    }
+    const size_t count = std::min(size_t(header.audio.length) - request.offset, capacity - sizeof(header));
+    File file = openAudio(request.key, 0, header, bytes + sizeof(header), request.offset, count);
+    if (!file) file = openAudio(request.key, 1, header, bytes + sizeof(header), request.offset, count);
+    if (!file) { result.error = Error::Read; return; }
+    memcpy(bytes, &header, sizeof(header));
+    result.length = uint16_t(sizeof(header) + count); result.total = header.audio.length;
+    result.nextOffset = request.offset + uint32_t(count); result.more = result.nextOffset < result.total;
+    result.revision = header.revision; result.outcome = Outcome::Committed;
+}
+
 bool MessageTransactions::retainedCopy(const RecordKey& key, unsigned which, MessageDocument& document) {
     auto store = medium(which); JsonSource source(document);
     if (source.error() != Error::None) return false;
+    StoredRecordHeader header;
+    if (!recordHeader(document.document(), header) ||
+        (header.audio.state == 1 && !openAudio(key, which, header))) return false;
     uint8_t scratch[Budget::IoScratch];
     for (const char* suffix : {"", ".bak"}) {
         char candidate[128]; path(key, which, candidate, suffix); File file = store.open(candidate);
@@ -928,8 +1026,27 @@ void MessageTransactions::trim(const Request& request, Result& result) {
         if (!dir || !dir.isDirectory()) continue;
         for (File entry = dir.openNextFile(); entry; entry = dir.openNextFile()) {
             if (entry.isDirectory()) continue;
-            const char* name = entry.name(); const size_t length = strnlen(name, 25);
+            const char* name = entry.name(); const size_t length = strnlen(name, 31);
             uint32_t counter = 0; bool incoming = false;
+            if ((length == 26 || length == 30) && memcmp(name + 20, ".audio", 6) == 0) {
+                char canonical[21]; memcpy(canonical, name, 20); canonical[20] = 0;
+                if (!filename(canonical, counter, incoming) ||
+                    (length == 30 && memcmp(name + 26, ".bak", 4) && memcmp(name + 26, ".tmp", 4))) continue;
+                RecordKey key; memcpy(key.peer, request.key.peer, 16); key.counter = counter; key.incoming = incoming;
+                char artifact[128]; snprintf(artifact, sizeof(artifact), "%s/%s", parent, name);
+                const bool temporary = length == 30 && memcmp(name + 26, ".tmp", 4) == 0;
+                entry.close();
+                // An unavailable configured mirror may own the only reference.
+                bool referenced = !medium(0).isReady() || (_external && !medium(1).isReady());
+                for (unsigned copy = 0; copy < 2 && !referenced; ++copy) {
+                    for (const char* suffix : {"", ".bak"}) {
+                        char record[128]; path(key, copy, record, suffix);
+                        referenced |= medium(copy).exists(record);
+                    }
+                }
+                if (temporary || !referenced) store.remove(artifact);
+                continue;
+            }
             if (length == 24 && memcmp(name + 20, ".tmp", 4) == 0) {
                 char canonical[21]; memcpy(canonical, name, 20); canonical[20] = 0;
                 if (filename(canonical, counter, incoming)) {
@@ -990,7 +1107,8 @@ void MessageTransactions::trim(const Request& request, Result& result) {
                     char parent[96], candidate[128]; directory(key.peer, 1, parent); path(key, 1, candidate);
                     auto mirror = medium(1); JsonSource source(document);
                     if (source.error() != Error::None) { result.error = source.error(); continue; }
-                    if (!mirror.ensureDir(parent) || mirror.write(candidate, source) != Error::None ||
+                    if (!mirror.ensureDir(parent) || ensureAudio(key, 1, header, nullptr) != Error::None ||
+                        mirror.write(candidate, source) != Error::None ||
                         !retainedCopy(key, 1, document)) continue;
                 }
                 char primary[128], backup[128]; path(key, unsigned(target), primary); path(key, unsigned(target), backup, ".bak");
@@ -1004,6 +1122,7 @@ void MessageTransactions::trim(const Request& request, Result& result) {
                 }
                 const bool primaryRemoved = !store.exists(primary) || store.remove(primary);
                 const bool backupRemoved = !store.exists(backup) || store.remove(backup);
+                if (primaryRemoved && backupRemoved && !removeAudio(key, unsigned(target))) result.error = Error::Write;
                 if (primaryRemoved && backupRemoved) { progress = true; ++result.total; result.outcome = Outcome::Committed; }
                 else result.error = Error::Write;
                 if (target == 1 && primaryRemoved && backupRemoved) {
@@ -1013,6 +1132,7 @@ void MessageTransactions::trim(const Request& request, Result& result) {
                     const bool removedPrimary = !flash.exists(primary) || flash.remove(primary);
                     const bool removedBackup = !flash.exists(backup) || flash.remove(backup);
                     if (!removedPrimary || !removedBackup) { result.error = Error::Write; continue; }
+                    if (!removeAudio(key, 0)) result.error = Error::Write;
                 }
                 const bool cacheOnly = target == 0 && _external && _sd && _sd->isReady();
                 if (primaryRemoved && backupRemoved && !cacheOnly) {
@@ -1135,7 +1255,7 @@ void MessageTransactions::execute(const Request& request, uint8_t* bytes, size_t
         rrcTransaction(request, bytes, length, capacity, result); return;
     }
     checkSummaryMedia();
-    if (request.operation != Operation::ReadRecord && request.operation != Operation::ReadPending &&
+    if (request.operation != Operation::ReadRecord && request.operation != Operation::ReadAudio && request.operation != Operation::ReadPending &&
         request.operation != Operation::ReadHistoryPage && request.operation != Operation::ReadConversationPage &&
         request.operation != Operation::ReadConversation && request.operation != Operation::LoadPurge &&
         request.operation != Operation::WritePurge && request.operation != Operation::ClearPurge) {
@@ -1147,8 +1267,8 @@ void MessageTransactions::execute(const Request& request, uint8_t* bytes, size_t
     }
     switch (request.operation) {
     case Operation::CreateIncoming: case Operation::CreateOutgoing:
-        if (!Budget::validBody(request.titleLength, request.contentLength) ||
-            length != size_t(request.titleLength) + request.contentLength ||
+        if (!audio::validBody(request.titleLength, request.contentLength, request.audio) || request.audio.checksum ||
+            length != size_t(request.titleLength) + request.contentLength + request.audio.length ||
             !messaging::validDelivery(request.status, request.deliveryPolicy, request.key.incoming) ||
             !std::isfinite(request.timestamp) ||
             request.key.incoming != (request.operation == Operation::CreateIncoming) ||
@@ -1162,6 +1282,7 @@ void MessageTransactions::execute(const Request& request, uint8_t* bytes, size_t
     case Operation::MarkRead: markRead(request, result); break;
     case Operation::DeleteConversation: erase(request, result); break;
     case Operation::ReadRecord: read(request, bytes, capacity, result); break;
+    case Operation::ReadAudio: readAudio(request, bytes, capacity, result); break;
     case Operation::ReadPending: pending(request, bytes, capacity, result); break;
     case Operation::ReadHistoryPage: history(request, bytes, capacity, result); break;
     case Operation::ReadConversationPage: conversationPage(request, bytes, capacity, result); break;

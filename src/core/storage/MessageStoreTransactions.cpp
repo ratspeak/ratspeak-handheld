@@ -54,16 +54,19 @@ MessageStore::Submission MessageStore::requestSave(const LXMFMessage& message,
     return requestSave(request, message.title.data(), message.content.data());
 }
 
-MessageStore::Submission MessageStore::requestSave(const Request& request, const void* title, const void* content) {
-    if (!Budget::validBody(request.titleLength, request.contentLength)) return {{}, Rejection::TooLarge};
+MessageStore::Submission MessageStore::requestSave(const Request& request, const void* title, const void* content,
+                                                  const void* media) {
+    if (!audio::validBody(request.titleLength, request.contentLength, request.audio)) return {{}, Rejection::TooLarge};
     if ((request.operation != Operation::CreateIncoming && request.operation != Operation::CreateOutgoing) ||
         request.key.counter || request.key.incoming != (request.operation == Operation::CreateIncoming) ||
         memcmp(request.key.peer, request.key.incoming ? request.source : request.destination, 16) ||
         !std::isfinite(request.timestamp) ||
         !handheld::messaging::validDelivery(request.status, request.deliveryPolicy, request.key.incoming) ||
-        (request.titleLength && !title) || (request.contentLength && !content)) return {{}, Rejection::Invalid};
-    const WriteQueue::PayloadPart parts[] = {{title, request.titleLength}, {content, request.contentLength}};
-    return submit(request, parts, 2);
+        (request.titleLength && !title) || (request.contentLength && !content) ||
+        (request.audio.length && !media) || request.audio.checksum) return {{}, Rejection::Invalid};
+    const WriteQueue::PayloadPart parts[] = {{title, request.titleLength}, {content, request.contentLength},
+                                           {media, request.audio.length}};
+    return submit(request, parts, 3);
 }
 
 MessageStore::Submission MessageStore::requestStatus(const RecordKey& key, LXMFStatus status,
@@ -93,6 +96,12 @@ MessageStore::Submission MessageStore::requestDelete(const std::string& peer,
 MessageStore::Submission MessageStore::requestRecord(const RecordKey& key, uint32_t offset, uint16_t capacity) {
     if (!key.counter || capacity < sizeof(StoredRecordHeader)) return {{}, Rejection::Invalid};
     Request request; request.operation = Operation::ReadRecord; request.key = key; request.offset = offset;
+    return submit(request, nullptr, 0, capacity);
+}
+
+MessageStore::Submission MessageStore::requestAudio(const RecordKey& key, uint32_t offset, uint16_t capacity) {
+    if (!key.counter || capacity <= sizeof(StoredRecordHeader)) return {{}, Rejection::Invalid};
+    Request request; request.operation = Operation::ReadAudio; request.key = key; request.offset = offset;
     return submit(request, nullptr, 0, capacity);
 }
 
@@ -242,11 +251,11 @@ bool MessageStore::setExternalStorageEnabled(bool enabled) {
 void MessageStore::settle(const Request& request, const Result& result) noexcept {
     if (result.outcome != Outcome::Committed) return;
     if (rrc::operation(request.operation)) return; // RRC owner publishes its own revision/unread.
-    if (request.operation == Operation::ReadRecord || request.operation == Operation::ReadHistoryPage ||
+    if (request.operation == Operation::ReadRecord || request.operation == Operation::ReadAudio || request.operation == Operation::ReadHistoryPage ||
         request.operation == Operation::ReadConversationPage || request.operation == Operation::ReadConversation ||
         request.operation == Operation::ReadPending || request.operation == Operation::LoadPurge ||
         request.operation == Operation::WritePurge || request.operation == Operation::ClearPurge) return;
-    if (result.duplicate) return;
+    if (result.duplicate && !result.enriched) return;
     // Only committed aggregate deltas and invalidation live here. There is no
     // presentation cache or allocation between persistence and result visibility.
     if ((request.operation == Operation::CreateIncoming || request.operation == Operation::CreateOutgoing ||

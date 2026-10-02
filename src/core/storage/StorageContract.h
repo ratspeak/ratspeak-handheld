@@ -25,7 +25,8 @@ enum class Operation : uint8_t {
     CreateIncoming, CreateOutgoing, UpdateStatus, MarkRead, DeleteConversation,
     ReadRecord, ReadHistoryPage, ReadPending, ReadConversationPage, ReadConversation, Trim,
     LoadPrepared, WritePrepared, LoadPurge, WritePurge, ClearPurge,
-    RrcRead, RrcAppend, RrcWrite, RrcStatus, RrcPage, RrcMarkRead, RrcClear, RrcSavedRooms, RrcPrivateInbox, RrcObserve
+    RrcRead, RrcAppend, RrcWrite, RrcStatus, RrcPage, RrcMarkRead, RrcClear, RrcSavedRooms, RrcPrivateInbox, RrcObserve,
+    ReadAudio
 };
 enum class Rejection : uint8_t {
     None, Busy, Invalid, TooLarge, NoMemory, Unavailable, Fenced, Exhausted
@@ -52,6 +53,15 @@ struct RecordKey {
     uint32_t counter = 0;
     bool incoming = false;
 };
+
+// Framing is independent of playback support. Unknown codecs retain their bytes;
+// malformed network fields retain an explicit unavailable state without a blob.
+struct AudioMetadata {
+    uint32_t checksum = 0; // Local storage integrity; never network authentication.
+    uint16_t length = 0;
+    uint8_t mode = 0, state = 0; // 0 absent, 1 field present, 2 malformed field
+};
+static_assert(sizeof(AudioMetadata) == 8, "Audio metadata budget changed");
 
 // Scalars are copied at admission. Title/content occupy the slot's separate
 // bounded byte buffer, with explicit lengths (embedded NUL bytes are preserved).
@@ -80,6 +90,7 @@ struct Request {
     uint16_t titleLength = 0;
     uint16_t contentLength = 0;
     uint16_t readCapacity = 0;
+    AudioMetadata audio;
     Operation operation = Operation::CreateIncoming;
     uint8_t status = 0; // persisted LXMFStatus numeric value
     messaging::DeliveryPolicy deliveryPolicy = messaging::DeliveryPolicy::DirectOnly;
@@ -123,6 +134,7 @@ struct Result {
     MediumResult flash;
     MediumResult sd;
     bool duplicate = false;
+    bool enriched = false; // A resend attached previously discarded media to the same MID.
     bool more = false;
 };
 
@@ -140,6 +152,7 @@ struct StoredRecordHeader {
     uint8_t source[16] = {}, destination[16] = {}, messageId[32] = {};
     double timestamp = 0;
     uint32_t counter = 0, revision = 0, titleLength = 0, contentLength = 0;
+    AudioMetadata audio;
     uint8_t status = 0;
     messaging::DeliveryPolicy deliveryPolicy = messaging::DeliveryPolicy::DirectOnly;
     bool incoming = false, read = false, hasMessageId = false;
