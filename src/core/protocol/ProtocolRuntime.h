@@ -14,6 +14,7 @@
 #include "protocol/RustRrcEngine.h"
 #include "protocol/RustVoiceEngine.h"
 #include "voice/VoiceWorker.h"
+#include "voice/MemoController.h"
 #include "ratspeak_protocol.h"
 
 class FlashStore;
@@ -43,7 +44,7 @@ public:
     // requires both incoming and outgoing ownership drained.
     void stopReceive();
     void pollReceive();
-    bool receiveDrained() const { return _lxmf.incoming().drained() && _lxmf.drained() && _rrc.drained() && _voice.drained(); }
+    bool receiveDrained() const { return _lxmf.incoming().drained() && _lxmf.drained() && _rrc.drained() && _voice.drained() && _memos.drained(); }
 
     // Retains the context and the caller-owned radio until both message owners
     // and the already-started radio burst settle. No RX, scheduler or metadata
@@ -91,9 +92,11 @@ public:
     uint32_t announceFilterCount() const override;
     void configureVoice(const handheld::voice::Settings&) override;
     handheld::voice::Status voiceStatus() const override { return _voice.status(); }
-    handheld::voice::Code voiceCommand(const handheld::voice::Command& command) override { return _voice.command(command,handheld::voice::VoiceWorker::stopEpoch()); }
-    bool voiceDrained() const override { return _voice.drained(); }
-    void voiceStop() override { _voice.stop(); }
+    handheld::voice::Code voiceCommand(const handheld::voice::Command&) override { return handheld::voice::Code::Off; }
+    bool voiceDrained() const override { return _voice.drained() && _memos.drained(); }
+    void voiceStop() override { _voice.stop(); _memos.stop(); }
+    handheld::memo::Status memoStatus() const override { return _memos.status(); }
+    handheld::memo::Code memoCommand(const handheld::memo::Command&) override;
     void configurePropagation(const handheld::propagation::Settings&) override;
     size_t propagationNodes(handheld::propagation::NodeView*, size_t) const override;
     handheld::propagation::SyncView propagationStatus() const override;
@@ -237,6 +240,7 @@ private:
     RustRrcEngine _rrc;
     RustVoiceEngine _voice;
     handheld::voice::VoiceWorker _voiceAudio;
+    handheld::memo::Controller _memos;
     uint8_t _voiceHash[16]{};
     uint64_t _nextVoiceAnnounce=0;
     bool _voiceEnabled=false;

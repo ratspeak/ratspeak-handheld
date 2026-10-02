@@ -58,6 +58,9 @@ public:
     void finishPeerDelete(const uint8_t peer[16], const handheld::storage::Result&);
     int queuedCount() const;
     void loop();
+    // A separately committed memo enters the existing recovery/delivery owner.
+    // Never resubmit its body through create-message admission.
+    void storedMessage();
     bool propagationBusy() const { return _relay.ticket.valid() && !_relay.direct; }
     RustPropagationInbox& inbox() { return _inbox; }
     const RustPropagationInbox& inbox() const { return _inbox; }
@@ -171,7 +174,7 @@ private:
     uint32_t _identityGeneration = 0, _statusRevision = 0;
     uint8_t _cursor = 0;
     bool _propagationWasEnabled = false;
-    bool _accepting = false, _recovering = false, _polling = false, _deleting = false;
+    bool _accepting = false, _recovering = false, _polling = false, _deleting = false, _recoverAgain = false;
     SourceRequest _sourceRequests[SOURCE_REQUEST_SLOTS];
     RustIncomingDelivery _incoming;
     RustPropagationInbox _inbox;

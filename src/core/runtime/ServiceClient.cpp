@@ -67,6 +67,13 @@ uint32_t ServiceClient::voiceCommand(const voice::Command& command, Completion c
     });
 }
 
+uint32_t ServiceClient::memoCommand(const memo::Command& command, Completion completion) {
+    Request request;request.operation=Operation::MemoCommand;
+    return submit(request,&command,sizeof command,0,[completion=std::move(completion)](const Result& result,const char*) {
+        if(completion) completion(result);
+    });
+}
+
 uint32_t ServiceClient::requestPropagationNodes(PropagationCompletion completion) {
     if (!completion) return 0;
     Request request; request.operation = Operation::PropagationNodes;

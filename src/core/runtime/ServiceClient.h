@@ -84,6 +84,7 @@ public:
     uint32_t requestRrcPeople(const char* room, RrcCompletion<rrc::PersonView>);
     uint32_t requestRrcDirectory(size_t offset, RrcCompletion<rrc::DirectoryView>);
     uint32_t voiceCommand(const voice::Command&, Completion = {});
+    uint32_t memoCommand(const memo::Command&, Completion = {});
     uint32_t rrcCommand(const rrc::Command&, const uint8_t* body = nullptr, size_t length = 0, Completion = {}, bool quiet = false);
     uint32_t requestRrcDraft(const rrc::Conversation&, RrcCompletion<rrc::DraftView>);
     uint32_t requestRrcDetail(const rrc::Conversation&, const uint8_t key[16], uint32_t counter, RrcCompletion<rrc::MessageDetail>);

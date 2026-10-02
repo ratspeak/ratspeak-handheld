@@ -69,7 +69,7 @@ bool RustLxmfEngine::begin(const Deps& deps) {
         !deps.store || !deps.pump || !deps.ourDestHash) return false;
     _d = deps;
     ++_identityGeneration;
-    _accepting = true; _recovering = true; _recoveryCursor = {};
+    _accepting = true; _recovering = true; _recoverAgain = false; _recoveryCursor = {};
     RustIncomingDelivery::Deps incoming;
     incoming.ctx = deps.ctx; incoming.clock = deps.clock; incoming.store = deps.store;
     incoming.pump = deps.pump; incoming.links = deps.links; incoming.onMessage = deps.onMessage;
@@ -148,6 +148,12 @@ RustLxmfEngine::Submission RustLxmfEngine::submitAudio(const uint8_t dest[16], c
         rs_handheld_memo_inspect(mode, length, &info) != RS_HANDHELD_OK) return {{}, Rejection::Invalid};
     return submitMedia(dest, title, titleLength, content, contentLength, true,
         {0, uint16_t(length), mode, 1}, bytes);
+}
+
+void RustLxmfEngine::storedMessage() {
+    if(!_accepting) return; // Next boot resumes the already durable outbox.
+    if(_recovering) _recoverAgain=true;
+    else {_recoveryCursor={};_recovering=true;}
 }
 
 RustLxmfEngine::Submission RustLxmfEngine::submitMedia(const uint8_t dest[16], const uint8_t* title,
@@ -382,7 +388,8 @@ void RustLxmfEngine::settleStorage(Ticket ticket) {
         else if (result.outcome != Outcome::Committed) {
             value->error = result.error; value->nextAttempt = _d.clock->nowMs() + TX_RETRY_MS;
         } else if (!result.length) {
-            _recovering = false; value->phase = Phase::Settled;
+            if(_recoverAgain) {_recoverAgain=false;_recoveryCursor={};value->phase=Phase::Query;}
+            else {_recovering = false; value->phase = Phase::Settled;}
         } else {
             _recoveryCursor = result.key;
             if (!validHeader) { value->phase = Phase::Settled; }

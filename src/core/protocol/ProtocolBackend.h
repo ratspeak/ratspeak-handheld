@@ -1,5 +1,6 @@
 #pragma once
 #include "voice/VoiceTypes.h"
+#include "voice/MemoTypes.h"
 
 // Narrow protocol facade shared by the device frontends. Conversation reads
 // remain store-backed; protocol sends, status, and lifecycle pass through here.
@@ -53,6 +54,8 @@ public:
     virtual handheld::voice::Code voiceCommand(const handheld::voice::Command&) { return handheld::voice::Code::Off; }
     virtual bool voiceDrained() const { return true; }
     virtual void voiceStop() {}
+    virtual handheld::memo::Status memoStatus() const { return {}; }
+    virtual handheld::memo::Code memoCommand(const handheld::memo::Command&) { return handheld::memo::Code::Invalid; }
     virtual void configurePropagation(const handheld::propagation::Settings&) {}
     virtual size_t propagationNodes(handheld::propagation::NodeView*, size_t) const { return 0; }
     virtual handheld::propagation::SyncView propagationStatus() const { return {}; }

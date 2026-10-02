@@ -51,7 +51,7 @@ inline bool verify(File& file, const RecordKey& key, const StoredRecordHeader& h
         // Return only bytes from this integrity pass. A later read could see
         // different media contents even under the filesystem owner's lease.
         const size_t start = std::max(position, offset), end = std::min(position + count, offset + length);
-        if (start < end) memcpy(output + start - offset, chunk + start - position, end - start);
+        if (start < end) memcpy(output + (start - offset), chunk + (start - position), end - start);
         remaining -= count; position += count; yield();
     }
     return ~crc == header.audio.checksum && file.seek(0);

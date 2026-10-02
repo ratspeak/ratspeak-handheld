@@ -110,7 +110,7 @@ class MessageMigration {
         SliceSink(uint8_t* bytes,size_t offset,size_t capacity) : _bytes(bytes),_offset(offset),_capacity(capacity) {}
         size_t write(const uint8_t* bytes,size_t length) override {
             const size_t first=std::max(_position,_offset),last=std::min(_position+length,_offset+_capacity);
-            if (last>first) memcpy(_bytes+first-_offset,bytes+first-_position,last-first);
+            if (last>first) memcpy(_bytes+(first-_offset),bytes+(first-_position),last-first);
             _position+=length; return length;
         }
     };

@@ -317,6 +317,7 @@ void DeviceService::refreshStatus() {
     _status.statusRevision = _backend.lxmfStatusRevision();
     _status.rrc = _backend.rrcStatus();
     _status.voice = _backend.voiceStatus();
+    _status.memo = _backend.memoStatus();
     _status.flash = _flash.isReady();
     _status.sd = _sd.isReady();
     if ((!_lastStorageStatus || _lastStatus - _lastStorageStatus >= 5000) &&
@@ -473,7 +474,7 @@ void DeviceService::execute(uint8_t slot) {
     }
     if (!_maintenance.accepting() && (request.operation == Operation::Announce ||
         request.operation == Operation::Diagnostics || request.operation == Operation::HomeReady ||
-        request.operation == Operation::Scan || request.operation == Operation::PropagationSync || request.operation == Operation::RrcCommand || request.operation == Operation::VoiceCommand)) {
+        request.operation == Operation::Scan || request.operation == Operation::PropagationSync || request.operation == Operation::RrcCommand || request.operation == Operation::VoiceCommand || request.operation == Operation::MemoCommand)) {
         complete(slot, Outcome::Cancelled, "Cancelled for maintenance"); return;
     }
     const auto length = _mailbox.length(slot);
@@ -490,6 +491,14 @@ void DeviceService::execute(uint8_t slot) {
         if(command.action>voice::Action::Volume || command.volume>100) {complete(slot,Outcome::Invalid);break;}
         const auto code=_backend.voiceCommand(command);
         Result result;result.outcome=code==voice::Code::Ok?Outcome::Ok:Outcome::Failed;
+        result.next=uint32_t(code);_mailbox.complete(slot,result);break;
+    }
+    case Operation::MemoCommand: {
+        memo::Command command;
+        if(length!=sizeof command || _mailbox.cancellationRequested(slot)) {complete(slot,Outcome::Invalid);break;}
+        memcpy(&command,_scratch,sizeof command);
+        const auto code=_backend.memoCommand(command);
+        Result result;result.outcome=code==memo::Code::Ok?Outcome::Ok:Outcome::Failed;
         result.next=uint32_t(code);_mailbox.complete(slot,result);break;
     }
     case Operation::Send: {

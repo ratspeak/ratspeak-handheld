@@ -156,7 +156,9 @@ bool ProtocolRuntime::startEngines(FlashStore* flash, SDStore* sd, MessageStore*
     ed.propagation = &_propagationNodes;
     if (!_lxmf.begin(ed)) return false;
     _rrc.begin({_ctx, &_clock, &_pump, &_links, store, _identityHash});
-    _voice.begin({_ctx,&_clock,&_pump,&_links,&_keymap,&_voiceAudio,this,
+    // Keep qualified telephony internals, but no live-call hardware owner or
+    // admission in the memo release. One worker belongs exclusively to memos.
+    _voice.begin({_ctx,&_clock,&_pump,&_links,&_keymap,nullptr,this,
         [](void* context,const uint8_t peer[16]) {
             const auto* runtime=static_cast<ProtocolRuntime*>(context);
             if(!runtime->_announceMgr) return false;
@@ -164,6 +166,9 @@ bool ProtocolRuntime::startEngines(FlashStore* flash, SDStore* sd, MessageStore*
                 if(node.saved && node.hash.size()==16 && !memcmp(node.hash.data(),peer,16)) return true;
             return false;
         }});
+    _memos.begin({store,&_voiceAudio,this,[](void* context,const handheld::storage::RecordKey&) {
+        static_cast<ProtocolRuntime*>(context)->_lxmf.storedMessage();
+    }},_destHash,70);
     _enginesUp = true;
     return true;
 }
@@ -295,12 +300,14 @@ void ProtocolRuntime::stopReceive() {
     _lxmf.stopAdmissions();
     _rrc.stop();
     _voice.stop();
+    _memos.stop();
 }
 void ProtocolRuntime::pollReceive() {
     handheld::assertDeviceOwner();
     _lxmf.loop();
     _rrc.loop();
     _voice.loop(handheld::voice::VoiceWorker::stopEpoch());
+    _memos.poll(_clock.nowMs());
 }
 
 void ProtocolRuntime::beginMaintenance(LoRaInterface& radio) {
@@ -410,6 +417,7 @@ void ProtocolRuntime::loop() {
         _links.loop();
         _rrc.loop();
         _voice.loop(handheld::voice::VoiceWorker::stopEpoch());
+        _memos.poll(_clock.nowMs());
         _resources.loop();
     }
     // TX is asynchronous. Do not hold the owner in flash while the modem
@@ -958,7 +966,17 @@ void ProtocolRuntime::lxmfFinishPeerDelete(const uint8_t peer[16],
 }
 
 void ProtocolRuntime::configureVoice(const handheld::voice::Settings& settings) {
-    _voice.configure(settings);
-    const bool enabled=settings.enabled && _voiceAudio.capabilities();
-    if(enabled!=_voiceEnabled) {_voiceEnabled=enabled;_nextVoiceAnnounce=_clock.nowMs();}
+    auto unavailable=settings;unavailable.enabled=false;
+    _voice.configure(unavailable);_voiceEnabled=false;_nextVoiceAnnounce=0;
+    _memos.volume(settings.volume);
+}
+
+handheld::memo::Code ProtocolRuntime::memoCommand(const handheld::memo::Command& command) {
+    handheld::assertDeviceOwner();
+    handheld::storage::memo::Command context;
+    const auto epoch=RustClock::epochSecs();context.timestamp=epoch?double(epoch):double(_clock.nowMs())/1000.0;
+    const auto& propagation=_propagationNodes.settings();
+    if(propagation.enabled) context.policy=propagation.delivery==handheld::propagation::Delivery::Always?
+        handheld::messaging::DeliveryPolicy::Always:handheld::messaging::DeliveryPolicy::Auto;
+    return _enginesUp?_memos.command(command,context):handheld::memo::Code::Busy;
 }

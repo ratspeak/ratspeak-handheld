@@ -17,6 +17,7 @@
 namespace handheld::voice {
 namespace {
 constexpr uint32_t StackBytes=24576, DriverAllowance=8192, StackReserve=6144, PcmBytes=640;
+constexpr uint8_t MemoProfile=0x10; // LXST ULBW selects native 700C; LXMF audio mode remains 0x03.
 #ifdef RSCARDPUTER
 constexpr size_t FreeFloor=ResourceBudget::CardInternalFree, LargestFloor=ResourceBudget::CardLargestBlock;
 #else
@@ -32,7 +33,7 @@ void clear(void* p,size_t n) { volatile uint8_t* b=static_cast<uint8_t*>(p);whil
 }
 struct VoiceWorker::Impl {
     portMUX_TYPE mux=portMUX_INITIALIZER_UNLOCKED;
-    std::atomic<bool> stop{false}, done{false}, talk{false};
+    std::atomic<bool> stop{false}, done{false}, talk{false}, finish{false};
     std::atomic<uint32_t> talkEpoch{0}, flushEpoch{0};
     std::atomic<uint8_t> volume{70};
     AudioDevice device;
@@ -40,6 +41,9 @@ struct VoiceWorker::Impl {
     Encoded rx[3], tx[3];
     uint8_t rxHead=0,rxCount=0,txHead=0,txCount=0;
     uint8_t profile=0;
+    AudioUse use=AudioUse::Call;
+    uint16_t frameLimit=0, inputFrames=0;
+    uint32_t memoEpoch=0;
     uint32_t generation=0;
     uint8_t* codec=nullptr;
     int16_t* pcm=nullptr;
@@ -69,9 +73,20 @@ uint8_t VoiceWorker::capabilities() const {
 #endif
 }
 Code VoiceWorker::prepare(uint32_t generation,uint8_t profile,uint8_t volumeValue) {
+    return prepareUse(generation,profile,volumeValue,AudioUse::Call,0,0);
+}
+Code VoiceWorker::prepareMemo(uint32_t generation,AudioUse use,uint16_t frames,uint8_t volume,uint32_t epoch) {
+    if (use==AudioUse::Call || !frames || frames>(use==AudioUse::MemoRecord?375:750) ||
+        epoch==UINT32_MAX || epoch!=stopEpoch()) return Code::Invalid;
+    if (!(capabilities() & (use==AudioUse::MemoRecord?1:2))) return Code::AudioUnavailable;
+    return prepareUse(generation,MemoProfile,volume,use,frames,epoch);
+}
+Code VoiceWorker::prepareUse(uint32_t generation,uint8_t profile,uint8_t volumeValue,
+    AudioUse use,uint16_t frames,uint32_t epoch) {
     if (!capabilities()) return Code::AudioUnavailable;
     if (!generation || !profileInfo(profile).native_samples) return Code::ProfileUnsupported;
-    if (_impl && !_impl->stop.load() && _impl->generation==generation && _impl->profile==profile) return Code::Ok;
+    if (_impl && !_impl->stop.load() && _impl->generation==generation && _impl->profile==profile &&
+        _impl->use==use && _impl->frameLimit==frames && _impl->memoEpoch==epoch) return Code::Ok;
     if (_impl) { stop(); if(!drained()) return Code::Busy; }
 #ifdef RSCARDPUTER
     const uint32_t bufferCaps=MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT;
@@ -96,6 +111,7 @@ Code VoiceWorker::prepare(uint32_t generation,uint8_t profile,uint8_t volumeValu
         heap_caps_free(i->codec);heap_caps_free(i->pcm);i->~Impl();heap_caps_free(i);return Code::NoMemory;
     }
     i->generation=generation;i->status.generation=generation;i->profile=profile;i->volume=volumeValue;
+    i->use=use;i->frameLimit=frames;i->memoEpoch=epoch;
     if (!AudioCoordinator::instance().request()) {
         heap_caps_free(i->codec);heap_caps_free(i->pcm);i->~Impl();heap_caps_free(i);return Code::Busy;
     }
@@ -112,6 +128,7 @@ Code VoiceWorker::prepare(uint32_t generation,uint8_t profile,uint8_t volumeValu
     return Code::Ok;
 }
 void VoiceWorker::stop() { if (_impl) { _impl->talk=false;_impl->stop=true; } }
+void VoiceWorker::finishMemo() { if(_impl && _impl->use!=AudioUse::Call) _impl->finish=true; }
 bool VoiceWorker::drained() {
     auto* i=_impl;
     if (!i) return true;
@@ -133,7 +150,15 @@ void VoiceWorker::volume(uint8_t v) { if(_impl) _impl->volume=v>100?100:v; }
 bool VoiceWorker::receive(const Encoded& packet) {
     auto* i=_impl;
     if(!i || packet.generation!=i->generation || packet.length>81 || i->transmitting() || i->stop) return false;
+    if(i->use==AudioUse::MemoRecord) return false;
     portENTER_CRITICAL(&i->mux);
+    if(i->use==AudioUse::MemoPlayback) {
+        if(!packet.length || packet.length>80 || packet.length%4 || i->rxCount==3 ||
+            i->inputFrames+packet.length/4>i->frameLimit || i->done.load()) {
+            portEXIT_CRITICAL(&i->mux);return false;
+        }
+        i->inputFrames+=packet.length/4;
+    }
     if(i->rxCount==3) { i->rxHead=(i->rxHead+1)%3;--i->rxCount;++i->status.dropped; }
     i->rx[(i->rxHead+i->rxCount)%3]=packet;++i->rxCount;
     portEXIT_CRITICAL(&i->mux);return true;
@@ -147,6 +172,7 @@ bool VoiceWorker::take(Encoded& packet) {
 }
 void VoiceWorker::run(void* pointer) {
     auto& i=*static_cast<Impl*>(pointer);
+    if(i.use!=AudioUse::Call) {runMemo(i);return;}
     bool owned=false, ready=false, capture=false;
     size_t used=0, frames=0;
     const auto shape=profileInfo(i.profile);
@@ -247,6 +273,113 @@ void VoiceWorker::run(void* pointer) {
     while(!AudioCoordinator::instance().release()) vTaskDelay(1);
     i.done.store(true);
     vTaskDelete(nullptr);
+}
+
+void VoiceWorker::runMemo(Impl& i) {
+    const bool record=i.use==AudioUse::MemoRecord;
+    bool owned=false,ready=false,normalStop=false;
+    Code failure=Code::Ok;
+    size_t used=0,packetFrames=0,total=0;
+    Encoded packet;packet.generation=i.generation;
+    const uint64_t started=nowMs();uint64_t waiting=started;
+    unsigned overruns=0;
+    auto alive=[&] {return uint32_t(nowMs())-VoiceWorker::_inputHeartbeat.load()<=1000;};
+    auto cancelled=[&] {return i.finish.load() || i.memoEpoch!=VoiceWorker::_stopEpoch.load();};
+    auto timing=[&](int64_t before,bool encoding) {
+        const uint32_t elapsed=uint32_t(esp_timer_get_time()-before);
+        portENTER_CRITICAL(&i.mux);
+        auto& maximum=encoding?i.status.encodeUs:i.status.decodeUs;
+        if(elapsed>maximum) maximum=elapsed;
+        portEXIT_CRITICAL(&i.mux);
+        overruns=elapsed>20000?overruns+1:0;
+        return elapsed<=40000 && overruns<3;
+    };
+    auto frames=[&] {
+        portENTER_CRITICAL(&i.mux);i.status.frames=total;portEXIT_CRITICAL(&i.mux);
+    };
+    auto queue=[&] {
+        if(!packetFrames) return true;
+        packet.length=uint16_t(packetFrames*4);
+        portENTER_CRITICAL(&i.mux);
+        const bool available=i.txCount<3;
+        if(available) {i.tx[(i.txHead+i.txCount)%3]=packet;++i.txCount;}
+        portEXIT_CRITICAL(&i.mux);
+        if(!available) {failure=Code::Backpressure;return false;}
+        packetFrames=0;clear(packet.bytes,sizeof packet.bytes);return true;
+    };
+    auto encode=[&] {
+        const auto before=esp_timer_get_time();
+        const auto code=rs_handheld_voice_codec_encode_frame(i.codec,i.pcm,320,packet.bytes+packetFrames*4,4);
+        const bool timely=timing(before,true);clear(i.pcm,PcmBytes);used=0;
+        if(code!=RS_HANDHELD_OK || !timely) {failure=timely?Code::AudioUnavailable:Code::SlowCodec;return false;}
+        ++packetFrames;++total;frames();
+        return packetFrames<20 || queue();
+    };
+    while(!i.stop && !cancelled() && !owned) {
+        if(!alive()) {failure=Code::InputLost;break;}
+        owned=AudioCoordinator::instance().claim();
+        if(!owned && nowMs()-started>=2000) {failure=Code::AudioUnavailable;break;}
+        if(!owned) vTaskDelay(1);
+    }
+    if(owned && !i.stop && !cancelled() && failure==Code::Ok) {
+        ready=rs_handheld_voice_codec_init(i.codec,rs_handheld_voice_codec_size(),MemoProfile)==RS_HANDHELD_OK && i.device.prepare(i.volume);
+        if(ready && record) ready=i.device.capture(true);
+        if(!ready) failure=Code::AudioUnavailable;
+    }
+    if(ready && !memorySafe()) {ready=false;failure=Code::NoMemory;}
+    i.update(ready,ready&&record,false,failure);
+    while(ready && !i.stop) {
+        if(!alive()) {failure=Code::InputLost;break;}
+        if(cancelled() || total==i.frameLimit) {normalStop=true;break;}
+        if(!memorySafe() || uxTaskGetStackHighWaterMark(nullptr)<StackReserve) {failure=Code::NoMemory;break;}
+        i.device.volume(i.volume);
+        if(record) {
+            const auto got=i.device.read(i.pcm+used,160);
+            // An in-flight read may span Stop. Only PCM already accepted before
+            // that stop belongs to the draft; never append post-stop samples.
+            if(cancelled()) {normalStop=true;break;}
+            if(got!=160) {failure=Code::AudioUnavailable;break;}
+            used+=got;
+            if(used==320 && !encode()) break;
+        } else {
+            bool have=false;
+            portENTER_CRITICAL(&i.mux);
+            if(i.rxCount) {packet=i.rx[i.rxHead];clear(&i.rx[i.rxHead],sizeof packet);i.rxHead=(i.rxHead+1)%3;--i.rxCount;have=true;}
+            portEXIT_CRITICAL(&i.mux);
+            if(!have) {
+                if(nowMs()-waiting>=3000) {failure=Code::Backpressure;break;}
+                i.update(true,false,false);vTaskDelay(1);continue;
+            }
+            waiting=nowMs();i.update(true,false,true);
+            for(size_t at=0;at<packet.length && !i.stop && !cancelled();at+=4) {
+                if(!alive()) {failure=Code::InputLost;break;}
+                const auto before=esp_timer_get_time();
+                const auto code=rs_handheld_voice_codec_decode_frame(i.codec,packet.bytes+at,4,i.pcm,320);
+                const bool timely=timing(before,false);
+                if(code!=RS_HANDHELD_OK || !timely) {failure=timely?Code::AudioUnavailable:Code::SlowCodec;break;}
+                for(size_t offset=0;offset<320 && !i.stop && !cancelled();offset+=160)
+                    if(i.device.write(i.pcm+offset,160)!=160) {failure=Code::AudioUnavailable;break;}
+                clear(i.pcm,PcmBytes);
+                if(failure!=Code::Ok || i.stop || cancelled()) break;
+                ++total;frames();
+            }
+            waiting=nowMs();clear(&packet,sizeof packet);packet.generation=i.generation;
+            if(failure!=Code::Ok) break;
+        }
+    }
+    // Stop DMA/microphone before the tail is encoded. Only a final partial
+    // native frame is padded (less than 40 ms), never another packet/read.
+    if(owned) i.device.end();
+    if(record && normalStop && !i.stop && failure==Code::Ok) {
+        if(used) {std::memset(i.pcm+used,0,PcmBytes-used*sizeof(int16_t));encode();}
+        if(failure==Code::Ok) queue();
+    }
+    if(i.stop || failure!=Code::Ok || !record) i.queues();
+    clear(i.pcm,PcmBytes);clear(&packet,sizeof packet);rs_handheld_voice_codec_clear(i.codec);
+    i.update(false,false,false,failure);
+    while(!AudioCoordinator::instance().release()) vTaskDelay(1);
+    portENTER_CRITICAL(&i.mux);i.status.finished=true;portEXIT_CRITICAL(&i.mux);
+    i.done.store(true);vTaskDelete(nullptr);
 }
 }
 

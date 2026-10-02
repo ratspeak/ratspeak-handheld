@@ -78,7 +78,7 @@ bool memoVerify(File& file, const MemoFile& header, uint8_t* output = nullptr,
         if (file.read(chunk, n) != n) return false;
         crc = audio::checksum(crc, chunk, n);
         const size_t first = std::max(at, offset), last = std::min(at + n, offset + count);
-        if (first < last) memcpy(output + first - offset, chunk + first - at, last - first);
+        if (first < last) memcpy(output + (first - offset), chunk + (first - at), last - first);
         at += n; yield();
     }
     return ~crc == header.get(64);

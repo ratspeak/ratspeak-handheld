@@ -13,7 +13,8 @@ struct Settings {
 enum class Phase : uint8_t { Unavailable, Off, Idle, Finding, Calling, Incoming, Connecting, Ready, Talking, Receiving, Ending, Ended };
 enum class Code : uint8_t { Ok, Local, Remote, Rejected, Busy, Timeout, ProfileUnsupported, AudioUnavailable, RouteLost,
                            SlowRoute, NoMemory, IdentityUnknown, NotContact, Invalid, Off, SlowCodec,
-                           RfUnsupported, ChannelBusy, RoutePolicyUnavailable };
+                           RfUnsupported, ChannelBusy, RoutePolicyUnavailable, InputLost, Backpressure };
+enum class AudioUse : uint8_t { Call, MemoRecord, MemoPlayback };
 enum class Action : uint8_t { Start, Accept, Decline, End, TalkDown, TalkUp, Volume };
 struct Command {
     uint32_t generation = 0;
@@ -43,8 +44,9 @@ struct Encoded {
 };
 struct AudioStatus {
     uint32_t generation = 0, dropped = 0, peak = 0, stackFree = 0, encodeUs = 0, decodeUs = 0;
+    uint32_t frames = 0; // Memo native frames encoded/played; never wall-clock guesses.
     Code error = Code::Ok;
-    bool ready = false, receiving = false, capturing = false;
+    bool ready = false, receiving = false, capturing = false, finished = false;
 };
 class AudioPort {
 public:
@@ -52,6 +54,8 @@ public:
     virtual uint32_t cancellationEpoch() const { return 0; }
     virtual uint8_t capabilities() const = 0; // capture=1, playback=2; board facts, not available memory
     virtual Code prepare(uint32_t generation, uint8_t profile, uint8_t volume) = 0;
+    virtual Code prepareMemo(uint32_t, AudioUse, uint16_t, uint8_t, uint32_t) { return Code::AudioUnavailable; }
+    virtual void finishMemo() { stop(); }
     virtual void stop() = 0;
     virtual bool drained() = 0;
     virtual AudioStatus status() const = 0;
