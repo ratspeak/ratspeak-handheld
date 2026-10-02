@@ -21,7 +21,7 @@
       "role": "trusted-validation"
     },
     "rsLXST": {
-      "commit": "7a01ece94fc66d6c316224c3654ce971bcdfa169",
+      "commit": "7dfb98e1c8faa5273db69565392061159c7e8e1b",
       "role": "firmware"
     }
   }
