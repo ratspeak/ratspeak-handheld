@@ -12,7 +12,8 @@ struct Settings {
 };
 enum class Phase : uint8_t { Unavailable, Off, Idle, Finding, Calling, Incoming, Connecting, Ready, Talking, Receiving, Ending, Ended };
 enum class Code : uint8_t { Ok, Local, Remote, Rejected, Busy, Timeout, ProfileUnsupported, AudioUnavailable, RouteLost,
-                           SlowRoute, NoMemory, IdentityUnknown, NotContact, Invalid, Off, SlowCodec };
+                           SlowRoute, NoMemory, IdentityUnknown, NotContact, Invalid, Off, SlowCodec,
+                           RfUnsupported, ChannelBusy, RoutePolicyUnavailable };
 enum class Action : uint8_t { Start, Accept, Decline, End, TalkDown, TalkUp, Volume };
 struct Command {
     uint32_t generation = 0;

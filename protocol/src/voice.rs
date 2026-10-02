@@ -65,10 +65,61 @@ fn aligned<T>(pointer: *const u8) -> bool {
 }
 fn profile_mode(value: u32) -> Option<(Profile, lxst_codec2::Mode)> {
     match value {
+        0x10 => Some((Profile::BandwidthUltraLow, lxst_codec2::Mode::Rate700C)),
         0x20 => Some((Profile::BandwidthVeryLow, lxst_codec2::Mode::Rate1600)),
         0x30 => Some((Profile::BandwidthLow, lxst_codec2::Mode::Rate3200)),
         _ => None,
     }
+}
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct RsHandheldVoiceProfile {
+    pub native_samples: u32,
+    pub native_bytes: u32,
+    pub packet_frames: u32,
+    pub packet_bytes: u32,
+    pub interval_ms: u32,
+    pub raw_bytes: u32,
+    pub mode: u32,
+}
+/// Describe only executable native profiles. Raw size includes the encrypted
+/// HEADER_1 Link packet, but excludes interface framing such as the RNode byte.
+/// # Safety
+/// `out` is aligned, writable and exclusive; errors leave it unchanged.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rs_handheld_voice_profile(
+    value: u32,
+    out: *mut RsHandheldVoiceProfile,
+) -> RsHandheldStatus {
+    guard(|| {
+        if !aligned::<RsHandheldVoiceProfile>(out.cast()) {
+            return RsHandheldStatus::ErrInvalidArg;
+        }
+        let Some((profile, native)) = profile_mode(value) else {
+            return RsHandheldStatus::ErrUnsupported;
+        };
+        let lxst_embedded::AudioCodec::Codec2(mode) = profile.audio_codec() else {
+            unreachable!()
+        };
+        let frames = profile.sample_frames_per_packet() / native.samples();
+        let bytes = 1 + frames * native.bytes();
+        let plaintext = 1 + bytes; // LXST single-frame codec header.
+        let raw = rns_lite_core::constants::HEADER_MINSIZE
+            + rns_lite_core::crypto::TOKEN_OVERHEAD
+            + (plaintext / 16 + 1) * 16;
+        unsafe {
+            out.write(RsHandheldVoiceProfile {
+                native_samples: native.samples() as u32,
+                native_bytes: native.bytes() as u32,
+                packet_frames: frames as u32,
+                packet_bytes: bytes as u32,
+                interval_ms: profile.frame_time_ms() as u32,
+                raw_bytes: raw as u32,
+                mode: mode.header() as u32,
+            });
+        }
+        RsHandheldStatus::Ok
+    })
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn rs_handheld_voice_codec_size() -> usize {
@@ -142,17 +193,13 @@ pub unsafe extern "C" fn rs_handheld_voice_codec_encode(
         if state.magic != CODEC_MAGIC || state.failed != 0 {
             return RsHandheldStatus::ErrNotReady;
         }
-        let Some((profile, _)) = profile_mode(state.profile) else {
+        let Some((profile, mode)) = profile_mode(state.profile) else {
             return RsHandheldStatus::ErrNotReady;
         };
         if samples != profile.sample_frames_per_packet() {
             return RsHandheldStatus::ErrInvalidArg;
         }
-        let bytes = if profile == Profile::BandwidthVeryLow {
-            65
-        } else {
-            81
-        };
+        let bytes = 1 + profile.sample_frames_per_packet() / mode.samples() * mode.bytes();
         if capacity < bytes {
             return RsHandheldStatus::ErrCapacity;
         }
@@ -197,14 +244,14 @@ pub unsafe extern "C" fn rs_handheld_voice_codec_decode(
         if state.magic != CODEC_MAGIC || state.failed != 0 {
             return RsHandheldStatus::ErrNotReady;
         }
-        let Some((profile, _)) = profile_mode(state.profile) else {
+        let Some((profile, mode)) = profile_mode(state.profile) else {
             return RsHandheldStatus::ErrNotReady;
         };
-        let (bytes, mode) = if profile == Profile::BandwidthVeryLow {
-            (65, 4)
-        } else {
-            (81, 6)
+        let bytes = 1 + profile.sample_frames_per_packet() / mode.samples() * mode.bytes();
+        let lxst_embedded::AudioCodec::Codec2(wire_mode) = profile.audio_codec() else {
+            unreachable!()
         };
+        let mode = wire_mode.header();
         if length != bytes || unsafe { *payload } != mode {
             return RsHandheldStatus::ErrInvalidArg;
         }
@@ -229,7 +276,7 @@ pub unsafe extern "C" fn rs_handheld_voice_codec_decode(
         }
     })
 }
-/// Encode one native frame (160/320 samples to 8 bytes), without a mode header.
+/// Encode one native frame (160/320 samples to 4/8 bytes), without a mode header.
 /// The worker aggregates exactly the negotiated profile's frame count.
 /// # Safety
 /// Same exclusive initialized storage and disjoint buffer contract as encode.
@@ -258,7 +305,7 @@ pub unsafe extern "C" fn rs_handheld_voice_codec_encode_frame(
         }
         match native.encode(
             unsafe { core::slice::from_raw_parts(pcm, samples) },
-            unsafe { core::slice::from_raw_parts_mut(out, 8) },
+            unsafe { core::slice::from_raw_parts_mut(out, native.mode().bytes()) },
         ) {
             Ok(()) => RsHandheldStatus::Ok,
             Err(_) => {
@@ -268,7 +315,7 @@ pub unsafe extern "C" fn rs_handheld_voice_codec_encode_frame(
         }
     })
 }
-/// Decode one native eight-byte frame to the negotiated 160/320 sample window.
+/// Decode one native four/eight-byte frame to the negotiated 160/320 sample window.
 /// # Safety
 /// Same exclusive initialized storage and disjoint buffer contract as decode.
 /// Caller validates the aggregate packet's codec, mode and full length first.
@@ -289,7 +336,7 @@ pub unsafe extern "C" fn rs_handheld_voice_codec_decode_frame(
             return RsHandheldStatus::ErrNotReady;
         }
         let native = unsafe { state.native.assume_init_mut() };
-        if length != 8 {
+        if length != native.mode().bytes() {
             return RsHandheldStatus::ErrInvalidArg;
         }
         let samples = native.mode().samples();
@@ -388,7 +435,7 @@ pub unsafe extern "C" fn rs_handheld_voice_session_init(
             || capture > 1
             || playback > 1
             || allowed == 0
-            || allowed & !3 != 0
+            || allowed & !7 != 0
         {
             return RsHandheldStatus::ErrInvalidArg;
         }
@@ -398,11 +445,24 @@ pub unsafe extern "C" fn rs_handheld_voice_session_init(
         let Some((preferred, _)) = profile_mode(preferred) else {
             return RsHandheldStatus::ErrUnsupported;
         };
-        let profiles = match allowed {
-            1 => ProfileSet::only(Profile::BandwidthVeryLow),
-            2 => ProfileSet::only(Profile::BandwidthLow),
-            _ => ProfileSet::CODEC2,
+        let mut profiles = ProfileSet::only(preferred);
+        let preferred_bit = match preferred {
+            Profile::BandwidthVeryLow => 1,
+            Profile::BandwidthLow => 2,
+            _ => 4,
         };
+        if allowed & preferred_bit == 0 {
+            return RsHandheldStatus::ErrUnsupported;
+        }
+        for (bit, profile) in [
+            (1, Profile::BandwidthVeryLow),
+            (2, Profile::BandwidthLow),
+            (4, Profile::BandwidthUltraLow),
+        ] {
+            if allowed & bit != 0 {
+                profiles = profiles.union(ProfileSet::only(profile));
+            }
+        }
         let session = match Session::new(
             if incoming == 1 {
                 CallRole::Incoming
@@ -620,8 +680,104 @@ mod tests {
         }
     }
     #[test]
+    fn profile_cost_matches_real_lxst_and_encrypted_link_bytes() {
+        for (profile, native_bytes, frames, interval, expected_raw) in [
+            (0x10, 4, 10, 400, 115),
+            (0x20, 8, 8, 320, 147),
+            (0x30, 8, 10, 200, 163),
+        ] {
+            let mut info = RsHandheldVoiceProfile::default();
+            unsafe {
+                assert_eq!(
+                    rs_handheld_voice_profile(profile, &mut info),
+                    RsHandheldStatus::Ok
+                );
+            }
+            assert_eq!(
+                (
+                    info.native_bytes,
+                    info.packet_frames,
+                    info.interval_ms,
+                    info.raw_bytes
+                ),
+                (native_bytes, frames, interval, expected_raw)
+            );
+            let mut payload = [0; 81];
+            payload[0] = info.mode as u8;
+            let mut raw = [0; 192];
+            let mut size = 0;
+            unsafe {
+                assert_eq!(
+                    rs_handheld_voice_packet_encode(
+                        core::ptr::null(),
+                        0,
+                        2,
+                        payload.as_ptr(),
+                        info.packet_bytes as usize,
+                        raw.as_mut_ptr().add(16),
+                        128,
+                        &mut size
+                    ),
+                    RsHandheldStatus::Ok
+                );
+            }
+            let encrypted =
+                rns_lite_core::crypto::token_encrypt_in_place(&[1; 64], &[2; 16], &mut raw, size)
+                    .unwrap();
+            assert_eq!(
+                info.raw_bytes as usize,
+                encrypted + rns_lite_core::constants::HEADER_MINSIZE
+            );
+            let previous = info.raw_bytes;
+            unsafe {
+                assert_eq!(
+                    rs_handheld_voice_profile(0x40, &mut info),
+                    RsHandheldStatus::ErrUnsupported
+                );
+            }
+            assert_eq!(info.raw_bytes, previous);
+        }
+    }
+    #[test]
+    fn every_allowed_profile_mask_requires_a_member_preference() {
+        let storage = Storage::new(
+            rs_handheld_voice_session_size(),
+            rs_handheld_voice_session_align(),
+        );
+        for mask in 0..16 {
+            for (profile, bit) in [(0x10, 4), (0x20, 1), (0x30, 2)] {
+                let expected = if mask == 0 || mask & !7 != 0 {
+                    RsHandheldStatus::ErrInvalidArg
+                } else if mask & bit == 0 {
+                    RsHandheldStatus::ErrUnsupported
+                } else {
+                    RsHandheldStatus::Ok
+                };
+                unsafe {
+                    assert_eq!(
+                        rs_handheld_voice_session_init(
+                            storage.pointer,
+                            storage.layout.size(),
+                            1,
+                            profile,
+                            mask,
+                            1,
+                            1,
+                            0
+                        ),
+                        expected
+                    );
+                }
+            }
+        }
+    }
+    #[test]
     fn streamed_native_frames_match_whole_packet_and_preserve_error_outputs() {
-        for (profile, count, native) in [(0x20, 2560, 320), (0x30, 1600, 160)] {
+        for (profile, count, native, bytes) in [
+            (0x10, 3200, 320, 4),
+            (0x20, 2560, 320, 8),
+            (0x30, 1600, 160, 8),
+        ] {
             let batch = Storage::new(
                 rs_handheld_voice_codec_size(),
                 rs_handheld_voice_codec_align(),
@@ -662,8 +818,8 @@ mod tests {
                             stream.pointer,
                             frame.as_ptr(),
                             native - 1,
-                            actual.as_mut_ptr().add(1 + index * 8),
-                            8
+                            actual.as_mut_ptr().add(1 + index * bytes),
+                            bytes
                         ),
                         RsHandheldStatus::ErrInvalidArg
                     );
@@ -672,8 +828,8 @@ mod tests {
                             stream.pointer,
                             frame.as_ptr(),
                             native,
-                            actual.as_mut_ptr().add(1 + index * 8),
-                            8
+                            actual.as_mut_ptr().add(1 + index * bytes),
+                            bytes
                         ),
                         RsHandheldStatus::Ok
                     );
@@ -698,8 +854,8 @@ mod tests {
                     assert_eq!(
                         rs_handheld_voice_codec_decode_frame(
                             stream.pointer,
-                            actual.as_ptr().add(1 + index * 8),
-                            7,
+                            actual.as_ptr().add(1 + index * bytes),
+                            bytes - 1,
                             frame.as_mut_ptr(),
                             native
                         ),
@@ -709,8 +865,8 @@ mod tests {
                     assert_eq!(
                         rs_handheld_voice_codec_decode_frame(
                             stream.pointer,
-                            actual.as_ptr().add(1 + index * 8),
-                            8,
+                            actual.as_ptr().add(1 + index * bytes),
+                            bytes,
                             frame.as_mut_ptr(),
                             native - 1
                         ),
@@ -719,8 +875,8 @@ mod tests {
                     assert_eq!(
                         rs_handheld_voice_codec_decode_frame(
                             stream.pointer,
-                            actual.as_ptr().add(1 + index * 8),
-                            8,
+                            actual.as_ptr().add(1 + index * bytes),
+                            bytes,
                             frame.as_mut_ptr(),
                             native
                         ),
@@ -741,8 +897,8 @@ mod tests {
         );
         let mut packet = [0xa5; 90];
         let mut length = 999;
-        let input = [0_i16; 2560];
-        let mut output = [123_i16; 2568];
+        let input = [0_i16; 3200];
+        let mut output = [123_i16; 3208];
         let mut samples = 999;
         unsafe {
             assert_eq!(
@@ -754,10 +910,10 @@ mod tests {
                 RsHandheldStatus::ErrCapacity
             );
             assert_eq!(
-                rs_handheld_voice_codec_init(storage.pointer, storage.layout.size(), 0x10),
+                rs_handheld_voice_codec_init(storage.pointer, storage.layout.size(), 0x40),
                 RsHandheldStatus::ErrUnsupported
             );
-            for (profile, count, bytes) in [(0x20, 2560, 65), (0x30, 1600, 81)] {
+            for (profile, count, bytes) in [(0x10, 3200, 41), (0x20, 2560, 65), (0x30, 1600, 81)] {
                 assert_eq!(
                     rs_handheld_voice_codec_init(storage.pointer, storage.layout.size(), profile),
                     RsHandheldStatus::Ok

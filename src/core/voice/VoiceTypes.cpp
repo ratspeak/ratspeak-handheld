@@ -13,6 +13,9 @@ const char* description(const Status& s) {
             case Code::RouteLost: return "Connection lost";
             case Code::SlowRoute: return "Connection too slow for live voice";
             case Code::Off: return "Voice is off";
+            case Code::RfUnsupported: return "RF setting cannot carry live voice";
+            case Code::ChannelBusy: return "Voice channel busy";
+            case Code::RoutePolicyUnavailable: return "Selected voice connection unavailable";
             case Code::SlowCodec: return "Voice processing too slow";
             case Code::NoMemory: return "Not enough memory for voice";
             case Code::IdentityUnknown: return "Peer identity unavailable";

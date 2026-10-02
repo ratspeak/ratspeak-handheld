@@ -28,8 +28,15 @@ void VoicePanel::render(M5Canvas& canvas) {
     canvas.setTextColor(Theme::TEXT_SECONDARY);canvas.drawString(peer,6,21);
     canvas.setTextColor(s.phase==Phase::Talking?Theme::PRIMARY:Theme::TEXT_PRIMARY);
     auto lines=[&](const char* text,int y) {
-        char line[39]{};strncpy(line,text,38);canvas.drawString(line,6,y);
-        if(strlen(text)>38) {strncpy(line,text+38,38);line[38]=0;canvas.drawString(line,6,y+10);}
+        size_t count=strlen(text);
+        if(count>38) {
+            count=38;
+            while(count && text[count]!=' ') --count;
+            if(!count) count=38;
+        }
+        char line[39]{};memcpy(line,text,count);canvas.drawString(line,6,y);
+        text+=count;while(*text==' ') ++text;
+        if(*text) {strncpy(line,text,38);line[38]=0;canvas.drawString(line,6,y+10);}
     };
     lines(_model.text(),39);
     const bool ready=_model.ready() && !_model.pending();

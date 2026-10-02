@@ -1,4 +1,5 @@
 #include "protocol/RustVoiceEngine.h"
+#include "voice/VoiceProfile.h"
 #include "protocol/RustClock.h"
 #include "protocol/RustEntropy.h"
 #include "protocol/RustKeyMap.h"
@@ -6,8 +7,8 @@
 #include <cstring>
 using namespace handheld::voice;
 namespace {
-constexpr uint32_t ControlWait=2000,MediaWait=480;
-constexpr uint8_t Vlbw=0x20,Lbw=0x30;
+constexpr uint32_t ControlWait=2000;
+constexpr uint8_t Ulbw=0x10,Vlbw=0x20,Lbw=0x30;
 bool permitted(Route policy,uint8_t iface) {
     return policy==Route::Auto || (policy==Route::IpOnly && iface!=0) || (policy==Route::LoRaOnly && iface==0);
 }
@@ -34,15 +35,22 @@ void RustVoiceEngine::configure(const Settings& value) {
     if(!active(_status.phase) && _status.phase!=Phase::Ended)
         _status.phase=!_status.capabilities?Phase::Unavailable:_settings.enabled?Phase::Idle:Phase::Off;
 }
+bool RustVoiceEngine::profileFits(uint8_t profile,uint8_t iface,uint8_t hops) const {
+    const auto shape=profileInfo(profile);
+    return shape.native_samples && _d.pump && _d.pump->admitsVoice(iface,shape.raw_bytes,shape.interval_ms,hops);
+}
+uint32_t RustVoiceEngine::allowedProfiles(uint8_t iface,uint8_t hops) const {
+    if(!permitted(_settings.route,iface)) return 0;
+    return (profileFits(Vlbw,iface,hops)?1u:0u) | (profileFits(Lbw,iface,hops)?2u:0u) | (profileFits(Ulbw,iface,hops)?4u:0u);
+}
 bool RustVoiceEngine::admitVoice(uint8_t iface,uint8_t hops) const {
     return _accepting && _settings.enabled && _status.capabilities && !active(_status.phase) && !_sessionLive &&
-        _d.pump && permitted(_settings.route,iface) && _d.pump->admitsVoice(iface,147,320,hops);
+        allowedProfiles(iface,hops)!=0;
 }
 bool RustVoiceEngine::initialise(bool incoming,uint8_t iface,uint8_t hops) {
-    if(!_d.audio || !_d.links || !_d.pump || !permitted(_settings.route,iface) ||
-        !_d.pump->admitsVoice(iface,147,320,hops)) return false;
-    const auto preferred=iface==0?Vlbw:Lbw;
-    const uint32_t allowed=iface==0?1:3;
+    const uint32_t allowed=allowedProfiles(iface,hops);
+    if(!_d.audio || !_d.links || !allowed) return false;
+    const auto preferred=(allowed&2)?Lbw:(allowed&1)?Vlbw:Ulbw;
     if(rs_handheld_voice_session_size()>sizeof _session || rs_handheld_voice_session_align()>8 ||
         rs_handheld_voice_session_init(_session,sizeof _session,incoming,preferred,allowed,
             bool(_status.capabilities&1),bool(_status.capabilities&2),now())!=RS_HANDHELD_OK) return false;
@@ -62,7 +70,7 @@ Code RustVoiceEngine::command(const Command& c,uint32_t cancellationEpoch) {
         const auto generation=_status.generation+1;_status={};_status.generation=generation;
         _status.capabilities=capabilities;_status.volume=volume;
         std::memcpy(_status.peer,c.peer,16);_view=0;_born=now();_lastRequest=0;_sequence=0;
-        _status.phase=Phase::Finding;_status.reason=Code::Ok;
+        _status.phase=Phase::Finding;_status.reason=Code::Ok;_routeFailure=Code::Timeout;
         if(!_d.keys || !_d.keys->recall(c.peer,_publicKey) ||
             rs_handheld_voice_destination(_publicKey,_destination)!=RS_HANDHELD_OK) {terminate(Code::IdentityUnknown);return Code::IdentityUnknown;}
         findRoute();return Code::Ok;
@@ -81,16 +89,31 @@ Code RustVoiceEngine::command(const Command& c,uint32_t cancellationEpoch) {
 }
 void RustVoiceEngine::findRoute() {
     if(_status.phase!=Phase::Finding || !_d.ctx) return;
-    if(now()-_born>=30000) {terminate(Code::Timeout);return;}
+    if(now()-_born>=30000) {terminate(_routeFailure);return;}
     rs_handheld_route_t route{};
+    uint8_t rejected=UINT8_MAX;
     if(rs_handheld_rns_route(_d.ctx,_destination,now(),&route)==RS_HANDHELD_OK && route.kind==RS_HANDHELD_ROUTE_DIRECT) {
-        if(!permitted(_settings.route,route.interface_id) || !_d.pump->admitsVoice(route.interface_id,147,320,route.hops)) {terminate(Code::SlowRoute);return;}
-        if(!initialise(false,route.interface_id,route.hops)) {terminate(Code::AudioUnavailable);return;}
-        _d.links->openVoice(_destination,_publicKey,route,_link);
-        if(!_link.valid()) terminate(Code::Busy);
-    } else if(!_lastRequest || now()-_lastRequest>=5000) {
+        _status.iface=route.interface_id;
+        if(!permitted(_settings.route,route.interface_id)) _routeFailure=Code::RoutePolicyUnavailable;
+        else if(!allowedProfiles(route.interface_id,route.hops)) _routeFailure=route.interface_id==0?Code::RfUnsupported:Code::RouteLost;
+        else {
+            if(!initialise(false,route.interface_id,route.hops)) {terminate(Code::AudioUnavailable);return;}
+            _d.links->openVoice(_destination,_publicKey,route,_link);
+            if(!_link.valid()) terminate(Code::Busy);
+            return;
+        }
+        rejected=route.interface_id;
+        // Reticulum owns the path table. Ask other usable interfaces for a
+        // fresh path instead of rejecting an Auto call solely on a slow LoRa
+        // route; never invent or overwrite another interface's route locally.
+        bool alternative=false;
+        for(uint8_t iface=0;iface<=6;++iface)
+            alternative|=iface!=rejected && allowedProfiles(iface,1)!=0;
+        if(!alternative) {terminate(_routeFailure);return;}
+    }
+    if(!_lastRequest || now()-_lastRequest>=5000) {
         _lastRequest=now();
-        for(uint8_t iface=0;iface<=6;++iface) if(permitted(_settings.route,iface) && _d.pump->interfaceOnline(iface)) {
+        for(uint8_t iface=0;iface<=6;++iface) if(iface!=rejected && allowedProfiles(iface,1)) {
             uint8_t tag[16];RustEntropy::fill(tag,sizeof tag);rs_handheld_rns_request_path(_d.ctx,_destination,tag,iface,now());
         }
     }
@@ -161,7 +184,8 @@ void RustVoiceEngine::publish() {
 }
 void RustVoiceEngine::loop(uint32_t cancellationEpoch) {
     if(_status.phase==Phase::Finding) findRoute();
-    if(_sessionLive && !_closing && !_d.pump->admitsVoice(_status.iface,147,320,_hops)) terminate(Code::SlowRoute);
+    if(_sessionLive && !_closing && !profileFits(_status.profile,_status.iface,_hops))
+        terminate(!_d.pump->interfaceOnline(_status.iface)?Code::RouteLost:_status.iface==0?Code::RfUnsupported:Code::SlowRoute);
     if(_sessionLive && !_closing) {
         if((_result.flags&2) && (_inputEpoch!=cancellationEpoch || (_status.iface==0 && now()-_talkBorn>=10000))) {
             // Cancel the hardware immediately; keep Rust's held-input latch until
@@ -187,6 +211,7 @@ void RustVoiceEngine::loop(uint32_t cancellationEpoch) {
     if (_sequence>=0x7ffffffeu) terminate(Code::Busy);
     sendControl();
     if(_sessionLive && !_closing && (_result.flags&2)) {
+        const uint32_t MediaWait=mediaAge(profileInfo(_status.profile));
         Encoded packet;
         if(_d.audio->take(packet) && packet.generation==_result.audio_generation && now()>=packet.bornMs && now()-packet.bornMs<MediaWait) {
             uint8_t raw[128];size_t length=0;
@@ -233,8 +258,9 @@ void RustVoiceEngine::onVoicePacket(RustLinkManager::Handle h,const uint8_t* byt
     if(_closing || !_status.verified) return;
     for(uint32_t n=0;n<packet.frame_count;++n) {
         const auto frame=packet.frames[n];
-        const size_t expected=_status.profile==Vlbw?65:81;
-        if(frame.codec!=2 || frame.length!=expected || frame.offset+frame.length>length || bytes[frame.offset]!=(_status.profile==Vlbw?4:6)) {++_status.rxDrops;continue;}
+        const auto shape=profileInfo(_status.profile);
+        const size_t expected=shape.packet_bytes;
+        if(frame.codec!=2 || frame.length!=expected || frame.offset+frame.length>length || bytes[frame.offset]!=shape.mode) {++_status.rxDrops;continue;}
         apply(RS_HANDHELD_VOICE_PROFILE_MEDIA,_status.profile);
         if(!(_result.flags&4)) continue;
         Encoded media;media.generation=_result.audio_generation;media.bornMs=now();media.length=frame.length;
@@ -256,7 +282,7 @@ void RustVoiceEngine::mediaOutcome(uint32_t token,bool started) {
     _lastMediaOutcome=token;
     if(started) {_mediaFailures=0;return;}
     ++_status.txDrops;
-    if(voiceMediaEligible(_link,token) && ++_mediaFailures>=3) terminate(Code::SlowRoute);
+    if(voiceMediaEligible(_link,token) && ++_mediaFailures>=3) terminate(Code::ChannelBusy);
 }
 void RustVoiceEngine::stop() {_accepting=false;if(active(_status.phase))terminate(Code::Local);if(_d.ctx)rs_handheld_voice_enable(_d.ctx,0);}
 bool RustVoiceEngine::drained() const {return !active(_status.phase) && (!_d.audio || _d.audio->drained());}

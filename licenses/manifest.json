@@ -51,7 +51,7 @@
     "lite_commits": {
       "rsReticulumLite": "071b878d59addbf2f30247ab9f659a4ba517293a",
       "rsLXMFLite": "24ea7bb119ae3bc6fc62f93c17d75fc2b2131458",
-      "rsLXST": "b1e6a3f6f88c92066e1d56ede168989251d09a4d"
+      "rsLXST": "7a01ece94fc66d6c316224c3654ce971bcdfa169"
     },
     "source_notices": {
       "src/boards/tdeck/audio/es7210/es7210.cpp": {
@@ -186,16 +186,16 @@
       }
     },
     "codec2_notices": {
-      "crates/lxst-codec2/NOTICE": "33cc10cd398e8e724030091025d885ec10ee16b9d95d707ad5df7fe812c17f84",
+      "crates/lxst-codec2/NOTICE": "ff1ada84455bc83cd13a4313624a47661f367758784447842604f7c4b595a53c",
       "crates/lxst-codec2/licenses/LGPL-2.1.txt": "9ebb6f82b7380a62ac74c5f0322c88e6744dedf2ebe1f54d6f088282b39844bf",
       "crates/lxst-codec2/licenses/KISS-FFT-BSD-3-Clause.txt": "49eea0111dfb7038dc18f74034cc517690395ebac8f7768f999133b16e4bf064",
       "crates/lxst-codec2/licenses/upstream-Cargo.toml": "939e2818dcb2945f52eceb71b37b512bf1796da53a05e0a69276d5a2e55f9eed",
       "crates/lxst-codec2/licenses/upstream-README.md": "76fee2b7d3455903f4246e7412ac230a856f58b098861c4c4c9dbdecd371f94a"
     },
-    "collector_sha256": "81ebd196a0a4c4afd4bbaa5af066a0af0b3e36fab842917f94a692916192abe3"
+    "collector_sha256": "21a633fd2c799e8d5ccae7684863c6a32489bfa8a2a3c17a2fed16e8622c0b60"
   },
   "bundle": "THIRD-PARTY.txt",
-  "bundle_sha256": "d6fafbb09974086074cb345008fa176ebe71a509a6db2a387f686068136a2ccd",
+  "bundle_sha256": "176aada4e621913404a963a2c0f09067719f425a1f8238d0a34e42ea7f049ae1",
   "components": [
     {
       "name": "aes",
@@ -9755,8 +9755,8 @@
     },
     {
       "name": "rsLXST",
-      "version": "b1e6a3f6f88c92066e1d56ede168989251d09a4d",
-      "source": "https://github.com/ratspeak/rsLXST/tree/b1e6a3f6f88c92066e1d56ede168989251d09a4d",
+      "version": "7a01ece94fc66d6c316224c3654ce971bcdfa169",
+      "source": "https://github.com/ratspeak/rsLXST/tree/7a01ece94fc66d6c316224c3654ce971bcdfa169",
       "boards": [
         "tdeck",
         "tpager",
@@ -9769,7 +9769,7 @@
       "notices": [
         {
           "path": "LICENSE",
-          "source": "https://github.com/ratspeak/rsLXST/blob/b1e6a3f6f88c92066e1d56ede168989251d09a4d/LICENSE",
+          "source": "https://github.com/ratspeak/rsLXST/blob/7a01ece94fc66d6c316224c3654ce971bcdfa169/LICENSE",
           "length": 34523,
           "sha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
           "offset": 865595
@@ -9778,8 +9778,8 @@
     },
     {
       "name": "rsLXST native Codec2",
-      "version": "b1e6a3f6f88c92066e1d56ede168989251d09a4d",
-      "source": "https://github.com/ratspeak/rsLXST/tree/b1e6a3f6f88c92066e1d56ede168989251d09a4d/crates/lxst-codec2",
+      "version": "7a01ece94fc66d6c316224c3654ce971bcdfa169",
+      "source": "https://github.com/ratspeak/rsLXST/tree/7a01ece94fc66d6c316224c3654ce971bcdfa169/crates/lxst-codec2",
       "boards": [
         "tdeck",
         "tpager",
@@ -9792,38 +9792,38 @@
       "notices": [
         {
           "path": "crates/lxst-codec2/NOTICE",
-          "source": "https://github.com/ratspeak/rsLXST/blob/b1e6a3f6f88c92066e1d56ede168989251d09a4d/crates/lxst-codec2/NOTICE",
-          "length": 1393,
-          "sha256": "33cc10cd398e8e724030091025d885ec10ee16b9d95d707ad5df7fe812c17f84",
+          "source": "https://github.com/ratspeak/rsLXST/blob/7a01ece94fc66d6c316224c3654ce971bcdfa169/crates/lxst-codec2/NOTICE",
+          "length": 2182,
+          "sha256": "ff1ada84455bc83cd13a4313624a47661f367758784447842604f7c4b595a53c",
           "offset": 900790
         },
         {
           "path": "crates/lxst-codec2/licenses/LGPL-2.1.txt",
-          "source": "https://github.com/ratspeak/rsLXST/blob/b1e6a3f6f88c92066e1d56ede168989251d09a4d/crates/lxst-codec2/licenses/LGPL-2.1.txt",
+          "source": "https://github.com/ratspeak/rsLXST/blob/7a01ece94fc66d6c316224c3654ce971bcdfa169/crates/lxst-codec2/licenses/LGPL-2.1.txt",
           "length": 26462,
           "sha256": "9ebb6f82b7380a62ac74c5f0322c88e6744dedf2ebe1f54d6f088282b39844bf",
-          "offset": 902234
+          "offset": 903023
         },
         {
           "path": "crates/lxst-codec2/licenses/KISS-FFT-BSD-3-Clause.txt",
-          "source": "https://github.com/ratspeak/rsLXST/blob/b1e6a3f6f88c92066e1d56ede168989251d09a4d/crates/lxst-codec2/licenses/KISS-FFT-BSD-3-Clause.txt",
+          "source": "https://github.com/ratspeak/rsLXST/blob/7a01ece94fc66d6c316224c3654ce971bcdfa169/crates/lxst-codec2/licenses/KISS-FFT-BSD-3-Clause.txt",
           "length": 1476,
           "sha256": "49eea0111dfb7038dc18f74034cc517690395ebac8f7768f999133b16e4bf064",
-          "offset": 928760
+          "offset": 929549
         },
         {
           "path": "crates/lxst-codec2/licenses/upstream-Cargo.toml",
-          "source": "https://github.com/ratspeak/rsLXST/blob/b1e6a3f6f88c92066e1d56ede168989251d09a4d/crates/lxst-codec2/licenses/upstream-Cargo.toml",
+          "source": "https://github.com/ratspeak/rsLXST/blob/7a01ece94fc66d6c316224c3654ce971bcdfa169/crates/lxst-codec2/licenses/upstream-Cargo.toml",
           "length": 623,
           "sha256": "939e2818dcb2945f52eceb71b37b512bf1796da53a05e0a69276d5a2e55f9eed",
-          "offset": 930294
+          "offset": 931083
         },
         {
           "path": "crates/lxst-codec2/licenses/upstream-README.md",
-          "source": "https://github.com/ratspeak/rsLXST/blob/b1e6a3f6f88c92066e1d56ede168989251d09a4d/crates/lxst-codec2/licenses/upstream-README.md",
+          "source": "https://github.com/ratspeak/rsLXST/blob/7a01ece94fc66d6c316224c3654ce971bcdfa169/crates/lxst-codec2/licenses/upstream-README.md",
           "length": 1909,
           "sha256": "76fee2b7d3455903f4246e7412ac230a856f58b098861c4c4c9dbdecd371f94a",
-          "offset": 930974
+          "offset": 931763
         }
       ],
       "license": "LGPL-2.1-only AND MIT AND BSD-3-Clause"
@@ -9870,14 +9870,14 @@
           "source": "https://github.com/esp-rs/rust-build/releases/tag/v1.95.0.0",
           "length": 425661,
           "sha256": "90567e2718bf7fd65a71a3a43c5596488e80e5f51ed02bfea6fec54458b5f3d1",
-          "offset": 933538
+          "offset": 934327
         },
         {
           "path": "lib/rustlib/src/rust/library/compiler-builtins/LICENSE.txt",
           "source": "https://github.com/esp-rs/rust-build/releases/tag/v1.95.0.0",
           "length": 15078,
           "sha256": "ab6eec6caf0fa5775e411c7a8bc6a45c4ef2956b0980b157ab74fc5cd62a928b",
-          "offset": 1359268
+          "offset": 1360057
         }
       ],
       "note": "Full upstream library notice is retained as a conservative superset of core/alloc use."
@@ -9908,7 +9908,7 @@
           "source": "https://docs.rs/crate/rustc_version/0.4.1/source/LICENSE-MIT",
           "length": 1071,
           "sha256": "c9a75f18b9ab2927829a208fc6aa2cf4e63b8420887ba29cdb265d6619ae82d5",
-          "offset": 1374659
+          "offset": 1375448
         }
       ],
       "note": "Cargo.lock dependency; includes build-time and target-conditional crates.",
@@ -9938,7 +9938,7 @@
           "source": "https://github.com/Lora-net/sx126x_driver/blob/a10c5dfdf89788c6ac805e9fe98889de44175aa2/src/sx126x.c",
           "length": 1837,
           "sha256": "57a974c57b6f105b9d1fc2198f4576fb0b943c3847fb6e5c83ba7eaa9237043e",
-          "offset": 1376083
+          "offset": 1376872
         }
       ]
     },
@@ -10001,7 +10001,7 @@
           "source": "https://docs.rs/crate/sha2/0.10.9/source/LICENSE-MIT",
           "length": 1138,
           "sha256": "b4eb00df6e2a4d22518fcaa6a2b4646f249b3a3c9814509b22bd2091f1392ff1",
-          "offset": 1378599
+          "offset": 1379388
         }
       ],
       "note": "Cargo.lock dependency; includes build-time and target-conditional crates.",
@@ -10060,7 +10060,7 @@
           "source": "https://docs.rs/crate/subtle/2.6.1/source/LICENSE",
           "length": 1582,
           "sha256": "d1fc1bc0d155df60b2e7705b6b2ae02a05c96f948e1cec6e2fb86360b09f346b",
-          "offset": 1380307
+          "offset": 1381096
         }
       ],
       "note": "Cargo.lock dependency; includes build-time and target-conditional crates.",
@@ -10218,21 +10218,21 @@
           "source": "https://docs.rs/crate/typenum/1.20.1/source/LICENSE",
           "length": 17,
           "sha256": "db11fec9946737df39ca3898d9cd8c10ec6f6c3a884a6802b0ad0b81b4e8f23a",
-          "offset": 1383641
+          "offset": 1384430
         },
         {
           "path": "LICENSE-APACHE",
           "source": "https://docs.rs/crate/typenum/1.20.1/source/LICENSE-APACHE",
           "length": 10835,
           "sha256": "516b24e051bf5630880ebbd55c40a25ce9552ebaf8970a53e8976eb70e522406",
-          "offset": 1383683
+          "offset": 1384472
         },
         {
           "path": "LICENSE-MIT",
           "source": "https://docs.rs/crate/typenum/1.20.1/source/LICENSE-MIT",
           "length": 1083,
           "sha256": "a825bd853ab71619a4923d7b4311221427848070ff44d990da39b0b274c1683f",
-          "offset": 1394540
+          "offset": 1395329
         }
       ],
       "note": "Cargo.lock dependency; includes build-time and target-conditional crates.",
@@ -10272,7 +10272,7 @@
           "source": "https://docs.rs/crate/unicode-ident/1.0.24/source/LICENSE-UNICODE",
           "length": 1995,
           "sha256": "f7db81051789b729fea528a63ec4c938fdcb93d9d61d97dc8cc2e9df6d47f2a1",
-          "offset": 1396048
+          "offset": 1396837
         }
       ],
       "note": "Cargo.lock dependency; includes build-time and target-conditional crates.",
@@ -10305,7 +10305,7 @@
           "source": "https://docs.rs/crate/version_check/0.9.5/source/LICENSE-MIT",
           "length": 1085,
           "sha256": "b7e650f3fce5c53249d1cdc608b54df156a97edd636cf9d23498d0cfe7aec63e",
-          "offset": 1398356
+          "offset": 1399145
         }
       ],
       "note": "Cargo.lock dependency; includes build-time and target-conditional crates.",
@@ -10331,7 +10331,7 @@
           "source": "https://docs.rs/crate/x25519-dalek/2.0.1/source/LICENSE",
           "length": 1555,
           "sha256": "bebc725b8cb1ba1ed1798cb505cf31bf9bce4cbe942baf358b642666ba8186bd",
-          "offset": 1399651
+          "offset": 1400440
         }
       ],
       "note": "Cargo.lock dependency; includes build-time and target-conditional crates.",
@@ -10359,35 +10359,35 @@
           "source": "https://github.com/espressif/crosstool-NG/releases/tag/esp-2021r2-patch5",
           "length": 35147,
           "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
-          "offset": 1401499
+          "offset": 1402288
         },
         {
           "path": "gcc/COPYING3.LIB",
           "source": "https://github.com/espressif/crosstool-NG/releases/tag/esp-2021r2-patch5",
           "length": 7639,
           "sha256": "a853c2ffec17057872340eee242ae4d96cbf2b520ae27d903e1b2fef1a5f9d1c",
-          "offset": 1436673
+          "offset": 1437462
         },
         {
           "path": "gcc/COPYING.RUNTIME",
           "source": "https://github.com/espressif/crosstool-NG/releases/tag/esp-2021r2-patch5",
           "length": 3324,
           "sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74",
-          "offset": 1444342
+          "offset": 1445131
         },
         {
           "path": "newlib/COPYING.NEWLIB",
           "source": "https://github.com/espressif/crosstool-NG/releases/tag/esp-2021r2-patch5",
           "length": 59777,
           "sha256": "dec5d419a7a4b27c064c8367a21e5d7b58aefc162719dc169bc4f82a88994859",
-          "offset": 1447698
+          "offset": 1448487
         },
         {
           "path": "newlib/COPYING.LIBGLOSS",
           "source": "https://github.com/espressif/crosstool-NG/releases/tag/esp-2021r2-patch5",
           "length": 22261,
           "sha256": "334f3446894be102933b75f3fea18690dd967c2e9c2782f24f4f944ec1ad7496",
-          "offset": 1507509
+          "offset": 1508298
         }
       ],
       "note": "Runtime libraries only; toolchain is not redistributed in firmware packages."
@@ -10418,7 +10418,7 @@
           "source": "https://docs.rs/crate/zeroize/1.9.0/source/LICENSE-MIT",
           "length": 1082,
           "sha256": "8c7516d4b27b1e495be5e38b612298b63de48d05f49cdac94f70f3cd70f8864b",
-          "offset": 1530069
+          "offset": 1530858
         }
       ],
       "note": "Cargo.lock dependency; includes build-time and target-conditional crates.",
@@ -10451,7 +10451,7 @@
           "source": "https://docs.rs/crate/zeroize_derive/1.5.0/source/LICENSE-MIT",
           "length": 1082,
           "sha256": "b8c6939380a400f53e11923d50fcc4dd2fa1ba8339fd9d04cda38a0251b6c9b0",
-          "offset": 1531464
+          "offset": 1532253
         }
       ],
       "note": "Cargo.lock dependency; includes build-time and target-conditional crates.",

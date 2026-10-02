@@ -302,7 +302,7 @@ static ProtocolBackend::AnnounceResult announceWithName(bool silent = false) {
 static void pollScheduledAnnounces() {
     using Scheduler = handheld::AnnounceScheduler;
     const auto event = announceScheduler.poll(uint32_t(millis()), userConfig.settings().announceInterval,
-        rustLoraIface.isOnline() && rustLoraIface.airtimeUtilization() > LoRaInterface::AIRTIME_THROTTLE,
+        rustLoraIface.isOnline() && rustLoraIface.airtimeLimited(),
         [](Scheduler::Action, uint8_t) {
             const auto result = announceWithName(true);
             return result == ProtocolBackend::AnnounceResult::Sent ? Scheduler::Result::Sent :

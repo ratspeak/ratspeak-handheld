@@ -220,9 +220,9 @@ float LoRaInterface::packetAirtimeMs(size_t len) const {
 }
 
 uint32_t LoRaInterface::txWaitBudgetMs(uint32_t packets) const {
-    // Include the in-flight packet and every retained packet. This is congestion pacing,
-    // not a regulatory duty-cycle guarantee; both split frames remain contiguous.
-    return (uint32_t)ceilf(packetAirtimeMs(RETICULUM_MTU) / AIRTIME_THROTTLE) *
+    // Include physical occupancy of in-flight and retained packets. There is no
+    // local airtime quota; both split frames remain contiguous.
+    return (uint32_t)ceilf(packetAirtimeMs(RETICULUM_MTU)) *
            (TX_QUEUE_MAX + 1 + packets);
 }
 
@@ -285,9 +285,8 @@ bool LoRaInterface::transmitNow(const uint8_t* data, size_t len) {
     }
 
     _txPending = true;
-    _nextTxMs = (uint32_t)millis() +
-        (uint32_t)ceilf(packetAirtimeMs(len) / AIRTIME_THROTTLE);
-    _pacingActive = true;
+    // TX-complete gates the next packet. No percentage-based duty-cycle delay.
+    _pacingActive = false;
 
     // Track airtime
     size_t airBytes = needsSplit ? (RNODE_SINGLE_MTU + RNODE_HEADER_L) : (len + RNODE_HEADER_L);
@@ -557,5 +556,5 @@ void LoRaInterface::refreshRadioTiming(bool forceLog) {
 bool LoRaInterface::admitsVoice(size_t rawLength, uint32_t intervalMs, uint8_t hops) const {
     if (!isOnline() || _maintenance || _reconfigurePending || !hops || rawLength > RNODE_SINGLE_MTU || !intervalMs) return false;
     const float airtime = packetAirtimeMs(rawLength);
-    return airtime > 0 && airtime * hops <= intervalMs * (AIRTIME_THROTTLE * 0.8f);
+    return airtime > 0 && airtime * hops < intervalMs;
 }

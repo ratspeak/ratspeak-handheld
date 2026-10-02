@@ -1239,8 +1239,15 @@ rs_handheld_status_t rs_handheld_rns_peer_ratchet_remember(rs_handheld_rns_t *ct
 /* Live LXST: caller-owned, serialized state; no capture/playback is started by
  * Rust. Allocate final storage with the queried size AND alignment. PCM is mono
  * 8 kHz signed 16-bit; native profile payloads include their Codec2 mode byte.
- * Profile 0x20 = 2560 samples/65 bytes; 0x30 = 1600 samples/81 bytes.
- * Neither 700C nor Opus/memo containers are enabled through this boundary. */
+ * Profiles: 0x10 = 3200 samples/41 bytes, 0x20 = 2560/65, 0x30 = 1600/81.
+ * Opus/memo containers are not part of this live media boundary. */
+typedef struct {
+    uint32_t native_samples, native_bytes, packet_frames, packet_bytes;
+    uint32_t interval_ms, raw_bytes, mode;
+} rs_handheld_voice_profile_t;
+/* Executable codec shape and encrypted HEADER_1 Link size, excluding RNode/IFAC.
+ * Invalid/unsupported input leaves out unchanged. */
+rs_handheld_status_t rs_handheld_voice_profile(uint32_t profile, rs_handheld_voice_profile_t *out);
 typedef struct { uint32_t kind, value; } rs_handheld_voice_event_t;
 typedef struct {
     uint32_t audio_generation, status, profile, ended, flags, event_count;
@@ -1288,14 +1295,14 @@ rs_handheld_status_t rs_handheld_voice_codec_encode(uint8_t *storage, const int1
                                                  uint8_t *out, size_t capacity, size_t *out_len);
 rs_handheld_status_t rs_handheld_voice_codec_decode(uint8_t *storage, const uint8_t *payload, size_t length,
                                                  int16_t *pcm, size_t capacity, size_t *out_samples);
-/* Native frame streaming: 160/320 PCM16 samples and exactly 8 encoded bytes.
+/* Native frame streaming: 160/320 PCM16 samples and exactly 4/8 encoded bytes.
  * No mode header here; validate/aggregate the negotiated full packet at the caller. */
 rs_handheld_status_t rs_handheld_voice_codec_encode_frame(uint8_t *storage, const int16_t *pcm, size_t samples,
                                                        uint8_t *out, size_t capacity);
 rs_handheld_status_t rs_handheld_voice_codec_decode_frame(uint8_t *storage, const uint8_t *payload, size_t length,
                                                        int16_t *pcm, size_t capacity);
 void rs_handheld_voice_codec_clear(uint8_t *storage);
-/* allowed: bit 0 admits VLBW, bit 1 admits LBW; only already qualified local
+/* allowed: bit 0 admits VLBW, bit 1 admits LBW, bit 2 admits ULBW; only qualified local
  * routes/codecs may be admitted. Every bool is 0 or 1. */
 rs_handheld_status_t rs_handheld_voice_session_init(uint8_t *storage, size_t capacity, uint32_t incoming,
                                                  uint32_t preferred, uint32_t allowed, uint32_t capture,

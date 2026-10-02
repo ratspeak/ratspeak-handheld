@@ -36,6 +36,8 @@ public:
 private:
     bool same(RustLinkManager::Handle) const;
     bool initialise(bool incoming,uint8_t iface,uint8_t hops);
+    uint32_t allowedProfiles(uint8_t iface,uint8_t hops) const;
+    bool profileFits(uint8_t profile,uint8_t iface,uint8_t hops) const;
     void apply(uint32_t operation,uint32_t argument=0,uint32_t extra=0);
     void terminate(handheld::voice::Code);
     void signal(uint32_t);
@@ -47,6 +49,7 @@ private:
     Deps _d;
     handheld::voice::Settings _settings;
     handheld::voice::Status _status;
+    handheld::voice::Code _routeFailure=handheld::voice::Code::Timeout;
     RustLinkManager::Handle _link;
     alignas(8) uint8_t _session[160]{};
     rs_handheld_voice_result_t _result{};

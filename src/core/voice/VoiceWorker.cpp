@@ -1,5 +1,6 @@
 #ifdef ARDUINO
 #include "voice/VoiceWorker.h"
+#include "voice/VoiceProfile.h"
 #include "voice/AudioDevice.h"
 #include "voice/AudioCoordinator.h"
 #include "runtime/ResourceBudget.h"
@@ -25,7 +26,7 @@ bool memorySafe() {
     return heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)>=FreeFloor &&
            heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)>=LargestFloor;
 }
-constexpr uint32_t MediaAge=480;
+
 uint64_t nowMs() { return uint64_t(esp_timer_get_time())/1000; }
 void clear(void* p,size_t n) { volatile uint8_t* b=static_cast<uint8_t*>(p);while(n--) *b++=0; }
 }
@@ -69,7 +70,7 @@ uint8_t VoiceWorker::capabilities() const {
 }
 Code VoiceWorker::prepare(uint32_t generation,uint8_t profile,uint8_t volumeValue) {
     if (!capabilities()) return Code::AudioUnavailable;
-    if (!generation || (profile!=0x20 && profile!=0x30)) return Code::ProfileUnsupported;
+    if (!generation || !profileInfo(profile).native_samples) return Code::ProfileUnsupported;
     if (_impl && !_impl->stop.load() && _impl->generation==generation && _impl->profile==profile) return Code::Ok;
     if (_impl) { stop(); if(!drained()) return Code::Busy; }
 #ifdef RSCARDPUTER
@@ -148,9 +149,11 @@ void VoiceWorker::run(void* pointer) {
     auto& i=*static_cast<Impl*>(pointer);
     bool owned=false, ready=false, capture=false;
     size_t used=0, frames=0;
-    const size_t nativeSamples=i.profile==0x20?320:160;
-    const size_t packetFrames=i.profile==0x20?8:10;
-    const uint8_t mode=i.profile==0x20?4:6;
+    const auto shape=profileInfo(i.profile);
+    const size_t nativeSamples=shape.native_samples, nativeBytes=shape.native_bytes;
+    const size_t packetFrames=shape.packet_frames;
+    const uint8_t mode=uint8_t(shape.mode);
+    const uint32_t MediaAge=mediaAge(shape);
     uint32_t flush=i.flushEpoch;
     unsigned overruns=0;
     Encoded encoded;encoded.generation=i.generation;encoded.bytes[0]=mode;
@@ -162,8 +165,8 @@ void VoiceWorker::run(void* pointer) {
         auto& maximum=encode?i.status.encodeUs:i.status.decodeUs;
         if(elapsed>maximum) maximum=elapsed;
         portEXIT_CRITICAL(&i.mux);
-        overruns=elapsed>nativeSamples*125?overruns+1:0;
-        return elapsed<=nativeSamples*250 && overruns<3;
+        overruns=elapsed>nativeSamples*125/2?overruns+1:0;
+        return elapsed<=nativeSamples*125 && overruns<3;
     };
     while(!i.stop && !owned) {
         owned=AudioCoordinator::instance().claim();
@@ -195,13 +198,13 @@ void VoiceWorker::run(void* pointer) {
             used+=got;
             if(used==nativeSamples) {
                 const auto started=esp_timer_get_time();
-                const auto code=rs_handheld_voice_codec_encode_frame(i.codec,i.pcm,nativeSamples,encoded.bytes+1+8*frames,8);
+                const auto code=rs_handheld_voice_codec_encode_frame(i.codec,i.pcm,nativeSamples,encoded.bytes+1+nativeBytes*frames,nativeBytes);
                 const bool timely=timing(started,true);
                 used=0;clear(i.pcm,PcmBytes);
                 if(code!=RS_HANDHELD_OK || !timely) {failure=timely?Code::AudioUnavailable:Code::SlowCodec;break;}
                 ++frames;
                 if(frames==packetFrames) {
-                    encoded.length=uint16_t(1+8*frames);frames=0;
+                    encoded.length=uint16_t(1+nativeBytes*frames);frames=0;
                     if(i.transmitting() && flush==i.flushEpoch && nowMs()-encoded.bornMs<MediaAge) {
                         portENTER_CRITICAL(&i.mux);
                         if(i.txCount==3) {i.txHead=(i.txHead+1)%3;--i.txCount;++i.status.dropped;}
@@ -219,12 +222,12 @@ void VoiceWorker::run(void* pointer) {
             if(i.rxCount) {packet=i.rx[i.rxHead];clear(&i.rx[i.rxHead],sizeof packet);i.rxHead=(i.rxHead+1)%3;--i.rxCount;have=true;}
             portEXIT_CRITICAL(&i.mux);
             if(!have) {i.update(true,false,false);vTaskDelay(1);continue;}
-            if(packet.generation!=i.generation || packet.length!=1+packetFrames*8 || packet.bytes[0]!=mode ||
+            if(packet.generation!=i.generation || packet.length!=1+packetFrames*nativeBytes || packet.bytes[0]!=mode ||
                 nowMs()<packet.bornMs || nowMs()-packet.bornMs>=MediaAge) {clear(&packet,sizeof packet);continue;}
             i.update(true,false,true);
             for(size_t frame=0;frame<packetFrames && !i.stop && !i.transmitting() && flush==i.flushEpoch; ++frame) {
                 const auto started=esp_timer_get_time();
-                const auto code=rs_handheld_voice_codec_decode_frame(i.codec,packet.bytes+1+frame*8,8,i.pcm,320);
+                const auto code=rs_handheld_voice_codec_decode_frame(i.codec,packet.bytes+1+frame*nativeBytes,nativeBytes,i.pcm,320);
                 const bool timely=timing(started,false);
                 if(code!=RS_HANDHELD_OK || !timely) {failure=timely?Code::AudioUnavailable:Code::SlowCodec;break;}
                 for(size_t offset=0;offset<nativeSamples && !i.stop && !i.transmitting() && flush==i.flushEpoch && nowMs()-packet.bornMs<MediaAge;offset+=160) {

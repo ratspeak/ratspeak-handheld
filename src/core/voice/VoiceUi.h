@@ -58,6 +58,9 @@ public:
         if(ready()) return (_status.capabilities&1)?"":"Listen only: no microphone";
         switch(reason()) {
         case Code::Off: return "Enable live voice in Settings > Voice";
+        case Code::RfUnsupported: return "Choose a faster LoRa preset or WiFi/TCP";
+        case Code::ChannelBusy: return "Wait for the channel to clear, then retry";
+        case Code::RoutePolicyUnavailable: return "Check Settings > Voice connection";
         case Code::SlowRoute: return "Use WiFi/TCP or a faster LoRa route";
         case Code::IdentityUnknown: return "Wait for this peer to announce";
         case Code::ProfileUnsupported: return "No compatible voice codec";

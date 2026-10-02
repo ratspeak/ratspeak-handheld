@@ -161,5 +161,7 @@ private:
     float _airtimeAccumMs = 0;
     static constexpr unsigned long AIRTIME_WINDOW_MS = 60000;
 public:
-    static constexpr float AIRTIME_THROTTLE = 0.25f;
+    // Policy hook reserved for an explicit future setting. No local airtime
+    // quota is enforced. Utilization remains available as telemetry.
+    bool airtimeLimited() const { return false; }
 };

@@ -38,7 +38,7 @@ ARDUINO_REFS = {
 # The pinned digest covers the entire original leading comment, including every
 # redistribution condition and disclaimer; source checks remain offline.
 SX126X_REF = "a10c5dfdf89788c6ac805e9fe98889de44175aa2"
-CODEC2_NOTICES = {'crates/lxst-codec2/NOTICE': '33cc10cd398e8e724030091025d885ec10ee16b9d95d707ad5df7fe812c17f84', 'crates/lxst-codec2/licenses/LGPL-2.1.txt': '9ebb6f82b7380a62ac74c5f0322c88e6744dedf2ebe1f54d6f088282b39844bf', 'crates/lxst-codec2/licenses/KISS-FFT-BSD-3-Clause.txt': '49eea0111dfb7038dc18f74034cc517690395ebac8f7768f999133b16e4bf064', 'crates/lxst-codec2/licenses/upstream-Cargo.toml': '939e2818dcb2945f52eceb71b37b512bf1796da53a05e0a69276d5a2e55f9eed', 'crates/lxst-codec2/licenses/upstream-README.md': '76fee2b7d3455903f4246e7412ac230a856f58b098861c4c4c9dbdecd371f94a'}
+CODEC2_NOTICES = {'crates/lxst-codec2/NOTICE': 'ff1ada84455bc83cd13a4313624a47661f367758784447842604f7c4b595a53c', 'crates/lxst-codec2/licenses/LGPL-2.1.txt': '9ebb6f82b7380a62ac74c5f0322c88e6744dedf2ebe1f54d6f088282b39844bf', 'crates/lxst-codec2/licenses/KISS-FFT-BSD-3-Clause.txt': '49eea0111dfb7038dc18f74034cc517690395ebac8f7768f999133b16e4bf064', 'crates/lxst-codec2/licenses/upstream-Cargo.toml': '939e2818dcb2945f52eceb71b37b512bf1796da53a05e0a69276d5a2e55f9eed', 'crates/lxst-codec2/licenses/upstream-README.md': '76fee2b7d3455903f4246e7412ac230a856f58b098861c4c4c9dbdecd371f94a'}
 SOURCE_NOTICES = {
     'src/boards/tdeck/audio/es7210/es7210.cpp': {'name': 'LilyGO ES7210: es7210.cpp', 'commit': '1dddf6e0d3aaa74cd4e10ba02938865b99682391', 'source': 'https://github.com/Xinyuan-LilyGO/T-Deck/blob/1dddf6e0d3aaa74cd4e10ba02938865b99682391/lib/es7210/src/es7210.cpp', 'license': 'LicenseRef-Espressif-MIT-products', 'boards': ['tdeck'], 'modes': ['standalone'], 'notice_sha256': '7e8f718cf80a385c3fc60f659ce78b41b21b64be5f5162c03ee851a9dd1513b4'},
     'src/boards/tdeck/audio/es7210/es7210.h': {'name': 'LilyGO ES7210: es7210.h', 'commit': '1dddf6e0d3aaa74cd4e10ba02938865b99682391', 'source': 'https://github.com/Xinyuan-LilyGO/T-Deck/blob/1dddf6e0d3aaa74cd4e10ba02938865b99682391/lib/es7210/src/es7210.h', 'license': 'LicenseRef-Espressif-MIT-products', 'boards': ['tdeck'], 'modes': ['standalone'], 'notice_sha256': '7e8f718cf80a385c3fc60f659ce78b41b21b64be5f5162c03ee851a9dd1513b4'},
@@ -601,14 +601,15 @@ def check_bundle(output=ROOT / "licenses", *, check_inputs=True):
 def refresh_lite(output: Path) -> None:
     """Refresh only Lite notices from selected Git objects, retaining other bytes.
 
-    This narrow, offline operation also records the reviewed collector revision.
+    This narrow, offline operation also refreshes reviewed native Codec2 notices
+    from the selected rsLXST Git object and records the collector revision.
     Changes to any other dependency/toolchain require a full --refresh instead.
     """
     manifest = json.loads((output / "manifest.json").read_text())
     current = input_pins()
     previous = manifest["inputs"]
     for key in set(current) | set(previous):
-        if key not in {"lite_commits", "collector_sha256"} and current.get(key) != previous.get(key):
+        if key not in {"lite_commits", "codec2_notices", "collector_sha256"} and current.get(key) != previous.get(key):
             raise ValueError(f"{key} changed; a Lite-only notice refresh is insufficient")
     check_bundle(output, check_inputs=False)
     bundle = (output / "THIRD-PARTY.txt").read_bytes()
