@@ -105,6 +105,23 @@ MessageStore::Submission MessageStore::requestAudio(const RecordKey& key, uint32
     return submit(request, nullptr, 0, capacity);
 }
 
+MessageStore::Submission MessageStore::requestMemo(Operation op, const memo::Command& command,
+    const uint8_t* chunk, size_t length, uint16_t capacity) {
+    if (!memo::operation(op) || length > memo::ChunkBytes || length % memo::FrameBytes ||
+        (length && (!chunk || op != Operation::MemoAppend)) ||
+        (op == Operation::MemoAppend && !length) || capacity < sizeof(memo::Snapshot) ||
+        !std::isfinite(command.timestamp) || command.policy > handheld::messaging::DeliveryPolicy::Always)
+        return {{}, Rejection::Invalid};
+    Request request; request.operation = op;
+    memcpy(request.source, command.local, 16); memcpy(request.key.peer, command.peer, 16);
+    request.offset = command.revision; request.peerGeneration = command.offset;
+    request.timestamp = command.timestamp; request.deliveryPolicy = command.policy;
+    const WriteQueue::PayloadPart part{chunk, length};
+    // Promotion reuses the queue's existing large credit to construct the
+    // message body; no permanent full-clip buffer is added to any owner.
+    return submit(request, &part, 1, op == Operation::MemoPromote ? Budget::LargePayload : capacity);
+}
+
 MessageStore::Submission MessageStore::requestPending(const RecordKey& after) {
     if (after.incoming) return {{}, Rejection::Invalid};
     Request request; request.operation = Operation::ReadPending; request.key = after;
@@ -251,6 +268,7 @@ bool MessageStore::setExternalStorageEnabled(bool enabled) {
 void MessageStore::settle(const Request& request, const Result& result) noexcept {
     if (result.outcome != Outcome::Committed) return;
     if (rrc::operation(request.operation)) return; // RRC owner publishes its own revision/unread.
+    if (memo::operation(request.operation) && request.operation != Operation::MemoPromote) return;
     if (request.operation == Operation::ReadRecord || request.operation == Operation::ReadAudio || request.operation == Operation::ReadHistoryPage ||
         request.operation == Operation::ReadConversationPage || request.operation == Operation::ReadConversation ||
         request.operation == Operation::ReadPending || request.operation == Operation::LoadPurge ||
@@ -259,7 +277,8 @@ void MessageStore::settle(const Request& request, const Result& result) noexcept
     // Only committed aggregate deltas and invalidation live here. There is no
     // presentation cache or allocation between persistence and result visibility.
     if ((request.operation == Operation::CreateIncoming || request.operation == Operation::CreateOutgoing ||
-         request.operation == Operation::DeleteConversation || request.operation == Operation::Trim) &&
+         request.operation == Operation::DeleteConversation || request.operation == Operation::Trim ||
+         request.operation == Operation::MemoPromote) &&
         _historyRevision < UINT32_MAX) ++_historyRevision;
     if (result.conversationDelta > 0 && _totalConversations < UINT32_MAX) ++_totalConversations;
     if (result.conversationDelta < 0 && _totalConversations) --_totalConversations;

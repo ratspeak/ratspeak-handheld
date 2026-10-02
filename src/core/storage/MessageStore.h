@@ -1,6 +1,7 @@
 #pragma once
 
 #include "RrcRecord.h"
+#include "MemoDraft.h"
 
 #include <Arduino.h>
 #include "config/Config.h"
@@ -44,6 +45,8 @@ public:
     Submission requestRecord(const RecordKey&, uint32_t offset = 0, uint16_t capacity = 4096);
     // Same fixed header followed by a verified slice of the raw audio sidecar.
     Submission requestAudio(const RecordKey&, uint32_t offset = 0, uint16_t capacity = 512);
+    Submission requestMemo(handheld::storage::Operation, const handheld::storage::memo::Command&,
+        const uint8_t* chunk = nullptr, size_t length = 0, uint16_t capacity = 512);
     Submission requestPending(const RecordKey& after = {});
     // Immutable recipient-encrypted entry bound to this original outgoing record.
     // Load: committed length zero means never prepared; a missing committed file

@@ -1,6 +1,7 @@
 #include "MessageTransactions.h"
 #include "PreparedEnvelope.h"
 #include "RrcRecord.h"
+#include "MemoDraft.h"
 #include "protocol/RrcPreferences.h"
 #include "PurgeJournal.h"
 #include "config/Config.h"
@@ -377,7 +378,7 @@ bool MessageTransactions::removeAudio(const RecordKey& key, unsigned which) {
 }
 
 Error MessageTransactions::commit(const RecordKey& key, MessageDocument& document, bool creating, Result& result,
-                                  const uint8_t* media, uint8_t referenceOnlyMedium) {
+                                  const uint8_t* media, uint8_t referenceOnlyMedium, bool requireFlash) {
     JsonSource source(document);
     if (source.error() != Error::None) return source.error();
     if (document.document().overflowed() || source.length() > (creating ? Budget::MaxNewJson : Budget::MaxStoredFile))
@@ -386,6 +387,7 @@ Error MessageTransactions::commit(const RecordKey& key, MessageDocument& documen
     if (!recordHeader(document.document(), header)) return Error::InvalidRecord;
     bool committed = false; Error error = Error::Unavailable;
     for (unsigned which = 0; which < 2; ++which) {
+        if (which == 1 && requireFlash && !result.flash.committed) return error;
         auto store = medium(which); auto& outcome = which == 0 ? result.flash : result.sd;
         if (which == 1 && !_external) continue;
         outcome.attempted = true;
@@ -419,7 +421,7 @@ Error MessageTransactions::commit(const RecordKey& key, MessageDocument& documen
     return committed ? Error::None : error;
 }
 
-void MessageTransactions::create(const Request& request, uint8_t* bytes, Result& result) {
+void MessageTransactions::create(const Request& request, uint8_t* bytes, Result& result, uint32_t reservedCounter) {
     const uint32_t cutoff = deletedThrough(request.key.peer);
     if (cutoff == UINT32_MAX) { result.error = Error::CounterExhausted; return; }
     MessageDocument document;
@@ -459,15 +461,19 @@ void MessageTransactions::create(const Request& request, uint8_t* bytes, Result&
     }
     document.normal();
     if (!createRecord(document.document(), request, bytes)) { result.error = Error::Allocation; return; }
+    if (reservedCounter) document.document()["memo_draft"] = request.peerGeneration;
     _nextCounter = std::max(_nextCounter, cutoff + 1);
-    if (!reserveCounter(result.key.counter)) {
+    if (reservedCounter && reservedCounter <= cutoff) { result.error = Error::Stale; return; }
+    result.key.counter = reservedCounter;
+    if (!reservedCounter && !reserveCounter(result.key.counter)) {
         result.error = _nextCounter == UINT32_MAX ? Error::CounterExhausted : Error::Write; return;
     }
     auto media = request.audio;
     const auto* audioBytes = bytes + request.titleLength + request.contentLength;
     if (media.state == 1) media.checksum = audio::digest(result.key, request.source, request.destination, media, audioBytes);
     if (!recordAudio(document.document(), media)) { result.error = Error::Allocation; return; }
-    result.error = commit(result.key, document, true, result, media.state == 1 ? audioBytes : nullptr);
+    result.error = commit(result.key, document, true, result, media.state == 1 ? audioBytes : nullptr,
+                          UINT8_MAX, reservedCounter != 0);
     if (result.error != Error::None) return;
     result.revision = 1; result.countDelta = 1; result.conversationDelta = conversationExists ? 0 : 1;
     result.unreadDelta = request.key.incoming && !request.read ? 1 : 0;
@@ -1087,6 +1093,7 @@ void MessageTransactions::trim(const Request& request, Result& result) {
                 StoredRecordHeader header; const auto error = load(key, document, header);
                 if (error != Error::None) { result.error = error; continue; }
                 if (!header.incoming && header.status != 4 && header.status != 9 && !messaging::failedStatus(header.status)) continue;
+                if (memoRetains(key, header, document.document()["memo_draft"] | uint32_t(0))) continue;
                 size_t at = 0;
                 while (at < selected && historyLess({oldest[at].counter, oldest[at].incoming}, entry)) ++at;
                 if (at == 8) continue;
@@ -1243,6 +1250,7 @@ void MessageTransactions::purgeJournal(const Request& request, uint8_t* bytes, s
 }
 
 #include "RrcTransactions.inc"
+#include "MemoTransactions.inc"
 
 void MessageTransactions::execute(const Request& request, uint8_t* bytes, size_t length, size_t capacity, Result& result) {
     if (_deferred && !bindWorker()) {
@@ -1253,6 +1261,9 @@ void MessageTransactions::execute(const Request& request, uint8_t* bytes, size_t
     if (!lease.held()) { result.error = Error::Unavailable; return; }
     if (rrc::operation(request.operation)) {
         rrcTransaction(request, bytes, length, capacity, result); return;
+    }
+    if (memo::operation(request.operation) && request.operation != Operation::MemoPromote) {
+        memoTransaction(request, bytes, length, capacity, result); return;
     }
     checkSummaryMedia();
     if (request.operation != Operation::ReadRecord && request.operation != Operation::ReadAudio && request.operation != Operation::ReadPending &&
@@ -1266,6 +1277,7 @@ void MessageTransactions::execute(const Request& request, uint8_t* bytes, size_t
         invalidateSummary(request.key.peer);
     }
     switch (request.operation) {
+    case Operation::MemoPromote: memoTransaction(request, bytes, length, capacity, result); break;
     case Operation::CreateIncoming: case Operation::CreateOutgoing:
         if (!audio::validBody(request.titleLength, request.contentLength, request.audio) || request.audio.checksum ||
             length != size_t(request.titleLength) + request.contentLength + request.audio.length ||

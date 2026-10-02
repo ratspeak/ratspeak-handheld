@@ -76,13 +76,13 @@ private:
     Error inspect(const RecordKey&, unsigned medium, const char* suffix, MessageDocument&, StoredRecordHeader&,
                   bool* parsed = nullptr);
     Error commit(const RecordKey&, MessageDocument&, bool creating, Result&, const uint8_t* audio = nullptr,
-                 uint8_t referenceOnlyMedium = UINT8_MAX);
+                 uint8_t referenceOnlyMedium = UINT8_MAX, bool requireFlash = false);
     File openAudio(const RecordKey&, unsigned medium, const StoredRecordHeader&,
                    uint8_t* output = nullptr, size_t offset = 0, size_t length = 0);
     Error ensureAudio(const RecordKey&, unsigned medium, const StoredRecordHeader&, const uint8_t* bytes);
     bool removeAudio(const RecordKey&, unsigned medium);
     void readAudio(const Request&, uint8_t*, size_t, Result&);
-    void create(const Request&, uint8_t*, Result&);
+    void create(const Request&, uint8_t*, Result&, uint32_t reservedCounter = 0);
     void update(const Request&, Result&);
     void markRead(const Request&, Result&);
     void erase(const Request&, Result&);
@@ -92,6 +92,8 @@ private:
     void prepared(const Request&, uint8_t*, size_t length, size_t capacity, Result&);
     void purgeJournal(const Request&, uint8_t*, size_t length, size_t capacity, Result&);
     void rrcTransaction(const Request&, uint8_t*, size_t length, size_t capacity, Result&);
+    void memoTransaction(const Request&, uint8_t*, size_t length, size_t capacity, Result&);
+    bool memoRetains(const RecordKey&, const StoredRecordHeader&, uint32_t revision);
     void conversationPage(const Request&, uint8_t*, size_t, Result&);
     void conversation(const Request&, uint8_t*, size_t, Result&);
     void trim(const Request&, Result&);

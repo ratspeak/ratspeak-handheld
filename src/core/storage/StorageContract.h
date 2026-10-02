@@ -26,7 +26,8 @@ enum class Operation : uint8_t {
     ReadRecord, ReadHistoryPage, ReadPending, ReadConversationPage, ReadConversation, Trim,
     LoadPrepared, WritePrepared, LoadPurge, WritePurge, ClearPurge,
     RrcRead, RrcAppend, RrcWrite, RrcStatus, RrcPage, RrcMarkRead, RrcClear, RrcSavedRooms, RrcPrivateInbox, RrcObserve,
-    ReadAudio
+    ReadAudio,
+    MemoRead, MemoBegin, MemoAppend, MemoSeal, MemoClear, MemoPromote, MemoCancel
 };
 enum class Rejection : uint8_t {
     None, Busy, Invalid, TooLarge, NoMemory, Unavailable, Fenced, Exhausted
@@ -66,6 +67,8 @@ static_assert(sizeof(AudioMetadata) == 8, "Audio metadata budget changed");
 // Scalars are copied at admission. Title/content occupy the slot's separate
 // bounded byte buffer, with explicit lengths (embedded NUL bytes are preserved).
 struct Request {
+    // Memo operations bind source to local identity and key.peer to recipient;
+    // offset is the expected durable revision, peerGeneration the byte offset.
     // RRC operations use a typed RrcRecord payload. For those operations only,
     // messageId[0..16] is an opaque local filename key (not an LXMF ID), offset
     // is the expected record revision, and key.counter is a page/status cursor.
