@@ -50,7 +50,7 @@
     "rust_toolchain": "rustc 1.95.0-nightly (95e5bda86 2026-04-15) (1.95.0.0)",
     "lite_commits": {
       "rsReticulumLite": "071b878d59addbf2f30247ab9f659a4ba517293a",
-      "rsLXMFLite": "24ea7bb119ae3bc6fc62f93c17d75fc2b2131458",
+      "rsLXMFLite": "a6819ad33f833f509dbeffe4e814eb8d8197e216",
       "rsLXST": "7dfb98e1c8faa5273db69565392061159c7e8e1b"
     },
     "source_notices": {
@@ -195,7 +195,7 @@
     "collector_sha256": "21a633fd2c799e8d5ccae7684863c6a32489bfa8a2a3c17a2fed16e8622c0b60"
   },
   "bundle": "THIRD-PARTY.txt",
-  "bundle_sha256": "adb17dfccbffb825e34efaf1412696ba2bfad44bacae7b478515c2d9b73cf581",
+  "bundle_sha256": "6d511bd9ec8108ee45927c6bc9f084c6995cc5d3705a8d3f523f85a8cc22fb37",
   "components": [
     {
       "name": "aes",
@@ -9732,8 +9732,8 @@
     },
     {
       "name": "rsLXMFLite",
-      "version": "24ea7bb119ae3bc6fc62f93c17d75fc2b2131458",
-      "source": "https://github.com/ratspeak/rsLXMFLite/tree/24ea7bb119ae3bc6fc62f93c17d75fc2b2131458",
+      "version": "a6819ad33f833f509dbeffe4e814eb8d8197e216",
+      "source": "https://github.com/ratspeak/rsLXMFLite/tree/a6819ad33f833f509dbeffe4e814eb8d8197e216",
       "boards": [
         "tdeck",
         "tpager",
@@ -9746,7 +9746,7 @@
       "notices": [
         {
           "path": "LICENSE",
-          "source": "https://github.com/ratspeak/rsLXMFLite/blob/24ea7bb119ae3bc6fc62f93c17d75fc2b2131458/LICENSE",
+          "source": "https://github.com/ratspeak/rsLXMFLite/blob/a6819ad33f833f509dbeffe4e814eb8d8197e216/LICENSE",
           "length": 34523,
           "sha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
           "offset": 865595

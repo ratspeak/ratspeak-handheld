@@ -1,4 +1,5 @@
 #include "Power.h"
+#include "PagerBattery.h"
 #include "hal/Display.h"
 #include "hal/Keyboard.h"
 #include <Wire.h>
@@ -60,42 +61,7 @@ uint16_t peripheralRails() {
            xlBit(XL9555_SD_EN);
 }
 
-// BQ25896 charger PMIC
-constexpr uint8_t BQ_REG_WATCHDOG = 0x07;  // [5:4] I2C watchdog, 00 = off
-constexpr uint8_t BQ_REG_BATFET   = 0x09;  // [5] BATFET_DIS, [3] BATFET_DLY
-constexpr uint8_t BQ_REG_STATUS   = 0x0B;  // [2] PG_STAT (VBUS power good)
-constexpr uint8_t BQ_REG_PART     = 0x14;  // [5:3] part number
-
-// BQ27220 fuel gauge
-constexpr uint8_t GAUGE_CMD_VOLTAGE = 0x08;  // mV
-constexpr uint8_t GAUGE_CMD_SOC     = 0x2C;  // %
-
-bool bqRead8(uint8_t reg, uint8_t& value) {
-    Wire.beginTransmission(BQ25896_ADDR);
-    Wire.write(reg);
-    if (Wire.endTransmission() != 0) return false;
-    if (Wire.requestFrom((uint8_t)BQ25896_ADDR, (uint8_t)1) != 1) return false;
-    value = Wire.read();
-    return true;
-}
-
-bool bqWrite8(uint8_t reg, uint8_t value) {
-    Wire.beginTransmission(BQ25896_ADDR);
-    Wire.write(reg);
-    Wire.write(value);
-    return Wire.endTransmission() == 0;
-}
-
-bool gaugeRead16(uint8_t cmd, uint16_t& value) {
-    Wire.beginTransmission(BQ27220_ADDR);
-    Wire.write(cmd);
-    if (Wire.endTransmission(false) != 0) return false;
-    if (Wire.requestFrom((uint8_t)BQ27220_ADDR, (uint8_t)2) != 2) return false;
-    uint16_t lo = Wire.read();
-    uint16_t hi = Wire.read();
-    value = lo | (hi << 8);
-    return true;
-}
+pager::Battery<TwoWire> battery(Wire);
 }  // namespace
 
 void Power::enablePeripherals() {
@@ -149,63 +115,27 @@ void Power::begin() {
 
     pinMode(BTN_BOOT, INPUT_PULLUP);
 
-    // Probe the charger and re-arm the battery path: BATFET_DIS survives a
-    // USB-powered "off" (the charger stays VBUS-fed), and a boot must never
-    // run with it latched or the device dies the moment USB is unplugged.
-    uint8_t reg9 = 0, reg0b = 0, part = 0;
-    if (bqRead8(BQ_REG_BATFET, reg9) && bqRead8(BQ_REG_STATUS, reg0b) && bqRead8(BQ_REG_PART, part)) {
-        Serial.printf("[POWER] BQ25896@0x%02X ok REG09=0x%02X REG0B=0x%02X REG14=0x%02X\n",
-                      BQ25896_ADDR, reg9, reg0b, part);
-        if (reg9 & 0x20) {
-            bqWrite8(BQ_REG_BATFET, reg9 & ~0x20);
-            Serial.println("[POWER] Cleared stale BATFET_DIS latch");
-        }
-    } else {
-        Serial.printf("[POWER] charger not responding at 0x%02X — bus scan:", BQ25896_ADDR);
-        for (uint8_t a = 0x08; a <= 0x77; ++a) {
-            Wire.beginTransmission(a);
-            if (Wire.endTransmission() == 0) Serial.printf(" 0x%02X", a);
-        }
-        Serial.println();
-    }
-
-    uint16_t gaugeMv = 0, gaugeSoc = 0;
-    if (gaugeRead16(GAUGE_CMD_VOLTAGE, gaugeMv) && gaugeRead16(GAUGE_CMD_SOC, gaugeSoc)) {
-        Serial.printf("[POWER] BQ27220@0x%02X ok batt=%umV soc=%u%%\n",
-                      BQ27220_ADDR,
-                      static_cast<unsigned int>(gaugeMv),
-                      static_cast<unsigned int>(gaugeSoc > 100 ? 100 : gaugeSoc));
-    } else {
-        Serial.printf("[POWER] fuel gauge not responding at 0x%02X\n", BQ27220_ADDR);
-    }
+    const auto initialized = battery.begin();
+    Serial.printf("[POWER] BQ25896 %s\n", battery.initName(initialized));
+    printBatteryDiagnostics();
 
     Serial.println("[POWER] Power manager initialized");
 }
 
 float Power::batteryVoltage() const {
-    uint16_t mv = 0;
-    if (gaugeRead16(GAUGE_CMD_VOLTAGE, mv)) {
-        return mv / 1000.0f;
-    }
-
-    if (BAT_ADC_PIN < 0) return -1.0f;
-    int raw = analogRead(BAT_ADC_PIN);
-    // Voltage divider: 2x ratio, 3.3V reference, 12-bit ADC
-    return (raw / 4095.0f) * 3.3f * 2.0f;
+    const auto sample = battery.gauge();
+    return sample.present() && sample.voltageMv > 0 && sample.voltageMv <= 6000
+        ? sample.voltageMv / 1000.0f : -1.0f;
 }
 
 int Power::batteryPercent() const {
-    uint16_t soc = 0;
-    if (gaugeRead16(GAUGE_CMD_SOC, soc)) {
-        return soc > 100 ? 100 : soc;
-    }
+    // An uninitialized/configuring gauge or invalid SOC is unknown, not full.
+    // Do not estimate SOC from USB-influenced voltage or rewrite gauge learning.
+    return battery.gauge().percent();
+}
 
-    float v = batteryVoltage();
-    if (v < 0.0f) return -1;
-    // LiPo voltage curve approximation
-    if (v >= 4.2f) return 100;
-    if (v <= 3.0f) return 0;
-    return (int)((v - 3.0f) / 1.2f * 100.0f);
+void Power::printBatteryDiagnostics() const {
+    battery.printDiagnostics(Serial);
 }
 
 uint8_t Power::percentToPWM(uint8_t pct) const {
@@ -304,7 +234,7 @@ bool Power::powerOffGestureFired() {
 
 bool Power::vbusPresent() const {
     uint8_t status = 0;
-    return bqRead8(BQ_REG_STATUS, status) && (status & 0x04);
+    return battery.readCharger(0x0b, status) && (status & 0x04);
 }
 
 void Power::disablePeripherals() {
@@ -326,22 +256,18 @@ void Power::powerOff() {
     while (digitalRead(BTN_BOOT) == LOW && millis() - waitStart < 15000) delay(10);
     delay(50);
 
-    // Ship mode before touching the rails — the charger must get its I2C
-    // writes while the bus is in its known-good powered state. Watchdog off
-    // so the latch sticks, BATFET_DLY off, BATFET_DIS on. On battery, power
-    // is gone milliseconds after the BATFET write; everything past it only
-    // runs VBUS-fed or after a failed write.
-    uint8_t reg = 0;
-    bool ok = bqRead8(BQ_REG_WATCHDOG, reg) && bqWrite8(BQ_REG_WATCHDOG, reg & ~0x30);
-    Serial.printf("[POWER] watchdog off: %s\n", ok ? "ok" : "FAIL");
-    ok = bqRead8(BQ_REG_BATFET, reg) && bqWrite8(BQ_REG_BATFET, (reg & ~0x08) | 0x20);
-    Serial.printf("[POWER] BATFET_DIS write: %s\n", ok ? "ok" : "FAIL");
-    delay(100);
-    if (bqRead8(BQ_REG_BATFET, reg)) {
-        Serial.printf("[POWER] REG09 readback 0x%02X — BATFET_DIS %s\n",
-                      reg, (reg & 0x20) ? "set" : "NOT set");
+    // On USB, retain the charging path and park only the MCU/peripherals.
+    // On battery, ship mode cuts power. Read/write failure leaves deep sleep
+    // as the bounded fallback; do not claim that the hardware cut succeeded.
+    const auto sleep = battery.prepareSleep();
+    switch (sleep) {
+        case pager::Battery<TwoWire>::Sleep::UsbStandby:
+            Serial.println("[POWER] USB standby; battery remains connected"); break;
+        case pager::Battery<TwoWire>::Sleep::BatteryShip:
+            Serial.println("[POWER] ship requested; still powered, parking"); break;
+        case pager::Battery<TwoWire>::Sleep::Unverified:
+            Serial.println("[POWER] charger sleep state unverified; parking"); break;
     }
-    Serial.println("[POWER] still powered (VBUS or charger failure) — deep sleep park");
     Serial.flush();
 
     disablePeripherals();

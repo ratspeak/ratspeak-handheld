@@ -1,3 +1,4 @@
+#include "hal/PagerBattery.h"
 #include "../../../src/core/config/FirmwareVersion.h"
 // rsPager boot launcher — picks Standalone or RNode at power-on.
 // Runs from ota_0; writes the choice to otadata and restarts. Both target
@@ -364,6 +365,10 @@ void setup() {
   // Rails sit behind the XL9555 expander, so I2C must come up first.
   Wire.begin(I2C_SDA, I2C_SCL, 400000);
   Wire.setTimeOut(20);
+  pager::Battery<TwoWire> battery(Wire);
+  const auto initialized = battery.begin();
+  Serial.printf("[POWER] BQ25896 %s\n", battery.initName(initialized));
+  battery.printDiagnostics(Serial);
   enablePeripheralRails();
   delay(50);
 

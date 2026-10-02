@@ -20,10 +20,10 @@ public:
     // so a single keypress can't both wake and re-sleep.
     void forceScreenOff();
 
-    // True power off — callers flush state first. Enters BQ25896 ship mode
-    // (BATFET open, ~26uA; wake = hold PWR ~1s or plug USB). On USB power SYS
-    // never drops, so this parks in deep sleep with wheel-click wake and the off
-    // completes on unplug. Does not return.
+    // Battery-only: BQ25896 ship mode (wake = PWR or USB). USB: retain the
+    // charging path, disable peripherals and deep sleep (wheel-click wake).
+    // Unplugging from USB standby leaves low-power sleep, not a battery cut.
+    // Callers flush state first. Does not return.
     void powerOff();
     // One-shot: BOOT was short-pressed while the screen was on (sleep screen).
     bool screenSleepGestureFired();
@@ -37,6 +37,7 @@ public:
     // Battery
     float batteryVoltage() const;
     int batteryPercent() const;
+    void printBatteryDiagnostics() const;
 
     // Display backlight — accepts percentage 1-100
     void setBrightness(uint8_t percent);

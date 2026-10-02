@@ -45,7 +45,7 @@ void LvPowerOffOverlay::show(bool usbPowered) {
     if (!_overlay) create();
     if (_lblDetail) {
         lv_label_set_text(_lblDetail, usbPowered
-            ? "On USB: stays dark until unplugged. Wheel click wakes."
+            ? "USB charging stays available.\nWheel click wakes."
             : "Wake: hold PWR (right button) 1s, or plug USB.");
     }
     lv_obj_clear_flag(_overlay, LV_OBJ_FLAG_HIDDEN);

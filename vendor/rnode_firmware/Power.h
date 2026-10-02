@@ -206,46 +206,28 @@ void measure_temperature() {
 }
 
 #if BOARD_MODEL == BOARD_TPAGER
-  // BQ27220 fuel gauge on the main I2C bus (initialised in setup()).
   #include <Wire.h>
-  #define TP_GAUGE_ADDR        0x55
-  #define TP_GAUGE_CMD_VOLTAGE 0x08
-  #define TP_GAUGE_CMD_AVG_CUR 0x14
-  #define TP_GAUGE_CMD_SOC     0x2C
-
-  bool tp_gauge_read16(uint8_t cmd, uint16_t &value) {
-    Wire.beginTransmission(TP_GAUGE_ADDR);
-    Wire.write(cmd);
-    if (Wire.endTransmission(false) != 0) return false;
-    if (Wire.requestFrom((uint8_t)TP_GAUGE_ADDR, (uint8_t)2) != 2) return false;
-    uint16_t lo = Wire.read();
-    uint16_t hi = Wire.read();
-    value = lo | (hi << 8);
-    return true;
-  }
+  #include "PagerBattery.h"
+  pager::Battery<TwoWire> tp_battery(Wire);
+  auto tp_charger_init = pager::Battery<TwoWire>::Init::Unavailable;
 #endif
 
 void measure_battery() {
   #if BOARD_MODEL == BOARD_TPAGER
-    uint16_t mv = 0, soc = 0, raw_ma = 0;
-    if (tp_gauge_read16(TP_GAUGE_CMD_VOLTAGE, mv) &&
-        tp_gauge_read16(TP_GAUGE_CMD_SOC, soc) &&
-        tp_gauge_read16(TP_GAUGE_CMD_AVG_CUR, raw_ma)) {
-      battery_installed = true;
-      battery_indeterminate = false;
-      battery_ready = true;
-      battery_voltage = mv / 1000.0f;
-      battery_percent = soc;
-      if (battery_percent > 100.0f) battery_percent = 100.0f;
-      if (battery_percent < 0.0f) battery_percent = 0.0f;
-
-      int16_t avg_ma = (int16_t)raw_ma; // signed mA, positive while charging
-      if (avg_ma > 10)        { battery_state = BATTERY_STATE_CHARGING; }
-      else if (avg_ma < -10)  { battery_state = BATTERY_STATE_DISCHARGING; }
-      else if (battery_percent >= 100.0f) { battery_state = BATTERY_STATE_CHARGED; }
-      else                    { battery_state = BATTERY_STATE_UNKNOWN; }
-    } else {
-      battery_ready = false;
+    const auto sample = tp_battery.gauge();
+    battery_installed = sample.present();
+    battery_ready = sample.ready();
+    battery_indeterminate = !battery_ready;
+    battery_state = BATTERY_STATE_UNKNOWN;
+    uint8_t charger = 0;
+    external_power = tp_battery.readCharger(0x0b, charger) && (charger & 4);
+    if (battery_ready) {
+      battery_voltage = sample.voltageMv / 1000.0f;
+      battery_percent = sample.percent();
+      if (sample.currentMa > 10)       battery_state = BATTERY_STATE_CHARGING;
+      else if (sample.currentMa < -10) battery_state = BATTERY_STATE_DISCHARGING;
+      else if (external_power && ((charger >> 3) & 3) == 3)
+        battery_state = BATTERY_STATE_CHARGED;
     }
 
   #elif BOARD_MODEL == BOARD_CARDPUTER_ADV
@@ -496,11 +478,11 @@ bool init_pmu() {
   #endif
 
   #if BOARD_MODEL == BOARD_TPAGER
-    // Probe the BQ27220 fuel gauge; Wire is already running.
-    Wire.beginTransmission(TP_GAUGE_ADDR);
-    if (Wire.endTransmission() != 0) return false;
+    // Both full-mode and standalone RNode boots must restore the charger.
+    tp_charger_init = tp_battery.begin();
     measure_battery();
     last_pmu_update = millis();
+    // Keep polling if the gauge is still initializing or temporarily absent.
     return true;
   #elif BOARD_MODEL == BOARD_CARDPUTER_ADV
     battery_installed = true;

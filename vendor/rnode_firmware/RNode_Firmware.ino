@@ -126,6 +126,17 @@ char sbuf[128];
   }
 #endif
 
+#if BOARD_MODEL == BOARD_TPAGER
+void tpager_report_charger() {
+  // The USB serial port belongs to KISS. Never inject plain diagnostic text.
+  serial_write(FEND);
+  serial_write(CMD_LOG);
+  const char* message = tp_battery.initName(tp_charger_init);
+  while (*message) escaped_serial_write(static_cast<uint8_t>(*message++));
+  serial_write(FEND);
+}
+#endif
+
 void setup() {
   #if BOARD_MODEL == BOARD_CARDPUTER_ADV
     ratspeakRetainComponentId(RATSPEAK_COMPONENT_ID("cardputer", "rnode"));
@@ -155,6 +166,7 @@ void setup() {
       Wire.begin(I2C_SDA, I2C_SCL);
       Wire.setClock(400000);
       Wire.setTimeOut(20);
+      pmu_ready = init_pmu();
       tpager_enable_peripheral_rails();
 
       pinMode(SD_CS, OUTPUT);
@@ -207,6 +219,9 @@ void setup() {
   fifo_init(&serialFIFO, serialBuffer, CONFIG_UART_BUFFER_SIZE);
 
   Serial.begin(serial_baudrate);
+  #if BOARD_MODEL == BOARD_TPAGER
+    tpager_report_charger();
+  #endif
 
   #if BOARD_MODEL == BOARD_CARDPUTER_ADV
     rs_cardputer_adv::return_to_launcher_next_boot();

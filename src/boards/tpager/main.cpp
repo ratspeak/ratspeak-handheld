@@ -145,6 +145,7 @@ LvQrOverlay lvQrOverlay;
 LvPowerOffOverlay lvPowerOffOverlay;
 void performPowerOff();
 static std::atomic<bool> serialPowerOffRequested{false};
+static std::atomic<bool> serialBatteryRequested{false};
 LvNameInputScreen lvNameInputScreen;
 LvTimezoneScreen lvTimezoneScreen;
 LvDataCleanScreen lvDataCleanScreen;
@@ -398,8 +399,12 @@ void onHotkeyRssiMonitor() { serviceClient.action(handheld::Operation::Diagnosti
 
 void setup() {
     ratspeakRetainComponentId(RATSPEAK_COMPONENT_ID("tpager", "standalone"));
-    diagnostics.boardHelp = "[SERIAL] O power-off";
+    diagnostics.boardHelp = "[SERIAL] B battery/charger, O power-off";
     diagnostics.boardCommand = [](char command) {
+        if (command == 'B') {
+            serialBatteryRequested.store(true, std::memory_order_release);
+            return true;
+        }
         if (command != 'O') return false;
         // Serial runs on the protocol task; the UI owns lifecycle submission
         // and the eventual PMU action after the service has settled.
@@ -460,17 +465,18 @@ void setup() {
     if (!launcherBoot.ok) {
         Serial.printf("[BOOT] Launcher return unavailable: %s\n", launcherBoot.message);
     }
+    // Step 2: Initialize I2C bus, then enable T-Pager peripheral rails.
+    Wire.begin(I2C_SDA, I2C_SCL);
+    Wire.setClock(400000);
+    Wire.setTimeOut(20);
+    powerMgr.begin();
+    Power::enablePeripherals();
+
     if (!psramFound() || heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) < 1024 * 1024) {
         Serial.printf("[BOOT] FATAL: PSRAM unavailable or too fragmented (largest=%lu)\n",
                       (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
         while (true) delay(1000);
     }
-
-    // Step 2: Initialize I2C bus, then enable T-Pager peripheral rails.
-    Wire.begin(I2C_SDA, I2C_SCL);
-    Wire.setClock(400000);
-    Wire.setTimeOut(20);
-    Power::enablePeripherals();
 
     // Step 3: Initialize shared SPI bus
     sharedSPI.begin(SPI_SCK, SPI_MISO, SPI_MOSI);
@@ -791,7 +797,6 @@ void setup() {
     // Step 24: Power manager
     lvBootScreen.setProgress(0.92f, "Power manager...");
     // (LVGL boot renders via lv_timer_handler in setProgress)
-    powerMgr.begin();
     powerMgr.setDimTimeout(userConfig.settings().screenDimTimeout);
     powerMgr.setOffTimeout(userConfig.settings().screenOffTimeout);
     powerMgr.setBrightness(userConfig.settings().brightness);
@@ -1282,6 +1287,7 @@ static void serviceNetworkPoll() {
 void loop() {
     lvSettingsScreen.pollFirmwareCheck();
     if (serialPowerOffRequested.exchange(false, std::memory_order_acq_rel)) performPowerOff();
+    if (serialBatteryRequested.exchange(false, std::memory_order_acq_rel)) powerMgr.printBatteryDiagnostics();
     serviceRunner.cooperativeTick();
     serviceClient.poll();
     lvMessageView.pollRrc();

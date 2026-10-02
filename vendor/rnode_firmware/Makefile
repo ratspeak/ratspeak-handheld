@@ -91,6 +91,7 @@ prepare-tpager:
 	mkdir -p $(TPAGER_SKETCH)
 	cp *.h *.cpp RNode_Firmware.ino $(TPAGER_SKETCH)/
 	cp -R Fonts $(TPAGER_SKETCH)/
+	cp ../../src/boards/tpager/hal/PagerBattery.h $(TPAGER_SKETCH)/
 	cp ../../src/core/radio/SX1262Timing.h ../../src/core/radio/RadioTimingPolicy.h $(TPAGER_SKETCH)/
 	cp ../esp_idf_compat/dhcpserver.c $(TPAGER_SKETCH)/DhcpServer.c
 	cp ../esp_idf_compat/SdkVersion.h $(TPAGER_SKETCH)/
