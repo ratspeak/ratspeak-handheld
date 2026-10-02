@@ -85,6 +85,12 @@ MessageStore::Submission MessageStore::requestMarkRead(const std::string& peer,
     return submit(request);
 }
 
+MessageStore::Submission MessageStore::requestRetry(const RecordKey& key,const uint8_t local[16],uint32_t revision) {
+    if(!key.counter || key.incoming || !local || !revision) return {{},Rejection::Invalid};
+    Request request;request.operation=Operation::RetryOutgoing;request.key=key;request.offset=revision;
+    memcpy(request.source,local,16);return submit(request);
+}
+
 MessageStore::Submission MessageStore::requestDelete(const std::string& peer,
                                                     uint32_t identityGeneration, uint32_t peerGeneration) {
     Request request; request.operation = Operation::DeleteConversation;

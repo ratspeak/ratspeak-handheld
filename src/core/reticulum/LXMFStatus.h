@@ -15,6 +15,7 @@ enum class DeliveryPolicy : uint8_t { DirectOnly = 0, Auto = 1, Always = 2 };
 constexpr uint8_t LastStatus = uint8_t(LXMFStatus::PROP_INVALID);
 constexpr bool pendingStatus(uint8_t value) { return value == 1 || value == 2 || value == 7 || value == 8; }
 constexpr bool failedStatus(uint8_t value) { return value == 5 || value == 10 || (value >= 12 && value <= LastStatus); }
+constexpr bool retryableStatus(uint8_t value) { return failedStatus(value) || value == 6 || value == 11; }
 constexpr bool relayStatus(uint8_t value) { return (value >= 7 && value <= 11) || (value >= 16 && value <= LastStatus); }
 constexpr bool validDelivery(uint8_t status, DeliveryPolicy policy, bool incoming) {
     if (status > LastStatus || policy > DeliveryPolicy::Always) return false;

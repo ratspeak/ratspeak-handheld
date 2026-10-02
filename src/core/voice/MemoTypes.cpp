@@ -25,8 +25,8 @@ const char* description(const Status& status) {
     case Phase::Saving: return "Saving...";
     case Phase::Review: return status.fromMessage ? "Voice message" : "Saved draft";
     case Phase::Playing: return "Playing";
-    case Phase::Sending: return "Adding to messages...";
-    case Phase::Sent: return "Added to messages";
+    case Phase::Sending: return status.fromMessage?"Retrying message...":"Adding to messages...";
+    case Phase::Sent: return status.fromMessage?"Retry queued":"Added to messages";
     }
     return "Voice message";
 }

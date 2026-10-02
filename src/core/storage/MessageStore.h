@@ -40,6 +40,8 @@ public:
     // before return. No title/content allocation is required by the producer.
     Submission requestSave(const Request&, const void* title, const void* content, const void* audio = nullptr);
     Submission requestStatus(const RecordKey&, LXMFStatus, uint32_t identityGeneration = 0, uint32_t peerGeneration = 0);
+    // Exact author/revision CAS; never creates a record or changes frozen policy.
+    Submission requestRetry(const RecordKey&, const uint8_t local[16], uint32_t revision);
     Submission requestMarkRead(const std::string& peer, uint32_t identityGeneration = 0, uint32_t peerGeneration = 0);
     Submission requestDelete(const std::string& peer, uint32_t identityGeneration = 0, uint32_t peerGeneration = 0);
     Submission requestRecord(const RecordKey&, uint32_t offset = 0, uint16_t capacity = 4096);

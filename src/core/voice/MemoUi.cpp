@@ -80,7 +80,12 @@ Ui::Choice Ui::choice(unsigned index) const {
         return index==0?(_status.phase==Phase::Playing?Choice::StopPlayback:Choice::Stop):index==1?Choice::Back:Choice::None;
     if(_status.phase==Phase::Review) {
         const bool play=(_status.capabilities&2) && _status.reason!=Code::UnsupportedAudio && _status.reason!=Code::AudioUnavailable;
-        if(_status.fromMessage) return index==0?(play?Choice::Play:Choice::Back):index==1&&play?Choice::Back:Choice::None;
+        if(_status.fromMessage) {
+            if(play && index==0) return Choice::Play;
+            const unsigned remaining=index-(play?1:0);
+            return remaining==0?(_status.retryable?Choice::RetryDelivery:Choice::Back):
+                remaining==1 && _status.retryable?Choice::Back:Choice::None;
+        }
         return index==0?(play?Choice::Play:Choice::Send):index==1?(play?Choice::Send:Choice::More):play?Choice::More:Choice::None;
     }
     if(_status.phase==Phase::Idle && (_status.capabilities&1)) return index==0?Choice::Record:index==1?Choice::Back:Choice::None;
@@ -102,6 +107,7 @@ void Ui::choose(Choice choiceValue) {
     case Choice::Record: send(Action::Record);break;
     case Choice::Play: send(Action::Play);break;
     case Choice::Send: send(Action::Send);break;
+    case Choice::RetryDelivery: send(Action::Retry);break;
     case Choice::ConfirmReplace: _menu=Menu::Main;send(Action::Replace);break;
     case Choice::ConfirmDiscard: _menu=Menu::Main;send(Action::Discard);break;
     case Choice::Retry: {uint8_t peer[16];memcpy(peer,_status.peer,16);open(peer,_status.counter,_status.incoming);break;}
@@ -122,6 +128,7 @@ const char* Ui::label(Choice c) {
     switch(c) {
     case Choice::Record: return "Record";case Choice::Stop: return "Stop";case Choice::Play: return "Play";
     case Choice::StopPlayback: return "Stop playback";
+    case Choice::RetryDelivery: return "Retry";
     case Choice::Send: return "Send";case Choice::More: return "More";case Choice::Back: return "Back";
     case Choice::Replace: return "Record again";case Choice::Discard: return "Discard";case Choice::Keep: return "Keep draft";
     case Choice::ConfirmReplace: return "Record again";case Choice::ConfirmDiscard: return "Discard";case Choice::Retry: return "Retry";
@@ -134,7 +141,7 @@ const char* Ui::text() const {
     if(_menu==Menu::More) return "Saved draft";
     if(_error!=Code::Ok) {auto s=_status;s.reason=_error;return description(s);}
     if(_stop || _close) return "Stopping...";
-    if(_pending) return _action==Action::Record || _action==Action::Replace?"Starting...":_action==Action::Send?"Adding to messages...":"Please wait...";
+    if(_pending) return _action==Action::Record || _action==Action::Replace?"Starting...":_action==Action::Send?"Adding to messages...":_action==Action::Retry?"Retrying message...":"Please wait...";
     return description(_status);
 }
 const char* Ui::guidance() const {

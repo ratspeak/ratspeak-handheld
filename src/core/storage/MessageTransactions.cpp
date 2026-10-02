@@ -486,24 +486,33 @@ void MessageTransactions::update(const Request& request, Result& result) {
     uint8_t selectedMedium;
     result.error = load(request.key, document, header, &selectedMedium);
     if (result.error != Error::None) return;
-    result.oldStatus = header.status; result.newStatus = request.status;
-    if (!messaging::validDelivery(request.status, header.deliveryPolicy, header.incoming) ||
-        (messaging::relayStatus(header.status) && request.status < 7 && request.status != 4 && request.status != 5)) {
+    const bool retry=request.operation==Operation::RetryOutgoing;
+    uint8_t target=request.status;
+    if(retry) {
+        if(header.incoming || header.revision!=request.offset || memcmp(header.source,request.source,16) ||
+           !messaging::retryableStatus(header.status)) {result.error=Error::Stale;return;}
+        target=uint8_t(header.deliveryPolicy==messaging::DeliveryPolicy::Always || messaging::relayStatus(header.status)?
+            LXMFStatus::PROP_QUEUED:LXMFStatus::QUEUED);
+    }
+    result.oldStatus = header.status; result.newStatus = target;
+    if (!messaging::validDelivery(target, header.deliveryPolicy, header.incoming) ||
+        (messaging::relayStatus(header.status) && target < 7 && target != 4 && target != 5)) {
         result.error = Error::Stale; return;
     }
-    if (header.status == request.status) {
+    if (header.status == target) {
         result.revision = header.revision; result.error = commit(request.key, document, false, result, nullptr, selectedMedium);
         if (result.error == Error::None) result.outcome = Outcome::Committed;
         return;
     }
-    // A proof-confirmed record cannot regress; resend creates another record.
-    if (header.status == 4 || (header.status == 9 && request.status != 4)) {
+    // Retry applies only to a failed/unconfirmed exact revision. A recipient or
+    // propagation receipt remains authoritative and cannot be made pending.
+    if (header.status == 4 || (header.status == 9 && target != 4)) {
         result.error = Error::Stale; return;
     }
     if (header.revision == UINT32_MAX) { result.error = Error::RevisionExhausted; return; }
-    document.document()["status"] = request.status;
+    document.document()["status"] = target;
     document.document()["store_revision"] = header.revision + 1;
-    result.error = commit(request.key, document, false, result, nullptr, selectedMedium);
+    result.error = commit(request.key, document, false, result, nullptr, selectedMedium, retry);
     if (result.error == Error::None) { result.revision = header.revision + 1; result.outcome = Outcome::Committed; }
 }
 
@@ -1288,7 +1297,7 @@ void MessageTransactions::execute(const Request& request, uint8_t* bytes, size_t
             result.error = Error::InvalidRecord; return;
         }
         create(request, bytes, result); break;
-    case Operation::UpdateStatus:
+    case Operation::UpdateStatus: case Operation::RetryOutgoing:
         if (request.status > messaging::LastStatus) { result.error = Error::InvalidRecord; return; }
         update(request, result); break;
     case Operation::MarkRead: markRead(request, result); break;

@@ -61,6 +61,9 @@ public:
     // A separately committed memo enters the existing recovery/delivery owner.
     // Never resubmit its body through create-message admission.
     void storedMessage();
+    // The memo owner retains this storage ticket and calls storedMessage only
+    // after durable admission. Existing receipt owners retire on admission.
+    handheld::storage::Submission requestRetry(const handheld::storage::RecordKey&,uint32_t revision);
     bool propagationBusy() const { return _relay.ticket.valid() && !_relay.direct; }
     RustPropagationInbox& inbox() { return _inbox; }
     const RustPropagationInbox& inbox() const { return _inbox; }

@@ -156,6 +156,28 @@ void RustLxmfEngine::storedMessage() {
     else {_recoveryCursor={};_recovering=true;}
 }
 
+handheld::storage::Submission RustLxmfEngine::requestRetry(const handheld::storage::RecordKey& key,uint32_t revision) {
+    using Reject=handheld::storage::Rejection;
+    if(!_accepting || !_d.store) return {{},Reject::Unavailable};
+    if(!key.counter || key.incoming || !revision) return {{},Reject::Invalid};
+    if(_deleting && !memcmp(_deletingPeer,key.peer,16)) return {{},Reject::Fenced};
+    Ticket previous;
+    for(uint8_t i=0;i<RowCount;++i) {
+        const auto& value=_rows[i];
+        if(value.phase==Phase::Free || value.counter!=key.counter || memcmp(value.peer,key.peer,16)) continue;
+        if(!handheld::messaging::retryableStatus(uint8_t(value.desired))) return {{},Reject::Invalid};
+        if(value.storageSequence || value.queuedReceipts || value.desired!=value.durable ||
+           !(value.flags&Acknowledged) || (value.phase!=Phase::Settled && value.phase!=Phase::Grace)) return {{},Reject::Busy};
+        previous={value.generation,i};
+    }
+    const auto submission=_d.store->requestRetry(key,_d.ourDestHash,revision);
+    // This owner is serialized with proof handling. Busy admissions leave the
+    // old receipt intact; a successful reservation prevents its late callbacks
+    // from overwriting the new retry. Storage still checks the durable revision.
+    if(submission.accepted() && previous.valid()) retire(previous);
+    return submission;
+}
+
 RustLxmfEngine::Submission RustLxmfEngine::submitMedia(const uint8_t dest[16], const uint8_t* title,
     size_t titleLength, const uint8_t* content, size_t contentLength, bool preferLink,
     const handheld::storage::AudioMetadata& audio, const uint8_t* audioBytes) {

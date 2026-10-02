@@ -168,6 +168,8 @@ bool ProtocolRuntime::startEngines(FlashStore* flash, SDStore* sd, MessageStore*
         }});
     _memos.begin({store,&_voiceAudio,this,[](void* context,const handheld::storage::RecordKey&) {
         static_cast<ProtocolRuntime*>(context)->_lxmf.storedMessage();
+    },[](void* context,const handheld::storage::RecordKey& key,uint32_t revision) {
+        return static_cast<ProtocolRuntime*>(context)->_lxmf.requestRetry(key,revision);
     }},_destHash,70);
     _enginesUp = true;
     return true;

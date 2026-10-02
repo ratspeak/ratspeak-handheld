@@ -8,7 +8,7 @@ namespace handheld::memo {
 // so a completion from a previous view cannot change the current controls.
 class Ui {
 public:
-    enum class Choice : uint8_t { None, Record, Stop, Play, Send, More, Back, Replace, Discard, Keep, ConfirmReplace, ConfirmDiscard, Retry, StopPlayback };
+    enum class Choice : uint8_t { None, Record, Stop, Play, Send, More, Back, Replace, Discard, Keep, ConfirmReplace, ConfirmDiscard, Retry, StopPlayback, RetryDelivery };
     using Submit=bool(*)(void*,const Command&,uint32_t);
     void begin(void* context,Submit submit) {_context=context;_submit=submit;}
     void open(const uint8_t peer[16],uint32_t counter=0,bool incoming=false);

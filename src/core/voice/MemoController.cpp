@@ -40,13 +40,13 @@ sm::Command Controller::binding() const {
     command.revision=_draft.revision;command.timestamp=_sendTime;command.policy=_policy;return command;
 }
 Code Controller::command(const Command& command,sm::Command send) {
-    if(!_d.store || !_d.audio || command.action>Action::Volume || command.volume>100) return Code::Invalid;
+    if(!_d.store || !_d.audio || command.action>Action::Retry || command.volume>100) return Code::Invalid;
     if(command.action==Action::Open) {
         if(!_accepting || !command.view || command.view<=_viewFloor || _status.generation==UINT32_MAX) return Code::Stale;
         if(!drained() || busy(_status.phase)) return Code::Busy;
         _viewFloor=command.view;_status.view=command.view;++_status.generation;
         memcpy(_status.peer,command.peer,16);_status.counter=command.counter;_status.incoming=command.incoming;
-        _status.fromMessage=command.counter!=0;_status.length=0;_status.frames=0;
+        _status.fromMessage=command.counter!=0;_status.length=0;_status.frames=0;_status.retryable=false;_recordRevision=0;
         _draft={};_media={};_failure=Code::Ok;_closed=false;_stopping=false;
         _work=_status.fromMessage?Work::Message:Work::Inspect;phase(Phase::Loading);return Code::Ok;
     }
@@ -72,7 +72,7 @@ Code Controller::command(const Command& command,sm::Command send) {
         if(!(_status.capabilities&1)) return Code::MicrophoneUnavailable;
         if(command.action==Action::Record && _draft.state==sm::State::Ready) return Code::Invalid;
         if(command.stopEpoch==UINT32_MAX || command.stopEpoch!=_d.audio->cancellationEpoch()) return Code::Stale;
-        _epoch=command.stopEpoch;_started=_now;_stopping=false;_written=0;_packet={};
+        _epoch=command.stopEpoch;_started=_now;_stopping=false;_written=0;_packet={};_status.frames=0;
         _work=Work::Begin;phase(Phase::Starting);return Code::Ok;
     case Action::Play:
         if(!(_status.capabilities&2)) return Code::PlaybackUnavailable;
@@ -87,6 +87,9 @@ Code Controller::command(const Command& command,sm::Command send) {
     case Action::Discard:
         if(_status.fromMessage) return Code::Invalid;
         _work=Work::Clear;phase(Phase::Saving);return Code::Ok;
+    case Action::Retry:
+        if(!_status.fromMessage || !_status.retryable || !_d.retry) return Code::Invalid;
+        _work=Work::Retry;phase(Phase::Sending);return Code::Ok;
     default: return Code::Invalid;
     }
 }
@@ -117,6 +120,7 @@ void Controller::submit() {
     case Work::Promote: submission=_d.store->requestMemo(Op::MemoPromote,command);break;
     case Work::Clear: submission=_d.store->requestMemo(Op::MemoClear,command);break;
     case Work::Message: submission=_d.store->requestRecord(key(),0,sizeof(storage::StoredRecordHeader));break;
+    case Work::Retry: submission=_d.retry(_d.context,key(),_recordRevision);break;
     case Work::Clip:
         command.offset=_offset;
         submission=_status.fromMessage?_d.store->requestAudio(key(),_offset,sizeof(storage::StoredRecordHeader)+80):
@@ -125,6 +129,7 @@ void Controller::submit() {
     }
     if(submission.accepted()) {_ticket=submission.ticket;return;}
     if(submission.rejection==storage::Rejection::Busy || submission.rejection==storage::Rejection::Fenced) return;
+    if(_work==Work::Retry && submission.rejection==storage::Rejection::Invalid) {fail(Code::Stale);return;}
     if(_work==Work::Cancel) {_work=Work::None;_recording=false;review(Code::StorageUnavailable);}
     else fail(Code::StorageUnavailable);
 }
@@ -133,6 +138,17 @@ void Controller::settle() {
     storage::Result result;
     if(!_d.store->peekResult(_ticket,result)) return;
     const auto operation=_work;bool valid=result.outcome==storage::Outcome::Committed;
+    if(operation==Work::Retry) {
+        valid=valid && result.key.counter==_status.counter && !result.key.incoming &&
+            !memcmp(result.key.peer,_status.peer,16) && result.revision>_recordRevision;
+        _d.store->releaseResult(_ticket);_ticket={};_work=Work::None;
+        if(valid) {
+            _recordRevision=result.revision;_status.retryable=false;
+            if(_d.sent) _d.sent(_d.context,result.key);
+            phase(Phase::Sent);
+        } else fail(result.error==storage::Error::Stale?Code::Stale:Code::StorageUnavailable);
+        return;
+    }
     sm::Snapshot snapshot;storage::StoredRecordHeader header;
     const bool message=operation==Work::Message || (operation==Work::Clip && _status.fromMessage);
     const size_t prefix=message?sizeof(header):sizeof(snapshot);
@@ -179,14 +195,15 @@ void Controller::settle() {
         if(_d.sent) _d.sent(_d.context,result.key);
         phase(Phase::Sent);break;
     case Work::Message:
-        _media=header.audio;_status.length=header.audio.length;
+        _media=header.audio;_status.length=header.audio.length;_recordRevision=header.revision;
+        _status.retryable=!header.incoming && messaging::retryableStatus(header.status);
         if(header.audio.state!=1) review(Code::AudioUnavailable);
         else if(header.audio.mode!=sm::Mode || !header.audio.length || header.audio.length>sm::PlaybackBytes || header.audio.length%sm::FrameBytes)
             review(Code::UnsupportedAudio);
         else review();
         break;
     case Work::Clip: break;
-    case Work::None: break;
+    case Work::None: case Work::Retry: break;
     }
 }
 void Controller::audio() {
