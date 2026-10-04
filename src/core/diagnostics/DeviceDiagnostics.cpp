@@ -3,6 +3,7 @@
 #include "config/Config.h"
 #include "runtime/TaskOwner.h"
 #include "ratspeak_protocol.h"
+#include "voice/VoiceWorker.h"
 #include <cctype>
 #include <cstring>
 #include <esp_heap_caps.h>
@@ -34,6 +35,10 @@ void DeviceDiagnostics::printDiagnostics() {
                   (unsigned long)memo.encodeUs,(unsigned long)memo.decodeUs);
     Serial.printf("Memo errors: audio=%u storage_step=%u storage_error=%u\n",
                   unsigned(memo.audioError),unsigned(memo.storageStep),unsigned(memo.storageError));
+    const auto memory=handheld::voice::VoiceWorker::memoryStatus();
+    Serial.printf("Audio memory: stage=%lu free=%lu largest=%lu required_free=%lu required_block=%lu codec=%lu\n",
+                  (unsigned long)memory.stage,(unsigned long)memory.internalFree,(unsigned long)memory.largest,
+                  (unsigned long)memory.requiredFree,(unsigned long)memory.requiredBlock,(unsigned long)memory.codecBytes);
     Serial.printf("Radio: %s\n", radioOnline ? "ONLINE" : "OFFLINE");
     if (radioOnline) {
         Serial.printf("Freq: %lu Hz  SF: %d  BW: %lu  CR: 4/%d  TXP: %d dBm\n",

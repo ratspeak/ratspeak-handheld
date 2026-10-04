@@ -23,6 +23,18 @@ constexpr size_t FreeFloor=ResourceBudget::CardInternalFree, LargestFloor=Resour
 #else
 constexpr size_t FreeFloor=ResourceBudget::LargeInternalFree, LargestFloor=ResourceBudget::LargeLargestBlock;
 #endif
+portMUX_TYPE memoryMux=portMUX_INITIALIZER_UNLOCKED;
+VoiceWorker::MemoryStatus memoryReport;
+Code memoryFailure(VoiceWorker::MemoryStage stage,size_t requiredFree,size_t requiredBlock) {
+    VoiceWorker::MemoryStatus report;
+    report.stage=stage;
+    report.internalFree=heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
+    report.largest=heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
+    report.requiredFree=requiredFree;report.requiredBlock=requiredBlock;
+    report.codecBytes=rs_handheld_voice_codec_size();
+    portENTER_CRITICAL(&memoryMux);memoryReport=report;portEXIT_CRITICAL(&memoryMux);
+    return Code::NoMemory;
+}
 bool memorySafe() {
     return heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)>=FreeFloor &&
            heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)>=LargestFloor;
@@ -62,12 +74,12 @@ struct VoiceWorker::Impl {
         if(StackBytes+DriverAllowance+sizeof(Impl)+(caps&MALLOC_CAP_INTERNAL?retained:0)>65536 ||
             heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)<FreeFloor+DriverAllowance+(caps&MALLOC_CAP_INTERNAL?retained:0) ||
             heap_caps_get_largest_free_block(caps)<bytes ||
-            (!(caps&MALLOC_CAP_INTERNAL) && heap_caps_get_free_size(caps)<retained+ResourceBudget::PsramFree)) return Code::NoMemory;
+            (!(caps&MALLOC_CAP_INTERNAL) && heap_caps_get_free_size(caps)<retained+ResourceBudget::PsramFree)) return memoryFailure(MemoryStage::CodecBudget,FreeFloor+DriverAllowance+(caps&MALLOC_CAP_INTERNAL?retained:0),caps&MALLOC_CAP_INTERNAL?bytes:LargestFloor);
         codec=static_cast<uint8_t*>(heap_caps_calloc(1,bytes,caps));
         pcm=static_cast<int16_t*>(heap_caps_calloc(320,sizeof(int16_t),caps));
         if(!codec || !pcm || reinterpret_cast<uintptr_t>(codec)%rs_handheld_voice_codec_align() ||
             !memorySafe() || heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)<FreeFloor+DriverAllowance)
-            return Code::NoMemory;
+            return memoryFailure(MemoryStage::Buffers,FreeFloor+DriverAllowance,LargestFloor);
         return rs_handheld_voice_codec_init(codec,bytes,profile)==RS_HANDHELD_OK?Code::Ok:Code::AudioUnavailable;
     }
     void releaseBuffers() {
@@ -90,6 +102,9 @@ struct VoiceWorker::Impl {
         portEXIT_CRITICAL(&mux);
     }
 };
+VoiceWorker::MemoryStatus VoiceWorker::memoryStatus() {
+    portENTER_CRITICAL(&memoryMux);const auto result=memoryReport;portEXIT_CRITICAL(&memoryMux);return result;
+}
 void VoiceWorker::keepInputAlive() { _inputHeartbeat=uint32_t(nowMs()); }
 uint8_t VoiceWorker::capabilities() const {
 #if defined(RSDECK) || defined(RATPAGER) || defined(RSCARDPUTER)
@@ -114,10 +129,12 @@ Code VoiceWorker::prepareUse(uint32_t generation,uint8_t profile,uint8_t volumeV
     if (_impl && !_impl->stop.load() && _impl->generation==generation && _impl->profile==profile &&
         _impl->use==use && _impl->frameLimit==frames && _impl->memoEpoch==epoch) return Code::Ok;
     if (_impl) { stop(); if(!drained()) return Code::Busy; }
+    portENTER_CRITICAL(&memoryMux);memoryReport={};portEXIT_CRITICAL(&memoryMux);
     if (heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)<StackBytes+sizeof(Impl)+FreeFloor ||
-        heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)<StackBytes+1024) return Code::NoMemory;
+        heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)<StackBytes+1024)
+        return memoryFailure(MemoryStage::Initial,StackBytes+sizeof(Impl)+FreeFloor,StackBytes+1024);
     auto* memory=heap_caps_malloc(sizeof(Impl),MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
-    if (!memory) return Code::NoMemory;
+    if (!memory) return memoryFailure(MemoryStage::Owner,sizeof(Impl)+FreeFloor,sizeof(Impl));
     auto* i=new(memory) Impl;
     i->generation=generation;i->status.generation=generation;i->profile=profile;i->volume=volumeValue;
     i->use=use;i->frameLimit=frames;i->memoEpoch=epoch;
@@ -128,7 +145,8 @@ Code VoiceWorker::prepareUse(uint32_t generation,uint8_t profile,uint8_t volumeV
     if (xTaskCreate(run,"voice-audio",StackBytes,i,2,&i->task)!=pdPASS) {
         i->stop=true;i->done=true;
         // UI may be between suspend and publication. drained() waits for its handoff.
-        drained();return Code::NoMemory;
+        const auto code=memoryFailure(MemoryStage::Task,StackBytes+FreeFloor,StackBytes);
+        drained();return code;
     }
     return Code::Ok;
 }
@@ -207,16 +225,17 @@ void VoiceWorker::run(void* pointer) {
         failure=i.allocate();
         if(failure==Code::Ok) {ready=i.device.prepare(i.volume);if(!ready)failure=Code::AudioUnavailable;}
     }
-    if(ready && !memorySafe()) {ready=false;failure=Code::NoMemory;}
+    if(ready && !memorySafe()) {ready=false;failure=memoryFailure(MemoryStage::Driver,FreeFloor,LargestFloor);}
     i.update(ready,false,false,failure);
     while(ready && !i.stop) {
-        if(!memorySafe() || uxTaskGetStackHighWaterMark(nullptr)<StackReserve) {failure=Code::NoMemory;break;}
+        if(!memorySafe()) {failure=memoryFailure(MemoryStage::RunningHeap,FreeFloor,LargestFloor);break;}
+        if(uxTaskGetStackHighWaterMark(nullptr)<StackReserve) {failure=memoryFailure(MemoryStage::RunningStack,FreeFloor,LargestFloor);break;}
         const auto epoch=i.flushEpoch.load();
         if(epoch!=flush) {flush=epoch;used=frames=0;clear(i.pcm,PcmBytes);clear(encoded.bytes+1,80);i.device.flush();}
         const bool talk=i.transmitting();
         if(talk!=capture) {
             if(!i.device.capture(talk)) {failure=Code::AudioUnavailable;break;}
-            if(!memorySafe()) {failure=Code::NoMemory;break;}
+            if(!memorySafe()) {failure=memoryFailure(MemoryStage::Driver,FreeFloor,LargestFloor);break;}
             capture=talk;used=frames=0;clear(i.pcm,PcmBytes);clear(encoded.bytes+1,80);i.update(true,capture,false);
         }
         i.device.volume(i.volume);
@@ -294,10 +313,11 @@ void VoiceWorker::runMemo(Impl& i) {
         auto& maximum=encoding?i.status.encodeUs:i.status.decodeUs;
         if(elapsed>maximum) maximum=elapsed;
         portEXIT_CRITICAL(&i.mux);
-        // A native memo frame contains 40 ms of audio. The continuous capture
-        // buffers cover I/O scheduling; overflow fails explicitly. The live-call
-        // 50-percent processing headroom policy above does not apply to memos.
-        return elapsed<=40000;
+        // Capture owns 80 ms of bounded buffering. A scheduling/flash stall
+        // longer than one 40 ms frame is not proof of missing samples; actual
+        // RX exhaustion/overflow is checked by the adapter on the next read.
+        // Decode still has a frame-period budget; live-call policy is separate.
+        return elapsed<=(encoding?80000u:40000u);
     };
     auto frames=[&] {
         portENTER_CRITICAL(&i.mux);i.status.frames=total;portEXIT_CRITICAL(&i.mux);
@@ -312,10 +332,14 @@ void VoiceWorker::runMemo(Impl& i) {
         if(!available) {failure=Code::Backpressure;return false;}
         packetFrames=0;clear(packet.bytes,sizeof packet.bytes);return true;
     };
-    auto encode=[&] {
+    auto encode=[&](bool captureRunning=true) {
         const auto before=esp_timer_get_time();
         const auto code=rs_handheld_voice_codec_encode_frame(i.codec,i.pcm,320,packet.bytes+packetFrames*4,4);
-        const bool timely=timing(before,true);clear(i.pcm,PcmBytes);used=0;
+        const bool withinBudget=timing(before,true);
+        // A padded tail is processed after capture ends. Stop also makes any
+        // further capture deadline irrelevant: retain the accepted PCM.
+        const bool timely=withinBudget || !captureRunning || cancelled();
+        clear(i.pcm,PcmBytes);used=0;
         if(code!=RS_HANDHELD_OK || !timely) {failure=timely?Code::AudioUnavailable:Code::SlowCodec;return false;}
         ++packetFrames;++total;frames();
         return packetFrames<20 || queue();
@@ -333,12 +357,13 @@ void VoiceWorker::runMemo(Impl& i) {
             else {ready=i.device.prepare(i.volume,record);if(!ready) failure=i.device.error();}
         }
     }
-    if(ready && !memorySafe()) {ready=false;failure=Code::NoMemory;}
+    if(ready && !memorySafe()) {ready=false;failure=memoryFailure(MemoryStage::Driver,FreeFloor,LargestFloor);}
     i.update(ready,ready&&record,false,failure);
     while(ready && !i.stop) {
         if(!alive()) {failure=Code::InputLost;break;}
         if(cancelled() || total==i.frameLimit) {normalStop=true;break;}
-        if(!memorySafe() || uxTaskGetStackHighWaterMark(nullptr)<StackReserve) {failure=Code::NoMemory;break;}
+        if(!memorySafe()) {failure=memoryFailure(MemoryStage::RunningHeap,FreeFloor,LargestFloor);break;}
+        if(uxTaskGetStackHighWaterMark(nullptr)<StackReserve) {failure=memoryFailure(MemoryStage::RunningStack,FreeFloor,LargestFloor);break;}
         i.device.volume(i.volume);
         if(record) {
             const auto got=i.device.read(i.pcm+used,160);
@@ -378,7 +403,7 @@ void VoiceWorker::runMemo(Impl& i) {
     // native frame is padded (less than 40 ms), never another packet/read.
     if(owned) i.device.end();
     if(record && normalStop && !i.stop && failure==Code::Ok) {
-        if(used) {std::memset(i.pcm+used,0,PcmBytes-used*sizeof(int16_t));encode();}
+        if(used) {std::memset(i.pcm+used,0,PcmBytes-used*sizeof(int16_t));encode(false);}
         if(failure==Code::Ok) queue();
     }
     if(i.stop || failure!=Code::Ok || !record) i.queues();

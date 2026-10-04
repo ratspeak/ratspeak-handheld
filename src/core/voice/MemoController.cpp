@@ -100,13 +100,14 @@ Code Controller::command(const Command& command,sm::Command send) {
     }
 }
 void Controller::fail(Code code) {
-    _failure=code;_stopping=true;
+    if(_failure==Code::Ok) _failure=code;
+    _stopping=true;
     if(_audioOwned) _d.audio->stop();
     if(!_ticket.valid()) _work=Work::None;
     _packet={};
     if(!_audioOwned && !_ticket.valid()) {
         if(_recording && _draft.workingRevision) _work=Work::Cancel;
-        else review(code);
+        else review(_failure);
     }
 }
 void Controller::submit() {
@@ -195,6 +196,11 @@ void Controller::settle() {
         if(_stopping || _closed || _epoch!=_d.audio->cancellationEpoch()) _work=Work::Cancel;
         break;
     case Work::Append:
+        // A pending append owns its payload until settlement. fail() clears the
+        // controller copy while that write can still succeed; its length no
+        // longer describes the submitted payload. Retain the initiating error
+        // and let cancellation retire the committed working draft.
+        if(_failure!=Code::Ok) break;
         if(snapshot.workingLength!=_written+_packet.length) {fail(Code::Interrupted);break;}
         _written=snapshot.workingLength;_packet={};break;
     case Work::Seal: case Work::Clear: review();break;
