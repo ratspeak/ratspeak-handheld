@@ -23,6 +23,9 @@ struct Status {
     Code reason = Code::Ok;
     uint8_t capabilities = 0, volume = 70;
     bool fromMessage = false, incoming = false, retryable = false;
+    // Numeric diagnostics only, no identity/audio content. High bit distinguishes
+    // admission rejection from a completed storage Error; step is Controller::Work.
+    uint8_t storageStep = 0, storageError = 0, audioError = 0;
 };
 static_assert(sizeof(Status) <= 64 && std::is_trivially_copyable<Status>::value, "Memo status IPC budget changed");
 constexpr bool busy(Phase phase) {

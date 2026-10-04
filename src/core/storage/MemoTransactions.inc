@@ -103,8 +103,8 @@ Error memoLoad(Medium& store, const char* path, const Request& request, MemoFile
 
 class MemoSource final : public AtomicSource {
 public:
-    MemoSource(MemoFile& next, File& previous, const MemoFile& old, const uint8_t* tail, size_t length)
-        : _next(next), _file(previous), _old(old), _tail(tail), _tailLength(length) {}
+    MemoSource(MemoFile& next, File& previous, const MemoFile& old, const uint8_t* tail, size_t length, File* target)
+        : _next(next), _file(previous), _old(old), _tail(tail), _tailLength(length), _target(target) {}
     size_t length() const override { return MemoFile::Size + _next.length(); }
     bool prepare() {
         uint32_t crc = _next.seed();
@@ -114,6 +114,10 @@ public:
     bool emit(ByteSink& sink) const override {
         uint32_t crc = _next.seed();
         return sink.write(_next.bytes, MemoFile::Size) == MemoFile::Size && body(&sink, crc) && ~crc == _next.get(64);
+    }
+    void releaseInputs() const override {
+        _file.close();
+        if (_target) _target->close();
     }
 private:
     bool body(ByteSink* sink, uint32_t& crc) const {
@@ -136,12 +140,13 @@ private:
     const MemoFile& _old;
     const uint8_t* _tail;
     size_t _tailLength;
+    File* _target;
 };
 
 template<class Medium>
 Error memoWrite(Medium& store, const char* path, MemoFile& next, File& previous,
-                const MemoFile& old, const uint8_t* tail = nullptr, size_t length = 0) {
-    MemoSource source(next, previous, old, tail, length);
+                const MemoFile& old, const uint8_t* tail = nullptr, size_t length = 0, File* target = nullptr) {
+    MemoSource source(next, previous, old, tail, length, target);
     return source.prepare() ? store.write(path, source) : Error::Verify;
 }
 template<class Medium>
@@ -228,8 +233,13 @@ void MessageTransactions::memoTransaction(const Request& request, uint8_t* bytes
     auto write = [&](const char* path, MemoFile& next, File& file, const MemoFile& old,
                      const uint8_t* tail = nullptr, size_t n = 0) {
         result.flash.attempted = true;
-        result.error = result.flash.error = store.ensureDir(parent) ? memoWrite(store, path, next, file, old, tail, n) : Error::Write;
+        File& target = !strcmp(path, savedPath) ? savedFile : workFile;
+        result.error = result.flash.error = store.ensureDir(parent) ? memoWrite(store, path, next, file, old, tail, n, &target) : Error::Write;
         result.flash.committed = result.error == Error::None;
+        if (result.flash.committed) {
+            target = store.open(path);
+            if (!target) { result.error = Error::Read; return false; }
+        }
         return result.flash.committed;
     };
     const auto op = request.operation;
@@ -254,8 +264,7 @@ void MessageTransactions::memoTransaction(const Request& request, uint8_t* bytes
         File none;
         if (!write(op == Operation::MemoBegin ? workPath : savedPath, next, none, next)) return;
         if (op == Operation::MemoBegin) {
-            work = next; workFile = store.open(workPath);
-            if (!workFile) { result.error = Error::Read; return; }
+            work = next;
         } else { saved = next; workFile = {}; memoRemoveWork(store, workPath); }
         publish(); return;
     }

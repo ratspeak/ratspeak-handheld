@@ -32,6 +32,8 @@ void DeviceDiagnostics::printDiagnostics() {
                   unsigned(memo.phase),unsigned(memo.reason),(unsigned long)memo.generation,
                   (unsigned long)memo.frames,memo.length,(unsigned long)memo.stackFree,
                   (unsigned long)memo.encodeUs,(unsigned long)memo.decodeUs);
+    Serial.printf("Memo errors: audio=%u storage_step=%u storage_error=%u\n",
+                  unsigned(memo.audioError),unsigned(memo.storageStep),unsigned(memo.storageError));
     Serial.printf("Radio: %s\n", radioOnline ? "ONLINE" : "OFFLINE");
     if (radioOnline) {
         Serial.printf("Freq: %lu Hz  SF: %d  BW: %lu  CR: 4/%d  TXP: %d dBm\n",

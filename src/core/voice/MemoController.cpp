@@ -48,6 +48,7 @@ Code Controller::command(const Command& command,sm::Command send) {
         memcpy(_status.peer,command.peer,16);_status.counter=command.counter;_status.incoming=command.incoming;
         _status.fromMessage=command.counter!=0;_status.length=0;_status.frames=0;_status.retryable=false;_recordRevision=0;
         _draft={};_media={};_failure=Code::Ok;_closed=false;_stopping=false;
+        _status.storageStep=_status.storageError=_status.audioError=0;
         _work=_status.fromMessage?Work::Message:Work::Inspect;phase(Phase::Loading);return Code::Ok;
     }
     if(command.view!=_status.view || command.generation!=_status.generation ||
@@ -66,6 +67,7 @@ Code Controller::command(const Command& command,sm::Command send) {
     if(busy(_status.phase) || _ticket.valid() || _work!=Work::None || _audioOwned) return Code::Busy;
     if(command.draftRevision!=_draft.revision) return Code::Stale;
     _failure=Code::Ok;
+    _status.storageStep=_status.storageError=_status.audioError=0;
     switch(command.action) {
     case Action::Record: case Action::Replace:
         if(_status.fromMessage) return Code::Invalid;
@@ -130,7 +132,8 @@ void Controller::submit() {
     if(submission.accepted()) {_ticket=submission.ticket;return;}
     if(submission.rejection==storage::Rejection::Busy || submission.rejection==storage::Rejection::Fenced) return;
     if(_work==Work::Retry && submission.rejection==storage::Rejection::Invalid) {fail(Code::Stale);return;}
-    if(_work==Work::Cancel) {_work=Work::None;_recording=false;review(Code::StorageUnavailable);}
+    _status.storageStep=uint8_t(_work);_status.storageError=0x80|uint8_t(submission.rejection);
+    if(_work==Work::Cancel) {_work=Work::None;_recording=false;review(_failure==Code::Ok?Code::StorageUnavailable:_failure);}
     else fail(Code::StorageUnavailable);
 }
 void Controller::settle() {
@@ -171,7 +174,9 @@ void Controller::settle() {
     }
     _d.store->releaseResult(_ticket);_ticket={};_work=Work::None;
     if(!valid) {
-        if(operation==Work::Cancel) {_recording=false;review(Code::StorageUnavailable);}
+        _status.storageStep=uint8_t(operation);
+        _status.storageError=uint8_t(result.error==storage::Error::None?storage::Error::InvalidRecord:result.error);
+        if(operation==Work::Cancel) {_recording=false;review(_failure==Code::Ok?Code::StorageUnavailable:_failure);}
         else fail(result.error==storage::Error::Stale?Code::Stale:Code::StorageUnavailable);
         return;
     }
@@ -218,6 +223,7 @@ void Controller::audio() {
         if(code!=voice::Code::Ok) {
             // A failed post-task memory check can still own a stopping worker.
             // Retain that ownership until cooperative teardown has finished.
+            _status.audioError=uint8_t(code);
             _audioOwned=_d.audio->status().generation==_status.generation;
             fail(audioError(code));return;
         }
@@ -229,7 +235,9 @@ void Controller::audio() {
     if(status.frames!=_status.frames) {_status.frames=status.frames;phase(_status.phase,_status.reason);}
     _status.stackFree=status.stackFree;_status.encodeUs=status.encodeUs;_status.decodeUs=status.decodeUs;
     if(_recording && status.capturing && !_stopping && _status.phase==Phase::Starting) phase(Phase::Recording);
-    if(status.error!=voice::Code::Ok && _failure==Code::Ok) fail(audioError(status.error));
+    if(status.error!=voice::Code::Ok && _failure==Code::Ok) {
+        _status.audioError=uint8_t(status.error);fail(audioError(status.error));
+    }
     if(_recording) {
         if(!_ticket.valid() && _work==Work::None && _failure==Code::Ok) {
             if(!_packet.length) _d.audio->take(_packet);

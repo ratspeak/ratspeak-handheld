@@ -21,6 +21,9 @@ public:
     virtual ~AtomicSource() = default;
     virtual size_t length() const = 0;
     virtual bool emit(ByteSink&) const = 0;
+    // After both passes, release handles that would block atomic promotion on
+    // ESP LittleFS. No input is read again after this point, even on rollback.
+    virtual void releaseInputs() const {}
 };
 
 class MemorySource final : public AtomicSource {
@@ -98,6 +101,7 @@ Error atomicStream(Store& store, const char* path, const AtomicSource& source) {
         file.close();
         if (!verified) { store.remove(temporary.c_str()); return Error::Verify; }
     }
+    source.releaseInputs();
     if (store.exists(path)) {
         if (store.exists(backup.c_str()) && !store.remove(backup.c_str())) return Error::Rename;
         if (!store.rename(path, backup.c_str())) {
