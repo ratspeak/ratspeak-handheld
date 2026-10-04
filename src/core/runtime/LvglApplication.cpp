@@ -246,7 +246,7 @@ static ProtocolBackend::AnnounceResult announceWithName(bool silent = false) {
         Serial.println("[ANNOUNCE-TX] skipped: no active transport");
         return ProtocolBackend::AnnounceResult::Failed;
     }
-    rs::Bytes appData = encodeAnnounceName(userConfig.settings().displayName);
+    rs::Bytes appData = encodeAnnounceName(userConfig.settings().displayName, backend->destinationHashHex().c_str());
     Serial.printf("[ANNOUNCE-TX] name=\"%s\" appData=%d bytes silent=%s\n",
         userConfig.settings().displayName.c_str(), (int)appData.size(),
         silent ? "yes" : "no");
@@ -922,7 +922,7 @@ void handheld::lvgl_application::setup() {
         return applyLiveRadioSettings(radio, rustLoraIface, settings, accepting);
     };
     deviceService.applyPeripherals = [](const UserSettings& s) {
-        const auto data = encodeAnnounceName(s.displayName);
+        const auto data = encodeAnnounceName(s.displayName, backend->destinationHashHex().c_str());
         protocolRuntime.seedAnnounceAppData(data.data(), data.size());
 #if HAS_GPS
         gps.setTimeEnabled(s.gpsTimeEnabled);

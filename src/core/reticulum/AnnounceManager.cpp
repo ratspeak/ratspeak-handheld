@@ -368,9 +368,10 @@ void AnnounceManager::receivedAnnounceEvent(const uint8_t destHash[16], const ui
         if (node.lastSeen != 0 && now >= node.lastSeen &&
             now - node.lastSeen < ANNOUNCE_MIN_INTERVAL_MS)
             return;
-        // Boards with a rename UI preserve the user's alias. Boards without
-        // one keep saved contacts aligned with their latest announced name.
-        if (!name.empty() && (!node.saved || !HAS_CONTACT_RENAME)) node.name = name;
+        // A saved unresolved hash is still a placeholder, not a contact alias.
+        // Let its first announced name reach both Peers and Direct lookup.
+        const bool unnamed = node.name.empty() || node.name == destHex.substr(0, 12);
+        if (!name.empty() && (unnamed || !node.saved || !HAS_CONTACT_RENAME)) node.name = name;
         node.identityHex = idHex;
         node.lastSeen = now;
         node.hops = hops;

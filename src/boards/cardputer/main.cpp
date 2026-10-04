@@ -227,7 +227,7 @@ static void finishCardSettings(CardSettingsStep step) {
         if (gps.isRunning()) gps.setPosixTZ(TIMEZONE_TABLE[settings.timezoneIdx].posixTZ);
 #endif
     }
-    const auto data = encodeAnnounceName(settings.displayName);
+    const auto data = encodeAnnounceName(settings.displayName, backend->destinationHashHex().c_str());
     protocolRuntime.seedAnnounceAppData(data.data(), data.size());
     nameInputScreen.setSaveStatus(nullptr, false);
     timezoneScreen.setSaveStatus(nullptr, false);
@@ -393,7 +393,7 @@ static ProtocolBackend::AnnounceResult announceWithName(bool silent) {
         Serial.println("[ANNOUNCE-TX] skipped: rust backend protocol not ready");
         return ProtocolBackend::AnnounceResult::Failed;
     }
-    rs::Bytes appData = encodeAnnounceName(userConfig.settings().displayName);
+    rs::Bytes appData = encodeAnnounceName(userConfig.settings().displayName, backend->destinationHashHex().c_str());
     Serial.printf("[ANNOUNCE-TX] name=\"%s\" appData=%d bytes silent=%s\n",
         userConfig.settings().displayName.c_str(), (int)appData.size(),
         silent ? "yes" : "no");

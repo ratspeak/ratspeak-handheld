@@ -553,7 +553,7 @@ void DeviceService::execute(uint8_t slot) {
                  ""); break;
     case Operation::Announce: {
         if (settingsApplyPending()) { complete(slot, Outcome::NotReady, "Settings apply pending"); break; }
-        const auto bytes = encodeAnnounceName(_config.settings().displayName);
+        const auto bytes = encodeAnnounceName(_config.settings().displayName, _backend.destinationHashHex().c_str());
         const auto sent = _backend.announce(bytes.data(), bytes.size());
         complete(slot, sent == ProtocolBackend::AnnounceResult::Failed ? Outcome::Failed : Outcome::Ok,
                  sent == ProtocolBackend::AnnounceResult::Sent ? "Announce sent" :

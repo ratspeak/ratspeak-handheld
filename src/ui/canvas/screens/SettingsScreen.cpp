@@ -1117,7 +1117,7 @@ void SettingsScreen::finishRadioApply(RadioApply result) {
     if (result == RadioApply::Unavailable) { showToast("Saved; radio unavailable", 2500); return; }
     if (!announce) { showToast(_config->mirrorPending() ? "Saved; backup pending" : "Saved!"); return; }
     if (!_backend || !_backend->protocolReady()) { showToast("Preset applied (no announce)"); return; }
-    const auto appData = encodeAnnounceName(_config->settings().displayName);
+    const auto appData = encodeAnnounceName(_config->settings().displayName, _backend->destinationHashHex().c_str());
     const auto sent = _backend->announce(appData.data(), appData.size());
     showToast(sent == ProtocolBackend::AnnounceResult::Sent ? "Preset applied + announced" :
         sent == ProtocolBackend::AnnounceResult::Deferred ? "Preset applied; announce queued" :
