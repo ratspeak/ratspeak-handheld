@@ -13,7 +13,7 @@ struct Settings {
 enum class Phase : uint8_t { Unavailable, Off, Idle, Finding, Calling, Incoming, Connecting, Ready, Talking, Receiving, Ending, Ended };
 enum class Code : uint8_t { Ok, Local, Remote, Rejected, Busy, Timeout, ProfileUnsupported, AudioUnavailable, RouteLost,
                            SlowRoute, NoMemory, IdentityUnknown, NotContact, Invalid, Off, SlowCodec,
-                           RfUnsupported, ChannelBusy, RoutePolicyUnavailable, InputLost, Backpressure };
+                           RfUnsupported, ChannelBusy, RoutePolicyUnavailable, InputLost, Backpressure, CaptureOverflow };
 enum class AudioUse : uint8_t { Call, MemoRecord, MemoPlayback };
 enum class Action : uint8_t { Start, Accept, Decline, End, TalkDown, TalkUp, Volume };
 struct Command {

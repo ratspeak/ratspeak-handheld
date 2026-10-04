@@ -26,7 +26,8 @@ void VoicePanel::render(M5Canvas& canvas) {
     canvas.setTextColor(s.phase==Phase::Recording?Theme::ERROR:Theme::TEXT_PRIMARY);
     canvas.drawString(_model.text(),6,36);
     const auto ms=(s.phase==Phase::Recording || s.phase==Phase::Playing || s.phase==Phase::Stopping)?s.frames*40:uint32_t(s.length)*10;
-    char detail[48];snprintf(detail,sizeof detail,"0:%02lu%s   Volume %u%%",(unsigned long)((ms+999)/1000),
+    const bool running=s.phase==Phase::Recording || s.phase==Phase::Playing || s.phase==Phase::Stopping;
+    char detail[48];snprintf(detail,sizeof detail,"0:%02lu%s   Volume %u%%",(unsigned long)((ms+(running?0:999))/1000),
         s.phase==Phase::Recording?" / 0:15":"",s.volume);
     if(s.reason==Code::UnsupportedAudio || s.reason==Code::AudioUnavailable) snprintf(detail,sizeof detail,"Volume %u%%",s.volume);
     canvas.setTextColor(Theme::TEXT_SECONDARY);canvas.drawString(detail,6,51);

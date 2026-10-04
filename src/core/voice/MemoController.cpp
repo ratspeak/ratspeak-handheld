@@ -9,6 +9,10 @@ namespace {
 Code audioError(voice::Code code) {
     if(code==voice::Code::NoMemory) return Code::NoMemory;
     if(code==voice::Code::Busy) return Code::Busy;
+    if(code==voice::Code::AudioUnavailable) return Code::AudioUnavailable;
+    if(code==voice::Code::SlowCodec) return Code::DeviceBusy;
+    if(code==voice::Code::InputLost) return Code::InputLost;
+    if(code==voice::Code::CaptureOverflow) return Code::CaptureOverflow;
     return code==voice::Code::Ok?Code::Ok:Code::Interrupted;
 }
 }
@@ -184,7 +188,7 @@ void Controller::settle() {
     switch(operation) {
     case Work::Inspect:
         if(snapshot.state==sm::State::Promoting && _accepting) {_work=Work::Promote;phase(Phase::Sending);}
-        else review(snapshot.interrupted?Code::Interrupted:Code::Ok);
+        else review(snapshot.interrupted?Code::Recovered:Code::Ok);
         break;
     case Work::Begin:
         _recording=true;

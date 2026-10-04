@@ -11,8 +11,12 @@ const char* description(const Status& status) {
     case Code::AudioUnavailable: return "Audio unavailable";
     case Code::StorageUnavailable: return "Storage unavailable";
     case Code::Interrupted: return "Recording interrupted";
-    case Code::NoMemory: return "Audio unavailable";
+    case Code::NoMemory: return "Not enough memory";
     case Code::TooShort: return "No audio recorded";
+    case Code::DeviceBusy: return "Audio processing too slow";
+    case Code::InputLost: return "Recording stopped";
+    case Code::CaptureOverflow: return "Recording buffer full";
+    case Code::Recovered: break;
     case Code::Ok: break;
     }
     switch(status.phase) {

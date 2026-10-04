@@ -77,7 +77,8 @@ void LvVoicePanel::render() {
     lv_label_set_text(_peer,name.empty()?peer:name.c_str());lv_label_set_text(_label,_model.text());
     lv_obj_set_style_text_color(_label,lv_color_hex(s.phase==Phase::Recording?Theme::ERROR_CLR:Theme::TEXT_PRIMARY),0);
     const auto ms=(s.phase==Phase::Recording || s.phase==Phase::Playing || s.phase==Phase::Stopping)?s.frames*40:uint32_t(s.length)*10;
-    char info[64];snprintf(info,sizeof info,"0:%02lu%s  Volume %u%%",(unsigned long)((ms+999)/1000),s.phase==Phase::Recording?" / 0:15":"",s.volume);
+    const bool running=s.phase==Phase::Recording || s.phase==Phase::Playing || s.phase==Phase::Stopping;
+    char info[64];snprintf(info,sizeof info,"0:%02lu%s  Volume %u%%",(unsigned long)((ms+(running?0:999))/1000),s.phase==Phase::Recording?" / 0:15":"",s.volume);
     if(s.reason==Code::UnsupportedAudio || s.reason==Code::AudioUnavailable) snprintf(info,sizeof info,"Volume %u%%",s.volume);
     lv_label_set_text(_detail,info);lv_label_set_text(_hint,_model.guidance());
     auto shown=[](lv_obj_t* object,bool show) {if(show) lv_obj_clear_flag(object,LV_OBJ_FLAG_HIDDEN);else lv_obj_add_flag(object,LV_OBJ_FLAG_HIDDEN);};

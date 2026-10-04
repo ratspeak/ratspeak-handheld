@@ -29,7 +29,7 @@ bool memorySafe() {
 }
 
 uint64_t nowMs() { return uint64_t(esp_timer_get_time())/1000; }
-void clear(void* p,size_t n) { volatile uint8_t* b=static_cast<uint8_t*>(p);while(n--) *b++=0; }
+void clear(void* p,size_t n) { if(!p)return;volatile uint8_t* b=static_cast<uint8_t*>(p);while(n--) *b++=0; }
 }
 struct VoiceWorker::Impl {
     portMUX_TYPE mux=portMUX_INITIALIZER_UNLOCKED;
@@ -48,6 +48,32 @@ struct VoiceWorker::Impl {
     uint8_t* codec=nullptr;
     int16_t* pcm=nullptr;
     TaskHandle_t task=nullptr;
+    Code allocate() {
+        // The notification owner has now stopped its task and DMA. Admission
+        // accounts for the already allocated worker stack, then reserves the
+        // actual active-direction driver without double-counting notifications.
+#ifdef RSCARDPUTER
+        const uint32_t caps=MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT;
+#else
+        const uint32_t caps=(use==AudioUse::Call?MALLOC_CAP_SPIRAM:MALLOC_CAP_INTERNAL)|MALLOC_CAP_8BIT;
+#endif
+        const auto bytes=rs_handheld_voice_codec_size();
+        const auto retained=bytes+PcmBytes;
+        if(StackBytes+DriverAllowance+sizeof(Impl)+(caps&MALLOC_CAP_INTERNAL?retained:0)>65536 ||
+            heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)<FreeFloor+DriverAllowance+(caps&MALLOC_CAP_INTERNAL?retained:0) ||
+            heap_caps_get_largest_free_block(caps)<bytes ||
+            (!(caps&MALLOC_CAP_INTERNAL) && heap_caps_get_free_size(caps)<retained+ResourceBudget::PsramFree)) return Code::NoMemory;
+        codec=static_cast<uint8_t*>(heap_caps_calloc(1,bytes,caps));
+        pcm=static_cast<int16_t*>(heap_caps_calloc(320,sizeof(int16_t),caps));
+        if(!codec || !pcm || reinterpret_cast<uintptr_t>(codec)%rs_handheld_voice_codec_align() ||
+            !memorySafe() || heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)<FreeFloor+DriverAllowance)
+            return Code::NoMemory;
+        return rs_handheld_voice_codec_init(codec,bytes,profile)==RS_HANDHELD_OK?Code::Ok:Code::AudioUnavailable;
+    }
+    void releaseBuffers() {
+        if(codec)rs_handheld_voice_codec_clear(codec);
+        clear(pcm,PcmBytes);heap_caps_free(codec);heap_caps_free(pcm);codec=nullptr;pcm=nullptr;
+    }
     bool transmitting() const {
         if(talk.load() && uint32_t(nowMs())-VoiceWorker::_inputHeartbeat.load()>250) VoiceWorker::emergencyStop();
         return talk.load() && talkEpoch.load()==VoiceWorker::_stopEpoch.load() && talkEpoch.load()!=UINT32_MAX && !stop.load(); }
@@ -88,42 +114,21 @@ Code VoiceWorker::prepareUse(uint32_t generation,uint8_t profile,uint8_t volumeV
     if (_impl && !_impl->stop.load() && _impl->generation==generation && _impl->profile==profile &&
         _impl->use==use && _impl->frameLimit==frames && _impl->memoEpoch==epoch) return Code::Ok;
     if (_impl) { stop(); if(!drained()) return Code::Busy; }
-#ifdef RSCARDPUTER
-    const uint32_t bufferCaps=MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT;
-    constexpr size_t floor=ResourceBudget::CardInternalFree, largest=ResourceBudget::CardLargestBlock;
-#else
-    const uint32_t bufferCaps=MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT;
-    constexpr size_t floor=ResourceBudget::LargeInternalFree, largest=ResourceBudget::LargeLargestBlock;
-#endif
-    const auto codecBytes=rs_handheld_voice_codec_size();
-    const size_t retained=codecBytes+PcmBytes;
-    const size_t internal=StackBytes+DriverAllowance+sizeof(Impl)+(bufferCaps & MALLOC_CAP_INTERNAL ? retained : 0);
-    if (internal>65536 || heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)<internal+floor ||
+    if (heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)<StackBytes+sizeof(Impl)+FreeFloor ||
         heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)<StackBytes+1024) return Code::NoMemory;
-    if (!(bufferCaps & MALLOC_CAP_INTERNAL) && heap_caps_get_free_size(bufferCaps)<retained+ResourceBudget::PsramFree)
-        return Code::NoMemory;
     auto* memory=heap_caps_malloc(sizeof(Impl),MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
     if (!memory) return Code::NoMemory;
     auto* i=new(memory) Impl;
-    i->codec=static_cast<uint8_t*>(heap_caps_calloc(1,codecBytes,bufferCaps));
-    i->pcm=static_cast<int16_t*>(heap_caps_calloc(320,sizeof(int16_t),bufferCaps));
-    if (!i->codec || !i->pcm || reinterpret_cast<uintptr_t>(i->codec)%rs_handheld_voice_codec_align()) {
-        heap_caps_free(i->codec);heap_caps_free(i->pcm);i->~Impl();heap_caps_free(i);return Code::NoMemory;
-    }
     i->generation=generation;i->status.generation=generation;i->profile=profile;i->volume=volumeValue;
     i->use=use;i->frameLimit=frames;i->memoEpoch=epoch;
     if (!AudioCoordinator::instance().request()) {
-        heap_caps_free(i->codec);heap_caps_free(i->pcm);i->~Impl();heap_caps_free(i);return Code::Busy;
+        i->~Impl();heap_caps_free(i);return Code::Busy;
     }
     _impl=i;
     if (xTaskCreate(run,"voice-audio",StackBytes,i,2,&i->task)!=pdPASS) {
         i->stop=true;i->done=true;
         // UI may be between suspend and publication. drained() waits for its handoff.
         drained();return Code::NoMemory;
-    }
-    if (heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)<floor+DriverAllowance ||
-        heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)<largest) {
-        stop();return Code::NoMemory;
     }
     return Code::Ok;
 }
@@ -133,8 +138,7 @@ bool VoiceWorker::drained() {
     auto* i=_impl;
     if (!i) return true;
     if (!i->done.load() || !AudioCoordinator::instance().release()) return false;
-    rs_handheld_voice_codec_clear(i->codec);clear(i->pcm,PcmBytes);
-    heap_caps_free(i->codec);heap_caps_free(i->pcm);
+    i->releaseBuffers();
     i->~Impl();clear(i,sizeof(Impl));heap_caps_free(i);_impl=nullptr;return true;
 }
 AudioStatus VoiceWorker::status() const {
@@ -200,8 +204,8 @@ void VoiceWorker::run(void* pointer) {
         if(!owned) vTaskDelay(1);
     }
     if(owned && !i.stop) {
-        ready=rs_handheld_voice_codec_init(i.codec,rs_handheld_voice_codec_size(),i.profile)==RS_HANDHELD_OK && i.device.prepare(i.volume);
-        if(!ready) failure=Code::AudioUnavailable;
+        failure=i.allocate();
+        if(failure==Code::Ok) {ready=i.device.prepare(i.volume);if(!ready)failure=Code::AudioUnavailable;}
     }
     if(ready && !memorySafe()) {ready=false;failure=Code::NoMemory;}
     i.update(ready,false,false,failure);
@@ -268,7 +272,7 @@ void VoiceWorker::run(void* pointer) {
     }
     // Hardware and sensitive buffers retire before readiness/completion is published.
     if(owned) i.device.end();
-    i.queues();clear(i.pcm,PcmBytes);clear(&encoded,sizeof encoded);rs_handheld_voice_codec_clear(i.codec);
+    i.queues();clear(&encoded,sizeof encoded);i.releaseBuffers();
     i.update(false,false,false,failure);
     while(!AudioCoordinator::instance().release()) vTaskDelay(1);
     i.done.store(true);
@@ -282,7 +286,6 @@ void VoiceWorker::runMemo(Impl& i) {
     size_t used=0,packetFrames=0,total=0;
     Encoded packet;packet.generation=i.generation;
     const uint64_t started=nowMs();uint64_t waiting=started;
-    unsigned overruns=0;
     auto alive=[&] {return uint32_t(nowMs())-VoiceWorker::_inputHeartbeat.load()<=1000;};
     auto cancelled=[&] {return i.finish.load() || i.memoEpoch!=VoiceWorker::_stopEpoch.load();};
     auto timing=[&](int64_t before,bool encoding) {
@@ -291,8 +294,10 @@ void VoiceWorker::runMemo(Impl& i) {
         auto& maximum=encoding?i.status.encodeUs:i.status.decodeUs;
         if(elapsed>maximum) maximum=elapsed;
         portEXIT_CRITICAL(&i.mux);
-        overruns=elapsed>20000?overruns+1:0;
-        return elapsed<=40000 && overruns<3;
+        // A native memo frame contains 40 ms of audio. The continuous capture
+        // buffers cover I/O scheduling; overflow fails explicitly. The live-call
+        // 50-percent processing headroom policy above does not apply to memos.
+        return elapsed<=40000;
     };
     auto frames=[&] {
         portENTER_CRITICAL(&i.mux);i.status.frames=total;portEXIT_CRITICAL(&i.mux);
@@ -322,9 +327,11 @@ void VoiceWorker::runMemo(Impl& i) {
         if(!owned) vTaskDelay(1);
     }
     if(owned && !i.stop && !cancelled() && failure==Code::Ok) {
-        ready=rs_handheld_voice_codec_init(i.codec,rs_handheld_voice_codec_size(),MemoProfile)==RS_HANDHELD_OK && i.device.prepare(i.volume);
-        if(ready && record) ready=i.device.capture(true);
-        if(!ready) failure=Code::AudioUnavailable;
+        failure=i.allocate();
+        if(failure==Code::Ok && !i.stop && !cancelled()) {
+            if(!alive()) failure=Code::InputLost;
+            else {ready=i.device.prepare(i.volume,record);if(!ready) failure=i.device.error();}
+        }
     }
     if(ready && !memorySafe()) {ready=false;failure=Code::NoMemory;}
     i.update(ready,ready&&record,false,failure);
@@ -338,7 +345,7 @@ void VoiceWorker::runMemo(Impl& i) {
             // An in-flight read may span Stop. Only PCM already accepted before
             // that stop belongs to the draft; never append post-stop samples.
             if(cancelled()) {normalStop=true;break;}
-            if(got!=160) {failure=Code::AudioUnavailable;break;}
+            if(got!=160) {failure=i.device.error();break;}
             used+=got;
             if(used==320 && !encode()) break;
         } else {
@@ -375,7 +382,7 @@ void VoiceWorker::runMemo(Impl& i) {
         if(failure==Code::Ok) queue();
     }
     if(i.stop || failure!=Code::Ok || !record) i.queues();
-    clear(i.pcm,PcmBytes);clear(&packet,sizeof packet);rs_handheld_voice_codec_clear(i.codec);
+    clear(&packet,sizeof packet);i.releaseBuffers();
     i.update(false,false,false,failure);
     while(!AudioCoordinator::instance().release()) vTaskDelay(1);
     portENTER_CRITICAL(&i.mux);i.status.finished=true;portEXIT_CRITICAL(&i.mux);
