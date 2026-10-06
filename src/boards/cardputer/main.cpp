@@ -1144,5 +1144,8 @@ void loop() {
     }
     loopCycleStart = now;
 
-    yield();
+    // M5's microphone/speaker tasks self-delete; their stacks are reclaimed by
+    // the idle task. yield() only offers this core to equally/higher-priority
+    // ready work and can retain those stacks across repeated previews.
+    vTaskDelay(1);
 }

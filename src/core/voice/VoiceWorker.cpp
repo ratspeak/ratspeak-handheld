@@ -136,7 +136,7 @@ Code VoiceWorker::prepareUse(uint32_t generation,uint8_t profile,uint8_t volumeV
     AudioUse use,uint16_t frames,uint32_t epoch) {
     if (!capabilities()) return Code::AudioUnavailable;
     if (!generation || !profileInfo(profile).native_samples) return Code::ProfileUnsupported;
-    if (_impl && !_impl->stop.load() && _impl->generation==generation && _impl->profile==profile &&
+    if (_impl && !_impl->stop.load() && !_impl->done.load() && _impl->generation==generation && _impl->profile==profile &&
         _impl->use==use && _impl->frameLimit==frames && _impl->memoEpoch==epoch) return Code::Ok;
     if (_impl) { stop(); if(!drained()) return Code::Busy; }
     portENTER_CRITICAL(&memoryMux);memoryReport={};portEXIT_CRITICAL(&memoryMux);
@@ -152,7 +152,9 @@ Code VoiceWorker::prepareUse(uint32_t generation,uint8_t profile,uint8_t volumeV
         i->~Impl();heap_caps_free(i);return Code::Busy;
     }
     _impl=i;
-    if (xTaskCreate(run,"voice-audio",StackBytes,i,2,&i->task)!=pdPASS) {
+    // The owner must reclaim the suspended task on its affinity core. An
+    // unpinned floating-point task can acquire a different affinity in IDF.
+    if (xTaskCreatePinnedToCore(run,"voice-audio",StackBytes,i,2,&i->task,xPortGetCoreID())!=pdPASS) {
         i->stop=true;i->done=true;
         // UI may be between suspend and publication. drained() waits for its handoff.
         const auto code=memoryFailure(MemoryStage::Task,StackBytes+FreeFloor,StackBytes);
@@ -165,7 +167,16 @@ void VoiceWorker::finishMemo() { if(_impl && _impl->use!=AudioUse::Call) _impl->
 bool VoiceWorker::drained() {
     auto* i=_impl;
     if (!i) return true;
-    if (!i->done.load() || !AudioCoordinator::instance().release()) return false;
+    if (!i->done.load()) return false;
+    if (i->task) {
+        // Completion is published before the worker leaves its stack. IDF
+        // checks both running cores; only a suspended task on this core can
+        // be deleted with immediate stack/TCB/TLS reclamation. Self-deletion
+        // defers that memory to idle and can make the next preview fail.
+        if (eTaskGetState(i->task)!=eSuspended || xTaskGetAffinity(i->task)!=xPortGetCoreID()) return false;
+        vTaskDelete(i->task);i->task=nullptr;
+    }
+    if (!AudioCoordinator::instance().release()) return false;
     i->releaseBuffers();i->releaseMemo();
     i->~Impl();clear(i,sizeof(Impl));heap_caps_free(i);_impl=nullptr;return true;
 }
@@ -313,9 +324,10 @@ void VoiceWorker::run(void* pointer) {
     if(owned) i.device.end();
     i.queues();clear(&encoded,sizeof encoded);i.releaseBuffers();
     i.update(false,false,false,failure);
-    while(!AudioCoordinator::instance().release()) vTaskDelay(1);
     i.done.store(true);
-    vTaskDelete(nullptr);
+    // No Impl access after publication. The owner confirms kernel suspension
+    // and reclaims this task before restoring notifications or admitting replay.
+    for(;;) vTaskSuspend(nullptr);
 }
 
 void VoiceWorker::runMemo(Impl& i) {
@@ -429,9 +441,9 @@ void VoiceWorker::runMemo(Impl& i) {
     else i.memoLength=uint16_t(total*4);
     clear(&packet,sizeof packet);i.releaseBuffers();
     i.update(false,false,false,failure);
-    while(!AudioCoordinator::instance().release()) vTaskDelay(1);
     portENTER_CRITICAL(&i.mux);i.status.finished=true;portEXIT_CRITICAL(&i.mux);
-    i.done.store(true);vTaskDelete(nullptr);
+    i.done.store(true);
+    for(;;) vTaskSuspend(nullptr);
 }
 }
 
