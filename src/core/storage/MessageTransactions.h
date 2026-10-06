@@ -17,6 +17,7 @@ namespace handheld::storage {
 class MessageTransactions final : public WriteQueue::Executor {
 public:
     bool begin(FlashStore* flash, SDStore* sd, bool external, bool deferred);
+    bool expireTemporaryMemos(); // boot owner, before queue admission; never message records
     void execute(const Request&, uint8_t*, size_t length, size_t capacity, Result&) override;
     void setExternal(bool enabled) { _external = enabled; clearSummaries(); } // owner, quiescent only
     bool external() const { return _external; }

@@ -15,6 +15,7 @@ public:
     void update(const Status&,bool foregroundAllowed);
     void acknowledge(uint32_t serial,Code);
     void hide();
+    void closeConversation();
     void back();
     void show() {if(_status.view) _visible=true;}
     void choose(Choice);
@@ -27,7 +28,7 @@ public:
     bool visible() const {return _visible;}
     bool active() const {return busy(_status.phase);}
     const Status& status() const {return _status;}
-    const uint8_t* peer() const {return _status.peer;}
+    const uint8_t* peer() const {return _openAfterEnd?_nextOpen.peer:_status.peer;}
     const char* text() const;
     const char* guidance() const;
     uint32_t layout() const;
@@ -40,6 +41,10 @@ private:
     void* _context=nullptr;
     Submit _submit=nullptr;
     Status _status;
+    // Keep the accepted owner while a replacement Open is awaiting admission.
+    // A rejected panel reopen must not orphan the conversation's temporary clip.
+    Status _owner;
+    Command _nextOpen;
     uint32_t _serial=0,_anchor=0,_deleteRevision=0;
     Code _error=Code::Ok;
     Action _action=Action::Close;
@@ -47,5 +52,6 @@ private:
     Deletion _deletion=Deletion::None;
     uint8_t _focus=0;
     bool _visible=false,_pending=false,_close=false,_stop=false;
+    bool _end=false,_endAccepted=false,_openAfterEnd=false;
 };
 }

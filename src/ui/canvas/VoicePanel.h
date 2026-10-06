@@ -10,6 +10,7 @@ public:
     void startMessage(const char* peerHex,uint32_t counter,bool incoming);
     void show() {_model.show();}
     void hide() {_model.hide();}
+    void closeConversation() {_model.closeConversation();}
     bool takeIncoming() {return false;}
     bool visible() const {return _model.visible();}
     bool active() const {return _model.active();}

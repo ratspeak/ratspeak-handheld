@@ -20,9 +20,10 @@ void Controller::begin(const Deps& deps,const uint8_t local[16],uint8_t volume) 
     if(!drained()) return;
     _d=deps;memcpy(_local,local,16);_accepting=true;_closed=true;
     const auto generation=_status.generation;
-    _status={};_status.generation=generation;_status.volume=std::min(uint8_t(100),volume);
+    _status={};_status.generation=generation;_status.volume=_configuredVolume=std::min(uint8_t(100),volume);
     _status.capabilities=_d.audio?_d.audio->capabilities():0;
     _draft={};_media={};_packet={};_stopping=_recording=false;
+    _conversation=_ending=false;_expiryRetry=0;
     phase(Phase::Idle);
 }
 void Controller::phase(Phase value,Code code) {
@@ -44,19 +45,26 @@ sm::Command Controller::binding() const {
     command.revision=_draft.revision;command.timestamp=_sendTime;command.policy=_policy;return command;
 }
 Code Controller::command(const Command& command,sm::Command send) {
-    if(!_d.store || !_d.audio || command.action>Action::Retry || command.volume>100) return Code::Invalid;
+    if(!_d.store || !_d.audio || command.action>Action::EndConversation || command.volume>100) return Code::Invalid;
     if(command.action==Action::Open) {
         if(!_accepting || !command.view || command.view<=_viewFloor || _status.generation==UINT32_MAX) return Code::Stale;
         if(!drained() || busy(_status.phase)) return Code::Busy;
+        if(_conversation && memcmp(command.peer,_status.peer,16)) return Code::Stale;
         _viewFloor=command.view;_status.view=command.view;++_status.generation;
         memcpy(_status.peer,command.peer,16);_status.counter=command.counter;_status.incoming=command.incoming;
         _status.fromMessage=command.counter!=0;_status.length=0;_status.frames=0;_status.retryable=false;_recordRevision=0;
         _draft={};_media={};_failure=Code::Ok;_closed=false;_stopping=false;
         _status.storageStep=_status.storageError=_status.audioError=0;
-        _work=_status.fromMessage?Work::Message:Work::Inspect;phase(Phase::Loading);return Code::Ok;
+        _work=!_conversation?Work::Fresh:_status.fromMessage?Work::Message:Work::Inspect;phase(Phase::Loading);return Code::Ok;
     }
     if(command.view!=_status.view || command.generation!=_status.generation ||
         memcmp(command.peer,_status.peer,16)) return Code::Stale;
+    if(command.action==Action::EndConversation) {
+        if(_status.phase==Phase::Closed) return Code::Ok;
+        _ending=_closed=_stopping=true;_expiryRetry=0;
+        if(_audioOwned) _d.audio->stop();
+        return Code::Ok;
+    }
     if(command.action==Action::Stop || command.action==Action::Close) {
         if(command.action==Action::Close) _closed=true;
         if(_work==Work::ClearReplace) _stopping=true;
@@ -119,6 +127,8 @@ void Controller::submit() {
     auto command=binding();storage::Submission submission;
     using Op=storage::Operation;
     switch(_work) {
+    case Work::Fresh: case Work::Expire:
+        submission=_d.store->requestMemo(Op::MemoExpire,command,nullptr,0,sizeof(sm::Snapshot));break;
     case Work::Inspect: submission=_d.store->requestMemo(Op::MemoRead,command,nullptr,0,sizeof(sm::Snapshot));break;
     case Work::Begin:
         command.offset=_draft.workingRevision;submission=_d.store->requestMemo(Op::MemoBegin,command);break;
@@ -142,6 +152,7 @@ void Controller::submit() {
     if(submission.rejection==storage::Rejection::Busy || submission.rejection==storage::Rejection::Fenced) return;
     if(_work==Work::Retry && submission.rejection==storage::Rejection::Invalid) {fail(Code::Stale);return;}
     _status.storageStep=uint8_t(_work);_status.storageError=0x80|uint8_t(submission.rejection);
+    if(_work==Work::Expire) {_work=Work::None;_expiryRetry=_now+1000;phase(Phase::Saving,Code::StorageUnavailable);return;}
     if(_work==Work::Cancel) {_work=Work::None;_recording=false;review(_failure==Code::Ok?Code::StorageUnavailable:_failure);}
     else fail(Code::StorageUnavailable);
 }
@@ -150,6 +161,23 @@ void Controller::settle() {
     storage::Result result;
     if(!_d.store->peekResult(_ticket,result)) return;
     const auto operation=_work;bool valid=result.outcome==storage::Outcome::Committed;
+    if(operation==Work::Expire || operation==Work::Fresh) {
+        _d.store->releaseResult(_ticket);_ticket={};_work=Work::None;
+        if(!valid) {
+            _status.storageStep=uint8_t(operation);_status.storageError=uint8_t(result.error);
+            if(operation==Work::Expire) {_expiryRetry=_now+1000;phase(Phase::Saving,Code::StorageUnavailable);}
+            else {phase(Phase::Unavailable,Code::StorageUnavailable);}
+            return;
+        }
+        _draft={};_packet={};_recording=false;_status.draftRevision=0;
+        if(operation==Work::Fresh && !_ending) {
+            _conversation=true;_work=_status.fromMessage?Work::Message:Work::Inspect;
+        } else {
+            _conversation=_ending=false;
+            _status.length=0;_status.frames=0;_status.fromMessage=false;phase(Phase::Closed);
+        }
+        return;
+    }
     if(operation==Work::Retry) {
         valid=valid && result.key.counter==_status.counter && !result.key.incoming &&
             !memcmp(result.key.peer,_status.peer,16) && result.revision>_recordRevision;
@@ -227,7 +255,7 @@ void Controller::settle() {
         else review();
         break;
     case Work::Clip: break;
-    case Work::None: case Work::Retry: break;
+    case Work::None: case Work::Retry: case Work::Fresh: case Work::Expire: break;
     }
 }
 void Controller::audio() {
@@ -251,6 +279,9 @@ void Controller::audio() {
     if(!_audioOwned) return;
     const auto status=_d.audio->status();
     if(status.generation!=_status.generation) {fail(Code::AudioUnavailable);return;}
+    if(_ending && status.finished && !_ticket.valid() && _d.audio->drained()) {
+        _audioOwned=_recording=false;_work=Work::None;_packet={};return;
+    }
     if(status.frames!=_status.frames) {_status.frames=status.frames;phase(_status.phase,_status.reason);}
     _status.stackFree=status.stackFree;_status.encodeUs=status.encodeUs;_status.decodeUs=status.decodeUs;
     if(_recording && status.capturing && !_stopping && _status.phase==Phase::Starting) phase(Phase::Recording);
@@ -284,17 +315,25 @@ void Controller::audio() {
 }
 void Controller::poll(uint64_t now) {
     if(!_d.store || !_d.audio) return;
-    _now=now;settle();audio();submit();
+    _now=now;settle();
+    if(!_ending || _audioOwned) audio();
+    if(_ending && !_audioOwned && !_ticket.valid() && _work!=Work::Promote && _now>=_expiryRetry) {
+        _work=Work::Expire;_packet={};_recording=false;phase(Phase::Saving);
+    }
+    submit();
 }
 void Controller::stop() {
     _accepting=false;_closed=true;_stopping=true;
+    _ending=_status.view && _status.phase!=Phase::Closed;_expiryRetry=0;
     if(_audioOwned) {if(_recording) _d.audio->finishMemo();else _d.audio->stop();}
     if(_work==Work::Promote && !_ticket.valid()) {_work=Work::None;review();}
 }
-void Controller::volume(uint8_t value) {
-    _status.volume=std::min(value,uint8_t(100));
+void Controller::configureVolume(uint8_t value) {
+    value=std::min(value,uint8_t(100));
+    if(value==_configuredVolume) return;
+    _status.volume=_configuredVolume=value;
     if(_d.audio) _d.audio->volume(_status.volume);
     phase(_status.phase,_status.reason);
 }
-bool Controller::drained() const {return !_audioOwned && !_ticket.valid() && _work==Work::None && !busy(_status.phase);}
+bool Controller::drained() const {return !_ending && !_audioOwned && !_ticket.valid() && _work==Work::None && !busy(_status.phase);}
 }

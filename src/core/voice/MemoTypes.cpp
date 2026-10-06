@@ -20,6 +20,7 @@ const char* description(const Status& status) {
     case Code::Ok: break;
     }
     switch(status.phase) {
+    case Phase::Closed: return "Conversation closed";
     case Phase::Unavailable: return "Voice message unavailable";
     case Phase::Loading: return "Loading...";
     case Phase::Idle: return "Ready to record";
@@ -27,7 +28,7 @@ const char* description(const Status& status) {
     case Phase::Recording: return "Recording";
     case Phase::Stopping: return "Stopping...";
     case Phase::Saving: return "Saving...";
-    case Phase::Review: return status.fromMessage ? "Voice message" : "Saved draft";
+    case Phase::Review: return status.fromMessage ? "Voice message" : "Voice clip";
     case Phase::Playing: return "Playing";
     case Phase::Sending: return status.fromMessage?"Retrying message...":"Adding to messages...";
     case Phase::Sent: return status.fromMessage?"Retry queued":"Added to messages";

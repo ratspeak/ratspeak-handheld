@@ -970,7 +970,7 @@ void ProtocolRuntime::lxmfFinishPeerDelete(const uint8_t peer[16],
 void ProtocolRuntime::configureVoice(const handheld::voice::Settings& settings) {
     auto unavailable=settings;unavailable.enabled=false;
     _voice.configure(unavailable);_voiceEnabled=false;_nextVoiceAnnounce=0;
-    _memos.volume(settings.volume);
+    _memos.configureVolume(settings.volume);
 }
 
 handheld::memo::Code ProtocolRuntime::memoCommand(const handheld::memo::Command& command) {

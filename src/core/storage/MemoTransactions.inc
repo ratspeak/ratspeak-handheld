@@ -161,6 +161,40 @@ void memoRemoveWork(Medium& store, const char* path) {
 }
 }
 
+bool MessageTransactions::expireTemporaryMemos() {
+    // A reboot ends every conversation. Also retire clips made by older builds.
+    // Use bounded directory cursors and release file handles before unlinking.
+    auto store=medium(0);File root;
+    if(openDirectory(0,PATH_MESSAGES,true,root)!=Error::None || !root) return false;
+    for(;;) {
+        errno=0;File peer=root.openNextFile();
+        if(!peer) return errno==0;
+        uint8_t address[16];
+        if(!peer.isDirectory() || !decodeHex(peer.name(),strnlen(peer.name(),33),address,16)) continue;
+        char parent[96];directory(address,0,parent);peer.close();
+        for(;;) {
+            File dir;if(openDirectory(0,parent,true,dir)!=Error::None || !dir) return false;
+            bool removed=false;
+            for(;;) {
+                errno=0;File entry=dir.openNextFile();
+                if(!entry) {if(errno) return false;break;}
+                const char* name=entry.name();const size_t size=strnlen(name,64);uint8_t local[16];
+                if(entry.isDirectory() || size<43 || strncmp(name,".memo-",6) || !decodeHex(name+6,32,local,16)) continue;
+                const char* kind=name+38;bool temporary=false;
+                for(const char* suffix:{".saved",".saved.bak",".saved.tmp",".work",".work.bak",".work.tmp"})
+                    temporary|=!strcmp(kind,suffix);
+                if(!temporary) continue;
+                char path[176];snprintf(path,sizeof path,"%s/%s",parent,name);
+                entry.close();dir.close();
+                if(!store.remove(path)) return false;
+                removed=true;break; // Reopen after unlink; never skip shifted entries.
+            }
+            if(!removed) break;
+            yield();
+        }
+    }
+}
+
 bool MessageTransactions::memoRetains(const RecordKey& key, const StoredRecordHeader& header, uint32_t revision) {
     if (!revision || header.incoming) return false;
     auto store = medium(0);
@@ -169,7 +203,8 @@ bool MessageTransactions::memoRetains(const RecordKey& key, const StoredRecordHe
     char parent[96], local[33], name[176]; directory(key.peer, 0, parent); encodeHex(header.source, 16, local);
     snprintf(name, sizeof name, "%s/.memo-%s.saved", parent, local);
     MemoFile saved; File file;
-    if (memoLoad(store, name, request, saved, file) != Error::None || !file) return true;
+    if (memoLoad(store, name, request, saved, file) != Error::None) return true;
+    if (!file) return false; // An expired conversation cannot retry its old promotion.
     // A newer main revision proves explicit replacement/discard after retirement.
     // Until then a failed retirement must pin the exact outbox record, even if
     // delivery has already completed and ordinary retention would remove it.
@@ -190,6 +225,16 @@ void MessageTransactions::memoTransaction(const Request& request, uint8_t* bytes
     if (!store.isReady()) { result.error = Error::Unavailable; return; }
     char parent[96], local[33], savedPath[176], workPath[176];
     directory(request.key.peer, 0, parent); encodeHex(request.source, 16, local);
+    if(request.operation==Operation::MemoExpire) {
+        // The controller has drained this conversation's audio and storage work.
+        // Remove only its temporary clip; committed outbox/audio records remain.
+        for(const char* kind:{"work","saved"}) for(const char* suffix:{".bak",".tmp",""}) {
+            char path[192];snprintf(path,sizeof path,"%s/.memo-%s.%s%s",parent,local,kind,suffix);
+            if(store.exists(path) && !store.remove(path)) {result.error=Error::Write;return;}
+        }
+        const memo::Snapshot empty{};memcpy(bytes,&empty,sizeof empty);result.length=sizeof empty;
+        result.outcome=Outcome::Committed;return;
+    }
     uint32_t cutoff;
     result.error = memoCutoff(store, parent, cutoff);
     if (result.error != Error::None) return;

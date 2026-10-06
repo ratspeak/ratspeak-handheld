@@ -23,7 +23,7 @@ struct Snapshot {
 static_assert(sizeof(Snapshot) <= 20, "Memo result metadata budget changed");
 
 inline bool operation(Operation op) {
-    return op >= Operation::MemoRead && op <= Operation::MemoCancel;
+    return (op >= Operation::MemoRead && op <= Operation::MemoCancel) || op == Operation::MemoExpire;
 }
 
 // Read: revision zero inspects the current draft, otherwise exact revision.
@@ -35,6 +35,9 @@ inline bool operation(Operation op) {
 // Read returns saved audio at offset, never an incomplete working recording.
 // Promote freezes timestamp/policy on its first successful durable reservation;
 // retries ignore later changes to those parameters and reuse its outbox counter.
+// These files are temporary conversation work, not user drafts. The controller
+// serializes MemoExpire after draining this peer; it removes every working/saved
+// copy without touching committed messages. Startup removes abandoned clips.
 struct Command {
     uint8_t local[16] = {}, peer[16] = {};
     uint32_t revision = 0, offset = 0;

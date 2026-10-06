@@ -3,11 +3,11 @@
 #include <type_traits>
 
 namespace handheld::memo {
-enum class Phase : uint8_t { Unavailable, Loading, Idle, Starting, Recording, Stopping, Saving, Review, Playing, Sending, Sent };
+enum class Phase : uint8_t { Unavailable, Loading, Idle, Starting, Recording, Stopping, Saving, Review, Playing, Sending, Sent, Closed };
 enum class Code : uint8_t { Ok, Busy, Stale, Invalid, MicrophoneUnavailable, PlaybackUnavailable,
     UnsupportedAudio, AudioUnavailable, StorageUnavailable, Interrupted, NoMemory, TooShort,
     Recovered, DeviceBusy, InputLost, CaptureOverflow };
-enum class Action : uint8_t { Open, Record, Stop, Play, Send, Replace, Discard, Close, Volume, Retry };
+enum class Action : uint8_t { Open, Record, Stop, Play, Send, Replace, Discard, Close, Volume, Retry, EndConversation };
 struct Command {
     uint32_t view = 0, generation = 0, draftRevision = 0, stopEpoch = 0, counter = 0;
     uint8_t peer[16]{};

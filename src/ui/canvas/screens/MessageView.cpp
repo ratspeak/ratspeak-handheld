@@ -138,11 +138,13 @@ bool MessageView::prepareDraft(String& identity) {
 
 bool MessageView::setPeerHex(const std::string& peerHex) {
     if (!leaveRrcDraft()) return false;
+    if((_rrcMode || _peerHex!=peerHex) && _voiceClose) _voiceClose();
     if (_rrcMode || _peerHex!=peerHex) _history.close();
     _rrcMode=false;++_rrcView;_peerHex=peerHex;
     return true;
 }
 void MessageView::onExit() {
+    if(_voiceClose) _voiceClose();
     _rrcTools.close();
     _rrcSendRequested=false; // Already-admitted messages continue on their protocol owner.
     if (_rrcMode) saveRrcDraft(true);

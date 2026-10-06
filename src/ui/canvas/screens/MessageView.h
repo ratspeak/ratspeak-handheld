@@ -23,6 +23,7 @@ public:
 
     void setLXMFManager(LXMFManager* lxmf) { _lxmf = lxmf; }
     void setVoiceCallback(std::function<void(const char*,uint32_t,bool)> callback) {_voice=std::move(callback);}
+    void setVoiceCloseCallback(std::function<void()> callback) {_voiceClose=std::move(callback);}
     void setBackend(ProtocolBackend* backend) { _backend = backend; }
     void setMessageStore(MessageStore* store) { _store = store; }
     void setAnnounceManager(AnnounceManager* am) { _am = am; }
@@ -93,6 +94,7 @@ private:
     TextInput _input;
     BackCallback _backCb;
     std::function<void(const char*,uint32_t,bool)> _voice;
+    std::function<void()> _voiceClose;
     UnreadUpdateCb _unreadCb;
     bool _needsRefresh = false;
 

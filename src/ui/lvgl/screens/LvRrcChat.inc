@@ -28,6 +28,7 @@ bool LvMessageView::setRrcConversation(const handheld::rrc::Conversation& bindin
             _retainedDraft=_inputText;_retainedDraftPeer=_peerHex;_retainedDraftRevision=_draftRevision;
             _retainedDraftIdentity=_service->status().generation;
         }
+        if(_ui) _ui->closeVoiceConversation();
         clearMessages();_service->closeHistory();
         _rrcMode=true;_rrcBinding=binding;_rrcIdentity=_service->status().generation;++_rrcView;
         _peerHex.clear();_inputText.clear();composerEdited();

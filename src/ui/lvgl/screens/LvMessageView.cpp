@@ -417,6 +417,7 @@ bool LvMessageView::setPeerHex(const std::string& hex) {
     if (_rrcMode && !leaveRrcDraft()) return false;
     const bool wasRrc=_rrcMode;_rrcMode=false;++_rrcView;
     if (_peerHex == hex && !wasRrc) return true;
+    if(_ui) _ui->closeVoiceConversation();
     clearMessages();
     if (_service) _service->historyWindow().acknowledgePublication(_service->historyWindow().revision());
     _peerHex = hex;
@@ -630,6 +631,7 @@ void LvMessageView::onEnter() {
 }
 
 void LvMessageView::onExit() {
+    if(_ui) _ui->closeVoiceConversation();
     _rrcTools.close();hideSendModeMenu();
     _rrcSendRequested=false; // Leaving cancels an intent still waiting for draft durability.
     if (_rrcMode) saveRrcDraft(true);

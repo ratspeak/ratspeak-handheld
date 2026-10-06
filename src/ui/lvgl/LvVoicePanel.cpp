@@ -25,6 +25,10 @@ void LvVoicePanel::hide() {
     _model.hide();_pressed=Ui::Choice::None;
     if(_root) {lv_obj_del(_root);_root=nullptr;}
 }
+void LvVoicePanel::closeConversation() {
+    _model.closeConversation();_pressed=Ui::Choice::None;
+    if(_root) {lv_obj_del(_root);_root=nullptr;}
+}
 void LvVoicePanel::action(Ui::Choice choice) {_pressed=Ui::Choice::None;_model.choose(choice);render();}
 void LvVoicePanel::build() {
     if(_root || !_model.visible()) return;
@@ -83,8 +87,14 @@ void LvVoicePanel::render() {
     lv_label_set_text(_detail,info);lv_label_set_text(_hint,_model.guidance());
     auto shown=[](lv_obj_t* object,bool show) {if(show) lv_obj_clear_flag(object,LV_OBJ_FLAG_HIDDEN);else lv_obj_add_flag(object,LV_OBJ_FLAG_HIDDEN);};
     bool backInActions=false;
+    const bool confirmation=_model.choice(0)==Ui::Choice::ConfirmReplace || _model.choice(0)==Ui::Choice::ConfirmDiscard;
+    const int width=Theme::SCREEN_W-24;
     for(unsigned i=0;i<3;++i) {
         const auto choice=_model.choice(i);shown(_buttons[i],choice!=Ui::Choice::None);
+        // Confirmations are one equal row, Delete left and Cancel right.
+        lv_obj_set_pos(_buttons[i],confirmation?int(i)*(width+6)/2:i==2?(width+6)/2:0,
+            confirmation?Theme::SCREEN_H-100:Theme::SCREEN_H-(i?80:130));
+        lv_obj_set_size(_buttons[i],confirmation || i?(width-6)/2:width,confirmation?40:i?32:40);
         backInActions|=choice==Ui::Choice::Back;
         lv_label_set_text(lv_obj_get_child(_buttons[i],0),Ui::label(choice));
         const bool selected=i==_model.focus();

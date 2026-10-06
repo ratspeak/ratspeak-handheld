@@ -49,6 +49,9 @@ bool MessageStore::begin(FlashStore* flash, SDStore* sd, bool externalStorageEna
     }
 #endif
     if (!transactions().begin(_flash, _sd, _externalStorageEnabled, STORAGE_DEFERRED_IO != 0)) return false;
+    if (!transactions().expireTemporaryMemos()) {
+        Serial.println("[MSGSTORE] Temporary voice cleanup pending; retry initialization");return false;
+    }
     try {
         if (!loadStartupMetadata()) {
             Serial.println("[MSGSTORE] Initialization deferred: incomplete startup message metadata"); return false;

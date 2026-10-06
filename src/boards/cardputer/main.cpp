@@ -805,6 +805,7 @@ void setup() {
     messageView.setBackend(backend);
     voicePanel.begin(backend);ui.setVoicePanel(&voicePanel);
     messageView.setVoiceCallback([](const char* peer,uint32_t counter,bool incoming) {voicePanel.startMessage(peer,counter,incoming);});
+    messageView.setVoiceCloseCallback([] {voicePanel.closeConversation();});
     messageView.setAnnounceManager(announceManager);
     messageView.setBackCallback([]() {
         ui.setScreen(&messagesScreen);
