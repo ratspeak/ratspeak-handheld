@@ -11,6 +11,7 @@
 #include <memory>
 #include <new>
 #if USERCONFIG_NVS_BACKUP
+#include "storage/StorageLease.h"
 #include <Preferences.h>
 #include <nvs.h>
 #endif
@@ -70,6 +71,8 @@ bool reserveConfigVector(std::vector<T>& values, size_t count) {
 #if USERCONFIG_NVS_BACKUP
 // Full-JSON NVS backup tier — internal flash, no SPI bus, wear-leveled
 bool saveToNVS(const String& json) {
+    handheld::storage::StorageLease lease;
+    if (!lease.held()) return false;
     Preferences prefs;
     if (!prefs.begin(NVS_NS_CFG, false)) return false;
     bool ok = prefs.putString("json", json) > 0;

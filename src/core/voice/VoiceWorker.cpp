@@ -4,6 +4,7 @@
 #include "voice/AudioDevice.h"
 #include "voice/AudioCoordinator.h"
 #include "runtime/ResourceBudget.h"
+#include "storage/CaptureQuiet.h"
 #include "ratspeak_protocol.h"
 #include "config/Config.h"
 #include <Arduino.h>
@@ -13,6 +14,7 @@
 #include <freertos/task.h>
 #include <new>
 #include <cstring>
+#include <algorithm>
 
 namespace handheld::voice {
 namespace {
@@ -58,6 +60,9 @@ struct VoiceWorker::Impl {
     uint32_t memoEpoch=0;
     uint32_t generation=0;
     uint8_t* codec=nullptr;
+    // Encoded-only retention survives microphone teardown until storage drains.
+    uint8_t* memo=nullptr;
+    uint16_t memoLength=0, memoOffset=0;
     int16_t* pcm=nullptr;
     TaskHandle_t task=nullptr;
     Code allocate() {
@@ -70,14 +75,16 @@ struct VoiceWorker::Impl {
         const uint32_t caps=(use==AudioUse::Call?MALLOC_CAP_SPIRAM:MALLOC_CAP_INTERNAL)|MALLOC_CAP_8BIT;
 #endif
         const auto bytes=rs_handheld_voice_codec_size();
-        const auto retained=bytes+PcmBytes;
+        const size_t memoBytes=use==AudioUse::MemoRecord?size_t(frameLimit)*4:0;
+        const auto retained=bytes+PcmBytes+memoBytes;
         if(StackBytes+DriverAllowance+sizeof(Impl)+(caps&MALLOC_CAP_INTERNAL?retained:0)>65536 ||
             heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)<FreeFloor+DriverAllowance+(caps&MALLOC_CAP_INTERNAL?retained:0) ||
             heap_caps_get_largest_free_block(caps)<bytes ||
             (!(caps&MALLOC_CAP_INTERNAL) && heap_caps_get_free_size(caps)<retained+ResourceBudget::PsramFree)) return memoryFailure(MemoryStage::CodecBudget,FreeFloor+DriverAllowance+(caps&MALLOC_CAP_INTERNAL?retained:0),caps&MALLOC_CAP_INTERNAL?bytes:LargestFloor);
         codec=static_cast<uint8_t*>(heap_caps_calloc(1,bytes,caps));
         pcm=static_cast<int16_t*>(heap_caps_calloc(320,sizeof(int16_t),caps));
-        if(!codec || !pcm || reinterpret_cast<uintptr_t>(codec)%rs_handheld_voice_codec_align() ||
+        if(memoBytes) memo=static_cast<uint8_t*>(heap_caps_calloc(1,memoBytes,caps));
+        if(!codec || !pcm || (memoBytes && !memo) || reinterpret_cast<uintptr_t>(codec)%rs_handheld_voice_codec_align() ||
             !memorySafe() || heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)<FreeFloor+DriverAllowance)
             return memoryFailure(MemoryStage::Buffers,FreeFloor+DriverAllowance,LargestFloor);
         return rs_handheld_voice_codec_init(codec,bytes,profile)==RS_HANDHELD_OK?Code::Ok:Code::AudioUnavailable;
@@ -85,6 +92,9 @@ struct VoiceWorker::Impl {
     void releaseBuffers() {
         if(codec)rs_handheld_voice_codec_clear(codec);
         clear(pcm,PcmBytes);heap_caps_free(codec);heap_caps_free(pcm);codec=nullptr;pcm=nullptr;
+    }
+    void releaseMemo() {
+        clear(memo,size_t(frameLimit)*4);heap_caps_free(memo);memo=nullptr;memoLength=memoOffset=0;
     }
     bool transmitting() const {
         if(talk.load() && uint32_t(nowMs())-VoiceWorker::_inputHeartbeat.load()>250) VoiceWorker::emergencyStop();
@@ -156,7 +166,7 @@ bool VoiceWorker::drained() {
     auto* i=_impl;
     if (!i) return true;
     if (!i->done.load() || !AudioCoordinator::instance().release()) return false;
-    i->releaseBuffers();
+    i->releaseBuffers();i->releaseMemo();
     i->~Impl();clear(i,sizeof(Impl));heap_caps_free(i);_impl=nullptr;return true;
 }
 AudioStatus VoiceWorker::status() const {
@@ -188,6 +198,16 @@ bool VoiceWorker::receive(const Encoded& packet) {
 bool VoiceWorker::take(Encoded& packet) {
     auto* i=_impl;if(!i) return false;
     portENTER_CRITICAL(&i->mux);
+    if(i->use==AudioUse::MemoRecord) {
+        const bool have=i->status.finished && i->status.error==Code::Ok && !i->stop && i->memoOffset<i->memoLength;
+        if(have) {
+            packet={};packet.generation=i->generation;
+            packet.length=uint16_t(std::min(size_t(80),size_t(i->memoLength-i->memoOffset)));
+            memcpy(packet.bytes,i->memo+i->memoOffset,packet.length);
+            clear(i->memo+i->memoOffset,packet.length);i->memoOffset+=packet.length;
+        }
+        portEXIT_CRITICAL(&i->mux);return have;
+    }
     const bool have=i->txCount;
     if(have) {packet=i->tx[i->txHead];clear(&i->tx[i->txHead],sizeof packet);i->txHead=(i->txHead+1)%3;--i->txCount;}
     portEXIT_CRITICAL(&i->mux);return have;
@@ -300,9 +320,9 @@ void VoiceWorker::run(void* pointer) {
 
 void VoiceWorker::runMemo(Impl& i) {
     const bool record=i.use==AudioUse::MemoRecord;
-    bool owned=false,ready=false,normalStop=false;
+    bool owned=false,ready=false,normalStop=false,quiet=false;
     Code failure=Code::Ok;
-    size_t used=0,packetFrames=0,total=0;
+    size_t used=0,total=0;
     Encoded packet;packet.generation=i.generation;
     const uint64_t started=nowMs();uint64_t waiting=started;
     auto alive=[&] {return uint32_t(nowMs())-VoiceWorker::_inputHeartbeat.load()<=1000;};
@@ -322,27 +342,16 @@ void VoiceWorker::runMemo(Impl& i) {
     auto frames=[&] {
         portENTER_CRITICAL(&i.mux);i.status.frames=total;portEXIT_CRITICAL(&i.mux);
     };
-    auto queue=[&] {
-        if(!packetFrames) return true;
-        packet.length=uint16_t(packetFrames*4);
-        portENTER_CRITICAL(&i.mux);
-        const bool available=i.txCount<3;
-        if(available) {i.tx[(i.txHead+i.txCount)%3]=packet;++i.txCount;}
-        portEXIT_CRITICAL(&i.mux);
-        if(!available) {failure=Code::Backpressure;return false;}
-        packetFrames=0;clear(packet.bytes,sizeof packet.bytes);return true;
-    };
     auto encode=[&](bool captureRunning=true) {
         const auto before=esp_timer_get_time();
-        const auto code=rs_handheld_voice_codec_encode_frame(i.codec,i.pcm,320,packet.bytes+packetFrames*4,4);
+        const auto code=rs_handheld_voice_codec_encode_frame(i.codec,i.pcm,320,i.memo+total*4,4);
         const bool withinBudget=timing(before,true);
         // A padded tail is processed after capture ends. Stop also makes any
         // further capture deadline irrelevant: retain the accepted PCM.
         const bool timely=withinBudget || !captureRunning || cancelled();
         clear(i.pcm,PcmBytes);used=0;
         if(code!=RS_HANDHELD_OK || !timely) {failure=timely?Code::AudioUnavailable:Code::SlowCodec;return false;}
-        ++packetFrames;++total;frames();
-        return packetFrames<20 || queue();
+        ++total;frames();return true;
     };
     while(!i.stop && !cancelled() && !owned) {
         if(!alive()) {failure=Code::InputLost;break;}
@@ -352,6 +361,16 @@ void VoiceWorker::runMemo(Impl& i) {
     }
     if(owned && !i.stop && !cancelled() && failure==Code::Ok) {
         failure=i.allocate();
+        if(record && failure==Code::Ok && !i.stop && !cancelled()) {
+            quiet=storage::CaptureQuiet::request();
+            if(!quiet) failure=Code::Busy;
+            const auto waitStart=nowMs();
+            while(quiet && !storage::CaptureQuiet::ready() && !i.stop && !cancelled()) {
+                if(!alive()) {failure=Code::InputLost;break;}
+                if(nowMs()-waitStart>=3000) {failure=Code::Busy;break;}
+                vTaskDelay(1);
+            }
+        }
         if(failure==Code::Ok && !i.stop && !cancelled()) {
             if(!alive()) failure=Code::InputLost;
             else {ready=i.device.prepare(i.volume,record);if(!ready) failure=i.device.error();}
@@ -402,11 +421,12 @@ void VoiceWorker::runMemo(Impl& i) {
     // Stop DMA/microphone before the tail is encoded. Only a final partial
     // native frame is padded (less than 40 ms), never another packet/read.
     if(owned) i.device.end();
+    if(quiet) storage::CaptureQuiet::resume();
     if(record && normalStop && !i.stop && failure==Code::Ok) {
         if(used) {std::memset(i.pcm+used,0,PcmBytes-used*sizeof(int16_t));encode(false);}
-        if(failure==Code::Ok) queue();
     }
-    if(i.stop || failure!=Code::Ok || !record) i.queues();
+    if(i.stop || failure!=Code::Ok || !record) {i.queues();i.releaseMemo();}
+    else i.memoLength=uint16_t(total*4);
     clear(&packet,sizeof packet);i.releaseBuffers();
     i.update(false,false,false,failure);
     while(!AudioCoordinator::instance().release()) vTaskDelay(1);

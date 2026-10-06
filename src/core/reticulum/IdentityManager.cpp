@@ -1,4 +1,5 @@
 #include "IdentityManager.h"
+#include "storage/StorageLease.h"
 #include "runtime/TaskOwner.h"
 #include "config/Config.h"
 #include "config/UserConfig.h"
@@ -633,6 +634,8 @@ bool IdentityManager::hasIdentityData() const {
 bool IdentityManager::mirrorIdentityToNvs(const uint8_t key[64]) const {
     handheld::assertDeviceOwner();
     if (!key) return false;
+    handheld::storage::StorageLease lease;
+    if (!lease.held()) { _nvsMirrorPending = true; return false; }
     Preferences prefs;
     if (!prefs.begin(NVS_NS_IDENTITY, false)) { _nvsMirrorPending = true; return false; }
     const bool ok = prefs.putBytes("privkey", key, 64) == 64;

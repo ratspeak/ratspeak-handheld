@@ -3,6 +3,7 @@
 #include "hal/ClockConfidence.h"
 
 #if HAS_GPS
+#include "storage/StorageLease.h"
 
 #include <sys/time.h>
 #include <time.h>
@@ -219,6 +220,8 @@ void GPSManager::restoreTimeFromNVS() {
 }
 
 void GPSManager::persistToNVS() {
+    handheld::storage::StorageLease lease;
+    if (!lease.held()) return;
     time_t now = time(nullptr);
     if (now < 1700000000) return;  // Don't persist if we don't have real time
 

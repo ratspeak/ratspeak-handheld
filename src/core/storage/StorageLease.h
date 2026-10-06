@@ -1,6 +1,7 @@
 #pragma once
 
 #include "runtime/TaskOwner.h"
+#include "storage/CaptureQuiet.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
@@ -49,15 +50,29 @@ public:
     bool tryAcquire() {
         assertOwner();
         if (_held) return true;
-        _held = _mutex && xSemaphoreTakeRecursive(_mutex, isWorker() ? portMAX_DELAY : 0) == pdTRUE;
-        return _held;
+        const bool worker=isWorker();
+        do {
+            if (!_mutex || xSemaphoreTakeRecursive(_mutex, worker ? portMAX_DELAY : 0) != pdTRUE) return false;
+            if (_depth || CaptureQuiet::enter()) {
+                ++_depth;_held=true;return true;
+            }
+            xSemaphoreGiveRecursive(_mutex);
+            // Accepted executor jobs retain their queue credits while capture
+            // runs. Owner calls defer normally; nested in-flight work can finish.
+            if (worker) vTaskDelay(1);
+        } while (worker);
+        return false;
     }
     bool held() const { return _held; }
     void release() {
-        if (_held) { xSemaphoreGiveRecursive(_mutex); _held = false; }
+        if (_held) {
+            if (!--_depth) CaptureQuiet::leave();
+            xSemaphoreGiveRecursive(_mutex); _held = false;
+        }
     }
 private:
     inline static SemaphoreHandle_t _mutex = nullptr;
+    inline static unsigned _depth = 0; // Protected by the recursive mutex.
     bool _held = false;
 };
 

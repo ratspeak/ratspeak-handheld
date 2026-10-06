@@ -249,7 +249,7 @@ void Controller::audio() {
         _status.audioError=uint8_t(status.error);fail(audioError(status.error));
     }
     if(_recording) {
-        if(!_ticket.valid() && _work==Work::None && _failure==Code::Ok) {
+        if(status.finished && !_ticket.valid() && _work==Work::None && _failure==Code::Ok) {
             if(!_packet.length) _d.audio->take(_packet);
             if(_packet.length) _work=Work::Append;
         }
