@@ -72,6 +72,8 @@ void LvHelpOverlay::create() {
     addHelpRow(_overlay, "Left / Right", "Switch tabs outside editors");
     addHelpRow(_overlay, "Hold Enter", "Context actions / sleep");
     addHelpRow(_overlay, "Icon keys", "Coming soon");
+    addHelpRow(_overlay, "Chat arrows", "Select a message; OK opens");
+    addHelpRow(_overlay, "Chat Back", "Clear selection first");
 #elif HAS_SCROLLWHEEL
     addHelpRow(_overlay, "Encoder", "Move selection / edit value");
     addHelpRow(_overlay, "Click/Enter", "Open or confirm");
@@ -79,8 +81,8 @@ void LvHelpOverlay::create() {
     addHelpRow(_overlay, "Alt+Back", "Cancel editing (Esc)");
     addHelpRow(_overlay, "Alt+Q..P", "Type numbers 1..0");
     addHelpRow(_overlay, "A / D", "Select frequency digit");
-    addHelpRow(_overlay, "Encoder", "Tune selected digit");
-    addHelpRow(_overlay, "Chat Enter", "Read full (empty draft)");
+    addHelpRow(_overlay, "Chat wheel", "Scroll; click selects message");
+    addHelpRow(_overlay, "Selected", "Click opens; hold for actions");
     addHelpRow(_overlay, "BOOT", "Tap sleep; hold power off");
 #else
     addHelpRow(_overlay, "Trackball", "Move selection");
@@ -89,9 +91,9 @@ void LvHelpOverlay::create() {
     addHelpRow(_overlay, "Backspace", "Delete text; back if empty");
     addHelpRow(_overlay, "Hold click", "Cancel settings / name edit");
     addHelpRow(_overlay, "Cancel / <", "Tap to cancel or go back");
-    addHelpRow(_overlay, "Peers", "Pick a contact to message");
-    addHelpRow(_overlay, "Home", "Announce button");
-    addHelpRow(_overlay, "USB serial ?", "Diagnostics command help");
+    addHelpRow(_overlay, "Chat ball", "Scroll; click selects message");
+    addHelpRow(_overlay, "Selected", "Click opens; hold for actions");
+    addHelpRow(_overlay, "Chat touch", "Swipe history; tap actions");
 #endif
 
     lv_obj_t* footer = makeLabel(_overlay,

@@ -166,6 +166,7 @@ void MessageView::onExit() {
     _visible=false;_readRequested=false;_input.setActive(false);_history.close();
 }
 void MessageView::onEnter() {
+    _selectAfterPage=false;_dismissedDelete=false;
     _visible = true; _readRequested = true; _readRetryAt = millis();
     String identity;
     _draftReady = prepareDraft(identity);
@@ -318,8 +319,10 @@ void MessageView::revealSelection() {
     _history.setScrollOffset(std::min(_history.scrollOffset(),maximum));
 }
 bool MessageView::handleKey(const KeyEvent& event) {
+    if(event.repeat && event.backspace && _dismissedDelete) return true;
+    if(!event.repeat && event.backspace) _dismissedDelete=false;
     if(_messageTools.visible()) {
-        if(event.escape || event.backspace) {if(!event.repeat) _messageTools.close();return true;}
+        if(event.escape || event.backspace) {if(!event.repeat) {_dismissedDelete=event.backspace;_messageTools.close();}return true;}
         if(event.up || event.left) {_messageTools.move(-1);return true;}
         if(event.down || event.right || event.tab) {_messageTools.move(1);return true;}
         if(event.enter && !event.repeat) activateMessageTool();
@@ -327,7 +330,7 @@ bool MessageView::handleKey(const KeyEvent& event) {
     }
     if(!_rrcMode && event.ctrl && (event.character=='v' || event.character=='V')) {if(!event.repeat && _voice)_voice(_peerHex.c_str(),0,false);return true;}
     if(_rrcMode && _rrcTools.visible()) {
-        if(event.escape || event.backspace) {if(!event.repeat) closeRrcTools();return true;}
+        if(event.escape || event.backspace) {if(!event.repeat) {_dismissedDelete=event.backspace;closeRrcTools();}return true;}
         if(event.up || event.left) {_rrcTools.move(-1);return true;}
         if(event.down || event.right || event.tab) {_rrcTools.move(1);return true;}
         if(event.enter && !event.repeat) activateRrcTool();
@@ -341,6 +344,7 @@ bool MessageView::handleKey(const KeyEvent& event) {
     if(!_rrcMode && audioRow && audioRow->hasAudio() && !event.repeat &&
        ((event.enter) || (!event.ctrl && (event.character=='v' || event.character=='V')))) {
         if(_memo && audioRow->nativeAudio() && (_memo->status().capabilities&2)) _memo->toggleMessage(_history.peer(),audioRow->counter,audioRow->incoming());
+        else openMessageTools(full?0:_history.focusedSpan());
         return true;
     }
     if (!_draftReady && !full && event.enter && !event.repeat) {
@@ -348,15 +352,18 @@ bool MessageView::handleKey(const KeyEvent& event) {
         return true;
     }
     if (event.escape || (event.backspace &&
-                        (full || _history.focusedSpan() < _history.spanCount()))) {
+                        (full || _selectAfterPage || _history.focusedSpan() < _history.spanCount()))) {
         if (event.repeat) return true;
+        _dismissedDelete=event.backspace;
+        const bool pendingSelection=_selectAfterPage;_selectAfterPage=false;
         if (full) { _history.backToChat(); _history.focusSpan(History::VisibleSpans); _input.setActive(true); }
-        else if (_history.focusedSpan() < _history.spanCount()) {
+        else if (pendingSelection || _history.focusedSpan() < _history.spanCount()) {
             _history.focusSpan(History::VisibleSpans); _input.setActive(true);
         } else if (_backCb) _backCb();
         return true;
     }
     if(!full && (event.up || event.down)) {
+        if(event.repeat && _history.focusedSpan()>=_history.spanCount()) return true;
         if(_history.moveSelection(event.up?-1:1)) {if(_history.loading()) _selectAfterPage=true;else revealSelection();}
         return true;
     }
@@ -391,7 +398,10 @@ bool MessageView::handleKey(const KeyEvent& event) {
         (event.character == 'r' || event.character == 'R')) {
         _history.refresh(); return true;
     }
-    if(full) {if(event.enter && !event.repeat && !_rrcMode) openMessageTools(0);return true;} // The reader never edits/sends a hidden composer.
+    if(full) {
+        if(event.enter && !event.repeat) {if(_rrcMode) openRrcTools(0);else openMessageTools(0);}
+        return true; // The reader never edits/sends a hidden composer.
+    }
     if (_history.focusedSpan() < _history.spanCount()) {
         if (event.enter && !event.repeat) {
             const auto selected = _history.focusedSpan();
@@ -401,7 +411,7 @@ bool MessageView::handleKey(const KeyEvent& event) {
             return true;
         }
         if(!event.character || event.ctrl) return true;
-        _history.focusSpan(History::VisibleSpans);_input.setActive(true);
+        _selectAfterPage=false;_history.focusSpan(History::VisibleSpans);_input.setActive(true);
     }
     // Backspace leaves an empty composer; Fn+Backspace remains forward Delete.
     if (event.backspace && _input.getText().empty()) {
@@ -462,7 +472,6 @@ bool MessageView::pollHistory(bool allowAdmission) {
                 _lxmf->requestHistoryPage(_peerHex, query.cursor, query.direction) :
                 _lxmf->requestRecord(key, query.offset, query.capacity);
         });
-    if(publication!=_history.revision() && _selectAfterPage) {_selectAfterPage=false;revealSelection();}
     if (_store) {
         handheld::storage::rrc::Context context;const auto rrcStatus=_backend?_backend->rrcStatus():handheld::rrc::Status{};
         const bool rrcVisible=_rrcMode && _visible && _backend && _backend->rrcContext(_rrcBinding.hub,_rrcBinding.room,
@@ -472,6 +481,7 @@ bool MessageView::pollHistory(bool allowAdmission) {
         }
         _rrcHistory.poll(_history,*_store,rrcVisible?&context:nullptr,rrcStatus.revision,millis(),allowAdmission);
     }
+    if(publication!=_history.revision() && _selectAfterPage) {_selectAfterPage=false;revealSelection();}
     // The previous bank also retains known delivery facts until the first
     // status projection/fallback finishes. Abandoned views can release now;
     // same-view bodies must keep that fallback even without text pointers.

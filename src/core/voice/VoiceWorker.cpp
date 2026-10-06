@@ -153,7 +153,7 @@ Code VoiceWorker::prepareUse(uint32_t generation,uint8_t profile,uint8_t volumeV
     auto* i=new(memory) Impl;
     i->generation=generation;i->status.generation=generation;i->profile=profile;i->volume=volumeValue;
     i->use=use;i->frameLimit=frames;i->memoEpoch=epoch;i->resumeFrame=resumeFrame;i->status.frames=resumeFrame;
-    if (!AudioCoordinator::instance().request()) {
+    if (!AudioCoordinator::instance().request(use==AudioUse::MemoPlayback)) {
         i->~Impl();heap_caps_free(i);return Code::Busy;
     }
     _impl=i;

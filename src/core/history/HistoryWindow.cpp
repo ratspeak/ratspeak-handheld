@@ -35,13 +35,14 @@ void HistoryWindow::open(const uint8_t peer[16], uint32_t identity) {
     memcpy(c.peer, peer, 16); c.identity = identity;
     c.mode = Mode::Chat; c.state = State::Loading; c.intent = Intent::Newest;
     c.newBelow = false; c.followNewest = true; c.scrollOffset = 0;
-    c.focus = VisibleSpans;
+    c.focus = VisibleSpans; c.selectEdge = 0;
     if (!c.awaiting) c.phase = Phase::Idle;
 }
 void HistoryWindow::close() {
     changeView();
     auto& c = control();
     c.mode = Mode::Closed; c.state = State::Closed; c.intent = Intent::None;
+    c.focus = VisibleSpans; c.selectEdge = 0;
     _pages[c.active].value.info.statusRefresh = {};
     if (!c.awaiting) c.phase = Phase::Idle;
 }
@@ -92,6 +93,7 @@ bool HistoryWindow::navigate(Intent intent) {
     auto& c = control();
     if (!visible() || !changeView()) return false;
     c.intent = intent; c.state = State::Loading; c.restoreKey = {}; c.scrollOffset = 0;
+    c.selectEdge = 0;
     if (!c.awaiting) c.phase = Phase::Idle;
     return true;
 }
@@ -121,6 +123,7 @@ bool HistoryWindow::newest() {
     if (control().mode == Mode::Closed || !changeView()) return false;
     auto& c = control(); c.mode = Mode::Chat; c.intent = Intent::Newest;
     c.state = State::Loading; c.newBelow = false; c.followNewest = true; c.scrollOffset = 0;
+    c.focus = VisibleSpans; c.selectEdge = 0;
     if (!c.awaiting) c.phase = Phase::Idle;
     return true;
 }

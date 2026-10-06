@@ -107,7 +107,10 @@ public:
     uint32_t identityGeneration() const { return control().identity; }
     size_t focusedSpan() const { return control().focus; }
     // VisibleSpans means the composer. UI focus is part of the control budget.
-    void focusSpan(size_t index) { control().focus = index < spanCount() ? index : VisibleSpans; }
+    void focusSpan(size_t index) {
+        control().focus = index < spanCount() ? index : VisibleSpans;
+        control().selectEdge = 0; // Explicit dismissal also cancels a pending page selection.
+    }
     Mode mode() const { return control().mode; }
     State state() const { return control().state; }
     Error error() const { return control().error; }

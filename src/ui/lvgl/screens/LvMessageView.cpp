@@ -21,7 +21,7 @@ constexpr int kInputH = 31;
 constexpr int kComposerButtonW = 44;
 constexpr int kBubbleMaxW = Theme::CONTENT_W * 3 / 4;
 #if !HAS_TOUCH
-constexpr const char* kComposerPlaceholder = "Message... or Enter to read full";
+constexpr const char* kComposerPlaceholder = "Message... or Enter to select";
 #else
 constexpr const char* kComposerPlaceholder = "Message...";
 #endif
@@ -307,6 +307,7 @@ void LvMessageView::createUI(lv_obj_t* parent) {
             // gesture instead. It must still reach the adjacent history page.
             auto* input = lv_indev_get_act();
             if (input && lv_indev_get_type(input) == LV_INDEV_TYPE_POINTER) {
+                self->dismissSelection();
                 const auto direction = lv_indev_get_gesture_dir(input);
                 if (direction == LV_DIR_BOTTOM) self->historyAction(0);
                 else if (direction == LV_DIR_TOP) self->historyAction(1);
@@ -318,6 +319,7 @@ void LvMessageView::createUI(lv_obj_t* parent) {
             if (!self->_touchScrolling && !self->_binding && !lv_event_get_param(e) &&
                 input && lv_indev_get_type(input) == LV_INDEV_TYPE_POINTER &&
                 lv_indev_get_scroll_obj(input) == self->_msgScroll) {
+                self->dismissSelection();
                 self->_touchScrolling = true;
                 self->_touchScrollStart = lv_obj_get_scroll_y(self->_msgScroll);
                 self->_touchScrollPeak = 0;
@@ -382,6 +384,7 @@ void LvMessageView::createUI(lv_obj_t* parent) {
         auto* self = (LvMessageView*)lv_event_get_user_data(e);
         lv_event_code_t code = lv_event_get_code(e);
         if (code == LV_EVENT_FOCUSED || code == LV_EVENT_CLICKED || code == LV_EVENT_PRESSED) {
+            self->dismissSelection();
             self->refreshComposerPlaceholder();
         } else if (code == LV_EVENT_DEFOCUSED) {
             self->refreshComposerPlaceholder();
@@ -421,6 +424,7 @@ bool LvMessageView::setPeerHex(const std::string& hex) {
     const bool wasRrc=_rrcMode;_rrcMode=false;++_rrcView;
     if (_peerHex == hex && !wasRrc) return true;
     _messageTools.close();hideSendModeMenu();
+    _selectAfterPage=false;
     if(_ui) _ui->closeVoiceConversation();
     clearMessages();
     if (_service) _service->historyWindow().acknowledgePublication(_service->historyWindow().revision());
@@ -508,6 +512,7 @@ void LvMessageView::readFull(size_t index) {
     if(row && row->hasAudio()) {
         auto* memo=_ui?_ui->memoUi():nullptr;
         if(memo && row->nativeAudio() && (memo->status().capabilities&2)) memo->toggleMessage(window.peer(),row->counter,row->incoming());
+        else openMessageTools(index);
         updateAudioControls();
         return;
     }
@@ -518,7 +523,7 @@ void LvMessageView::goBack() {
     if (_service && windowMatches() && _service->historyWindow().mode() == HistoryWindow::Mode::Full) {
         historyAction(2); return;
     }
-    if(hasReadFocus()) {_service->historyWindow().focusSpan(HistoryWindow::VisibleSpans);updateHistoryFocus();return;}
+    if(dismissSelection()) return;
     if (_onBack) _onBack();
 }
 
@@ -540,13 +545,50 @@ bool LvMessageView::hasReadFocus() const {
         _readButtons[_service->historyWindow().focusedSpan()];
 }
 
+bool LvMessageView::dismissSelection() {
+    if (!_service) return false;
+    auto& window=_service->historyWindow();
+    const bool selected=_selectAfterPage || window.focusedSpan()<HistoryWindow::VisibleSpans;
+    _selectAfterPage=false;
+    window.focusSpan(HistoryWindow::VisibleSpans);
+    updateHistoryFocus();
+    return selected;
+}
+
+void LvMessageView::selectVisibleMessage() {
+    if (!boundWindow() || _service->historyWindow().loading()) return;
+    lv_area_t viewport;lv_obj_get_coords(_msgScroll,&viewport);
+    int best=0;size_t selected=HistoryWindow::VisibleSpans;
+    // Select what the user is reading, including an older page. At the
+    // newest end, the first action starts with the most recent message.
+    for (size_t i=0;i<_rowCount;++i) if (_readButtons[i] && _bubbleBoxes[i]) {
+        lv_area_t row;lv_obj_get_coords(_bubbleBoxes[i],&row);
+        const int overlap=std::min(row.y2,viewport.y2)-std::max(row.y1,viewport.y1)+1;
+        if (overlap>0 && (overlap>=best || _atBottom)) {best=overlap;selected=i;}
+    }
+    if (selected==HistoryWindow::VisibleSpans) return;
+    auto& window=_service->historyWindow();window.focusSpan(selected);window.setViewportAtNewest(false);
+    revealSelection();
+}
+
+void LvMessageView::revealSelection() {
+    updateHistoryFocus();
+    const auto focus=_service->historyWindow().focusedSpan();
+    if (focus<_rowCount && _readButtons[focus]) {
+        auto* target=lv_obj_has_state(_readButtons[focus],LV_STATE_DISABLED) && _moreButtons[focus] ? _moreButtons[focus] : _readButtons[focus];
+        lv_obj_scroll_to_view(target,LV_ANIM_OFF);
+        saveScroll();
+    }
+}
+
 void LvMessageView::focusNextRead(int direction) {
     if (!boundWindow() || _service->historyWindow().mode() != HistoryWindow::Mode::Chat) return;
     auto& window = _service->historyWindow();
+    if(!hasReadFocus()) {selectVisibleMessage();return;}
     if(!window.moveSelection(direction)) return;
     if(window.loading()) {_selectAfterPage=true;return;}
-    updateHistoryFocus();const auto next=window.focusedSpan();
-    if(next<_rowCount && _bubbleBoxes[next]) lv_obj_scroll_to_view(_bubbleBoxes[next],LV_ANIM_OFF);
+    revealSelection();
+    if(!hasReadFocus()) {lv_obj_scroll_to_y(_msgScroll,LV_COORD_MAX,LV_ANIM_OFF);saveScroll(true);}
 }
 
 void LvMessageView::updateHistoryFocus() {
@@ -557,7 +599,9 @@ void LvMessageView::updateHistoryFocus() {
         focus = HistoryWindow::VisibleSpans;
     }
     for(size_t i=0;i<_rowCount;++i) if(_bubbleBoxes[i]) {
-        lv_obj_set_style_border_color(_bubbleBoxes[i],lv_color_hex(i==focus?Theme::ACCENT:Theme::BORDER),0);
+        const auto* row=_service->historyWindow().span(i);
+        const auto normal=_rrcMode || !row || row->incoming()?Theme::BORDER:bubbleBorderColor(static_cast<LXMFStatus>(row->status));
+        lv_obj_set_style_border_color(_bubbleBoxes[i],lv_color_hex(i==focus?Theme::ACCENT:normal),0);
         lv_obj_set_style_border_width(_bubbleBoxes[i],i==focus?2:1,0);
     }
     for (size_t i = 0; i < _rowCount; ++i) if (_readButtons[i]) {
@@ -640,6 +684,7 @@ void LvMessageView::destroyUI() {
 }
 
 void LvMessageView::onEnter() {
+    _selectAfterPage=false;_dismissedDelete=false;
     _entered = true;
     if (_rrcMode) {
         _markReadPending=false;_readThrough=0;_readRetry=false;
@@ -661,6 +706,7 @@ void LvMessageView::onEnter() {
 }
 
 void LvMessageView::onExit() {
+    _selectAfterPage=false;
     _messageTools.close();
     if(_ui) _ui->closeVoiceConversation();
     _rrcTools.close();hideSendModeMenu();
@@ -900,13 +946,11 @@ void LvMessageView::rebuildMessages() {
         lv_obj_set_height(lv_obj_get_parent(_bubbleBoxes[i]), lv_obj_get_height(_bubbleBoxes[i]));
     lv_obj_update_layout(_msgScroll);
     lv_obj_scroll_to_y(_msgScroll, bottom ? LV_COORD_MAX : scroll, LV_ANIM_OFF);
-    if(_selectAfterPage) {
-        _selectAfterPage=false;const auto focus=window.focusedSpan();
-        if(focus<_rowCount && _bubbleBoxes[focus]) lv_obj_scroll_to_view(_bubbleBoxes[focus],LV_ANIM_OFF);
-    }
+    const bool reveal=_selectAfterPage;_selectAfterPage=false;
     _lastHistoryRevision = window.revision(); _lastStatusRevision = window.statusRevision();
     _boundMode = window.mode(); _boundIdentity = window.identityGeneration();
     _binding = false; _scrollToEnd = false; saveScroll();
+    if(reveal) revealSelection();
     // ALL old static labels were deleted before this bank can be reused.
     window.acknowledgePublication(_lastHistoryRevision);
 }
@@ -1045,10 +1089,13 @@ void LvMessageView::sendCurrentMessage(bool viaLink) {
 }
 
 bool LvMessageView::handleKey(const KeyEvent& event) {
+    const bool deleting=event.del || event.character==0x08;
+    if(event.repeat && deleting && _dismissedDelete) return true;
+    if(!event.repeat && deleting) _dismissedDelete=false;
     _audioPressIndex=HistoryWindow::VisibleSpans;
     if(_messageTools.visible()) {
         _messagePressedSerial=0;
-        if(event.character==0x1B || event.del || event.character==0x08) {if(!event.repeat) {_messageTools.close();hideSendModeMenu();}return true;}
+        if(event.character==0x1B || deleting) {if(!event.repeat) {_dismissedDelete=deleting;_messageTools.close();hideSendModeMenu();}return true;}
         if(event.up || event.left) {_messageTools.move(-1);updateSendModeMenu();return true;}
         if(event.down || event.right || event.tab) {_messageTools.move(1);updateSendModeMenu();return true;}
         if(event.enter && !event.repeat) activateMessageTool();
@@ -1057,27 +1104,28 @@ bool LvMessageView::handleKey(const KeyEvent& event) {
     if(!_rrcMode && hasReadFocus() && !event.repeat && (event.character=='m' || event.character=='M')) {
         openMessageTools(_service->historyWindow().focusedSpan());return true;
     }
-    if(!_rrcMode && boundWindow() && _service->historyWindow().mode()==HistoryWindow::Mode::Full) {
-        const auto* row=_service->historyWindow().span(0);
-        if(event.character==0x1B || event.del || event.character==0x08) {if(!event.repeat) goBack();}
-        else if(event.up || event.left) scrollHistory(-30);
-        else if(event.down || event.right) scrollHistory(30);
-        else if(!event.repeat && (event.enter || event.character=='m' || event.character=='M')) {
-            if(event.enter && row && row->hasAudio()) readFull(0);else openMessageTools(0);
-        }
-        return true; // No key may edit or send the hidden composer in a reader.
-    }
     if(_rrcMode && _rrcTools.visible()) {
-        if(event.character==0x1B || event.del || event.character==0x08) {if(!event.repeat) closeRrcTools();return true;}
+        if(event.character==0x1B || deleting) {if(!event.repeat) {_dismissedDelete=deleting;closeRrcTools();}return true;}
         if(event.up || event.left) {_rrcTools.move(-1);updateSendModeMenu();return true;}
         if(event.down || event.right || event.tab) {_rrcTools.move(1);updateSendModeMenu();return true;}
         if((event.enter || event.character=='\n' || event.character=='\r') && !event.repeat) activateRrcTool();
         return true;
     }
+    if(boundWindow() && _service->historyWindow().mode()==HistoryWindow::Mode::Full) {
+        const auto* row=_service->historyWindow().span(0);
+        if(event.character==0x1B || deleting) {if(!event.repeat) {_dismissedDelete=deleting;goBack();}}
+        else if(event.up || event.left) scrollHistory(-30);
+        else if(event.down || event.right) scrollHistory(30);
+        else if(!event.repeat && (event.enter || event.character=='m' || event.character=='M')) {
+            if(_rrcMode) openRrcTools(0);else if(event.enter && row && row->hasAudio()) readFull(0);else openMessageTools(0);
+        }
+        return true; // No key may edit or send the hidden composer in a reader.
+    }
     if (_sendOverlay) {
         if (event.character == 0x1B ||
             ((event.del || event.character == 0x08) && !event.repeat)) {
             hideSendModeMenu();
+            _dismissedDelete=deleting;
             return true;
         }
         if (event.up || event.left) {
@@ -1098,20 +1146,17 @@ bool LvMessageView::handleKey(const KeyEvent& event) {
     }
 
     if (event.character == 0x1B) {
-        goBack();
+        if(!event.repeat) goBack();
         return true;
     }
 
     if (event.del || event.character == 0x08) {
-#if !HAS_TOUCH
-        if (_inputText.empty() && hasReadFocus()) {
+        if (hasReadFocus() || _selectAfterPage) {
             if (!event.repeat) {
-                _service->historyWindow().focusSpan(HistoryWindow::VisibleSpans);
-                updateHistoryFocus();
+                _dismissedDelete=true;dismissSelection();
             }
             return true;
         }
-#endif
         if (!_inputText.empty()) {
             _inputText.pop_back();
             composerEdited();
@@ -1128,6 +1173,7 @@ bool LvMessageView::handleKey(const KeyEvent& event) {
         if (hasReadFocus()) {
             readFull(_service->historyWindow().focusedSpan()); return true;
         }
+        if (event.source!=InputSource::Keyboard) {selectVisibleMessage();return true;}
 #if !HAS_TOUCH
         // An empty composer lets keyboard-only boards enter Read full
         // selection with Enter; typing returns to composing.
@@ -1137,7 +1183,7 @@ bool LvMessageView::handleKey(const KeyEvent& event) {
             }
             focusNextRead();
             if (hasReadFocus() && _ui)
-                _ui->lvStatusBar().showToast("Up/Down: select  Enter: read  Back: cancel", 2000);
+                _ui->lvStatusBar().showToast("Up/Down: select  Enter: open  Back: cancel", 2000);
             return true;
         }
 #endif
@@ -1145,18 +1191,14 @@ bool LvMessageView::handleKey(const KeyEvent& event) {
         return true;
     }
 
-#if !HAS_TOUCH
-    if (hasReadFocus() && (event.up || event.down)) {
-        focusNextRead(event.up ? -1 : 1);
-        return true;
-    }
-#endif
     if(event.up || event.down) {
-        if(boundWindow() && _service->historyWindow().mode()==HistoryWindow::Mode::Chat) focusNextRead(event.up?-1:1);
+        if(!hasReadFocus() && event.repeat) return true;
+        if(event.source!=InputSource::Keyboard && !hasReadFocus()) scrollHistory(event.up?-30:30);
+        else if(boundWindow() && _service->historyWindow().mode()==HistoryWindow::Mode::Chat) focusNextRead(event.up?-1:1);
         else scrollHistory(event.up?-30:30);
         return true;
     }
-    if (event.tab) { focusNextRead(); return true; }
+    if (event.tab) {if(!event.repeat) focusNextRead();return true;}
     if (event.left || event.right) return true;
 
     if (event.character >= 0x20 && event.character < 0x7F) {
@@ -1166,7 +1208,7 @@ bool LvMessageView::handleKey(const KeyEvent& event) {
             return true;
         }
         unsigned long inputStartMs = millis();
-        if (_service) { _service->historyWindow().focusSpan(HistoryWindow::VisibleSpans); updateHistoryFocus(); }
+        dismissSelection();
         _inputText += (char)event.character;
         composerEdited();
         updateComposerState();
@@ -1182,7 +1224,17 @@ bool LvMessageView::handleKey(const KeyEvent& event) {
 }
 
 bool LvMessageView::handleLongPress() {
+    if(_messageTools.visible()) return true;
     if(_rrcTools.visible()) return true;
+    if(boundWindow() && _service->historyWindow().mode()==HistoryWindow::Mode::Full) {
+        if(_rrcMode) openRrcTools(0);else openMessageTools(0);
+        return true;
+    }
+    if(hasReadFocus()) {
+        const auto focus=_service->historyWindow().focusedSpan();
+        if(_rrcMode) openRrcTools(focus);else openMessageTools(focus);
+        return true;
+    }
     if (_inputText.empty() && sendMenuCount()==3) return false;
     showSendModeMenu();
     return true;

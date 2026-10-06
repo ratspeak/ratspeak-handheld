@@ -1380,7 +1380,7 @@ void loop() {
             // settings text entry from being preempted by global shortcuts.
             bool consumed = false;
             if (!ui.isBootMode() && wheelNavbarMode) {
-                if (evt.encoder && (evt.up || evt.down)) {
+                if (evt.source == InputSource::Wheel && (evt.up || evt.down)) {
                     cycleWheelNavbar(evt.up ? -1 : 1);
                     consumed = true;
                 } else if (evt.enter || evt.character == '\n' || evt.character == '\r') {

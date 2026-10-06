@@ -39,7 +39,7 @@ private:
     using RrcTools=handheld::ui::RrcMessageMenu;
     RrcTools _rrcTools;
     handheld::ui::MessageMenu _messageTools;
-    bool _messageActionPending=false,_selectAfterPage=false;
+    bool _messageActionPending=false,_selectAfterPage=false,_dismissedDelete=false;
     uint32_t _audioPressPublication=0,_audioPressOwner=0;
     size_t _audioPressIndex=handheld::history::HistoryWindow::VisibleSpans;
     handheld::memo::Phase _audioPressPhase=handheld::memo::Phase::Unavailable;
@@ -85,6 +85,9 @@ private:
     void goBack();
     void scrollHistory(int pixels);
     bool hasReadFocus() const;
+    bool dismissSelection();
+    void selectVisibleMessage();
+    void revealSelection();
     void focusNextRead(int direction = 1);
     void updateHistoryControls();
     void updateHistoryFocus();

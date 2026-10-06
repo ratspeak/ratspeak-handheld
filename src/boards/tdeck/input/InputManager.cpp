@@ -12,11 +12,12 @@ void InputManager::update(bool dispatchReady) {
     _hasKey = _activity = _strongActivity = false;
     const bool screenOn = !_powerMgr || _powerMgr->isScreenOn();
     const uint32_t now = millis();
+    const bool clickEnabled=!handheld::voice::AudioCoordinator::instance().blocksPointerClick();
     if (_pointer) _pointer->update();
     _pointerInput.update(_pointer ? _pointer->lastDeltaX() : 0,
                          _pointer ? _pointer->lastDeltaY() : 0,
-                         _pointer && !handheld::voice::AudioCoordinator::instance().held() && digitalRead(TBALL_CLICK) == LOW,
-                         screenOn, now, _speed, false);
+                         _pointer && clickEnabled && digitalRead(TBALL_CLICK) == LOW,
+                         screenOn, now, _speed, false, clickEnabled);
     _activity = _pointerInput.activity;
     _strongActivity = _pointerInput.strongActivity;
     // A screen-off long press cancels its concurrent keyboard burst. Leaving

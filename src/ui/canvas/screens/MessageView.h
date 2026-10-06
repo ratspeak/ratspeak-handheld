@@ -103,7 +103,7 @@ private:
     handheld::ui::MessageMenu _messageTools;
     handheld::storage::Ticket _actionTicket;
     uint32_t _actionSerial=0;
-    bool _actionDelete=false,_actionSettled=false,_selectAfterPage=false;
+    bool _actionDelete=false,_actionSettled=false,_selectAfterPage=false,_dismissedDelete=false;
     void openMessageTools(size_t);
     void activateMessageTool();
     bool pollMessageAction();
