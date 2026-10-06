@@ -555,7 +555,7 @@ void DeviceDiagnostics::pollResults() {
     if (remoteUi && remoteUi->result(readyData, readyLength)) {
         bool connected = true;
         size_t available = diagnostics::RemoteUiReplyDelivery::TxCapacity;
-#if (defined(RSDECK) && ARDUINO_USB_CDC_ON_BOOT && ARDUINO_USB_MODE) || defined(RSM9)
+#if ((defined(RSDECK) || defined(RSWIOL2)) && ARDUINO_USB_CDC_ON_BOOT && ARDUINO_USB_MODE) || defined(RSM9)
         // Admit whole replies to the bounded HWCDC/UART transmit queue.
         // On HWCDC this also lets IN_EMPTY establish the connection and
         // avoids its offline FIFO path silently discarding the reply.

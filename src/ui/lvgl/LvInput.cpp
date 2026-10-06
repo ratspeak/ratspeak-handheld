@@ -194,6 +194,10 @@ static void cancelTouchPress() {
 }
 
 void noteKeyActivity() {
+#if HAS_SOFT_KEYBOARD
+    // Keys come from the touchscreen itself; suppressing touch would drop typing.
+    return;
+#endif
     cancelTouchPress();
     s_lastKeyMs = millis();
     if (s_touch && s_touch->isTouched()) s_waitTouchRelease = true;

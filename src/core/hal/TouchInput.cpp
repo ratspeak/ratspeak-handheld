@@ -6,8 +6,8 @@ TouchInput* TouchInput::_instance = nullptr;
 bool TouchInput::begin() {
     _instance = this;
 
-    // GT911 INT pin
-    pinMode(TOUCH_INT, INPUT);
+    // GT911 INT pin, unless the board holds it on an expander
+    if (TOUCH_INT >= 0) pinMode(TOUCH_INT, INPUT);
 
     // Try GT911 at both possible addresses
     Wire.beginTransmission(TOUCH_I2C_ADDR_1);
@@ -80,6 +80,15 @@ bool TouchInput::readGT911() {
     }
 
     uint8_t trackId = Wire.read();
+#if TOUCH_PANEL_PORTRAIT_RAW
+    // Native portrait panel coordinates, rotated into the landscape UI.
+    const int16_t rawX = Wire.read() | (Wire.read() << 8);
+    const int16_t rawY = Wire.read() | (Wire.read() << 8);
+    Wire.read() | (Wire.read() << 8); // size (unused)
+    _x = TFT_WIDTH - 1 - rawY;
+    _y = rawX;
+    _touched = true;
+#else
     _y = Wire.read() | (Wire.read() << 8);
     _x = Wire.read() | (Wire.read() << 8);
     Wire.read() | (Wire.read() << 8); // size (unused)
@@ -90,6 +99,7 @@ bool TouchInput::readGT911() {
     // Remap touchpad coordinates to display bounds
     _x = (_x - TOUCH_X_MIN) * (TFT_WIDTH - 1) / (TOUCH_X_MAX - TOUCH_X_MIN);
     _y = (_y - TOUCH_Y_MIN) * (TFT_HEIGHT - 1) / (TOUCH_Y_MAX - TOUCH_Y_MIN);
+#endif
 
     if (_x < 0) _x = 0;
     if (_x >= TFT_WIDTH) _x = TFT_WIDTH - 1;

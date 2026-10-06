@@ -31,9 +31,10 @@ rsLXMFLite, with device support built around the same messaging services.
 | LilyGO T-Pager (SX1262) | Standalone and RNode |
 | M5Stack Cardputer Adv | Standalone and RNode; Cap LoRa-1262 required for LoRa |
 | Elecrow ThinkNode M9 | Standalone; RNode coming soon |
+| Seeed Wio Tracker L2 | Standalone, build from source; touch-only with an on-screen keyboard |
 
-An SD card is optional for normal messaging. Downloads are available for all
-four devices.
+An SD card is optional for normal messaging. Downloads are available for the
+T-Deck Plus, T-Pager, Cardputer Adv and ThinkNode M9.
 
 This is beta firmware. If something isn't working, open an issue with your
 device, firmware version, and the steps to reproduce it.
@@ -79,11 +80,11 @@ make doctor DEVICE=tdeck
 make package DEVICE=tdeck
 ```
 
-Use `DEVICE=tpager`, `DEVICE=cardputer` or `DEVICE=m9` for the other devices. Packages
+Use `DEVICE=tpager`, `DEVICE=cardputer`, `DEVICE=m9` or `DEVICE=wio_tracker_l2` for the other devices. Packages
 are written to `dist/`. Normal builds use the included Rust libraries; a Rust
 toolchain is not required.
 
-M9 builds Standalone only and does not require Arduino CLI.
+M9 and Wio Tracker L2 build Standalone only and do not require Arduino CLI.
 
 ## License
 

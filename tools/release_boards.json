@@ -109,5 +109,31 @@
       "standalone"
     ],
     "web_flasher": true
+  },
+  "wio_tracker_l2": {
+    "artifact_prefix": "wiol2",
+    "flash_size": "16MB",
+    "partition_csv": null,
+    "standalone_partition_csv": "partitions/standalone-16mb.csv",
+    "rnode_target": null,
+    "rnode_prep_target": null,
+    "renderer": "lvgl",
+    "protocol_profile": "small",
+    "runtime": "dedicated",
+    "app_environments": [
+      "wio_tracker_l2"
+    ],
+    "device_aliases": [
+      "wiol2",
+      "wio_l2"
+    ],
+    "post_build_image": "wiol2-standalone-factory.bin",
+    "standalone_flash_freq": "80m",
+    "rnode_partition_scheme": null,
+    "rnode_partition_csv": null,
+    "modes": [
+      "standalone"
+    ],
+    "web_flasher": false
   }
 }

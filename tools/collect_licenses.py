@@ -45,7 +45,7 @@ SOURCE_NOTICES = {
         "source": "https://github.com/espressif/mbedtls/blob/2b8e772fc1cb0732cda3bae7d1e9d6f4cfaf63d9/library/ssl_tls.c",
         "license": "Apache-2.0 OR GPL-2.0-or-later",
         "comment_style": "blocks",
-        "boards": ["tdeck", "tpager", "m9"],
+        "boards": ["tdeck", "tpager", "m9", "wio_tracker_l2"],
         "modes": ["standalone"],
         "notice_sha256": "3205a23232dc38923b2527f347790e8f51e488e183f4deb6c2bdbe9b8decdaf7",
     },
@@ -55,7 +55,7 @@ SOURCE_NOTICES = {
         "source": "https://github.com/espressif/mbedtls/blob/2b8e772fc1cb0732cda3bae7d1e9d6f4cfaf63d9/include/mbedtls/ssl_internal.h",
         "license": "Apache-2.0 OR GPL-2.0-or-later",
         "comment_style": "blocks",
-        "boards": ["tdeck", "tpager", "m9"],
+        "boards": ["tdeck", "tpager", "m9", "wio_tracker_l2"],
         "modes": ["standalone"],
         "notice_sha256": "643036cd01ff4766604d196abe0d9229915b4057914a74e3db076e0f0fa3bddc",
     },
@@ -65,7 +65,7 @@ SOURCE_NOTICES = {
         "source": "https://github.com/espressif/mbedtls/blob/2b8e772fc1cb0732cda3bae7d1e9d6f4cfaf63d9/library/common.h",
         "license": "Apache-2.0 OR GPL-2.0-or-later",
         "comment_style": "blocks",
-        "boards": ["tdeck", "tpager", "m9"],
+        "boards": ["tdeck", "tpager", "m9", "wio_tracker_l2"],
         "modes": ["standalone"],
         "notice_sha256": "86f8dde32af25c28c2e8f18bd22ae2e0dbde09e2b8422b1248ad13de8018622c",
     },
@@ -314,7 +314,10 @@ class Collector:
         arduino_json["modes"] = ["standalone"]
         graphics, graphics_root = self.pio_library("LovyanGFX", "1.1.16", "lovyan03/LovyanGFX", "1.1.16", ["tdeck", "tpager", "m9"])
         self.source_notices(graphics, graphics_root)
-        lvgl, lvgl_root = self.pio_library("lvgl", "8.3.11", "lvgl/lvgl", "v8.3.11", ["tdeck", "tpager", "m9"])
+        # Panel_NV3031B first appears in 1.2.27.
+        graphics, graphics_root = self.pio_library("LovyanGFX", "1.2.27", "lovyan03/LovyanGFX", "1.2.27", ["wio_tracker_l2"])
+        self.source_notices(graphics, graphics_root)
+        lvgl, lvgl_root = self.pio_library("lvgl", "8.3.11", "lvgl/lvgl", "v8.3.11", ["tdeck", "tpager", "m9", "wio_tracker_l2"])
         lvgl["modes"] = ["standalone"]
         self.file(lvgl, lvgl_root, "src/extra/libs/qrcode/qrcodegen.c", header=True)
         radio, _ = self.pio_library("RadioLib", "7.7.1", "jgromes/RadioLib",
@@ -339,7 +342,7 @@ class Collector:
             ("Font Awesome 5.9.0", "FortAwesome/Font-Awesome", "ba907eaec40fab01d410c3023a5572b2cb46cea6", ["LICENSE.txt"]),
         ):
             component = self.component(name, ref, f"https://github.com/{repo}/tree/{ref}",
-                                       ["tdeck", "tpager", "m9"], ["standalone"],
+                                       ["tdeck", "tpager", "m9", "wio_tracker_l2"], ["standalone"],
                                        "Font notices for generated LVGL fonts, including custom Montserrat glyphs.")
             self.remote(component, repo, ref, paths)
             if name == "Montserrat":

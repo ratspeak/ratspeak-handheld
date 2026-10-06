@@ -21,6 +21,7 @@ public:
     void onExit() override;
     bool handleKey(const KeyEvent& event) override;
     bool handleLongPress() override;
+    TextInputRequest textInput() const override;
 
     void setPeerHex(const std::string& hex);
     void setBackend(handheld::ProtocolView* backend) { _backend = backend; }
@@ -103,6 +104,7 @@ private:
     lv_obj_t* _sendLabels[3] = {};
     int _sendMenuIdx = 0;
     bool _suppressNextSendClick = false;
+    bool _composing = false;  // The composer was tapped; keep its keyboard up.
 
     // Every label points into the client's leased publication, never a body copy.
     std::array<lv_obj_t*, HistoryWindow::VisibleSpans> _statusLabels{}, _textLabels{}, _bubbleBoxes{}, _readButtons{};

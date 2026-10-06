@@ -22,7 +22,7 @@ for path in (ROOT / "src/ui/lvgl").rglob("*"):
     check(r"\b(?:WiFi|LittleFS|SD)\s*\.\s*\w+\s*\(|\bPreferences\s+\w+|rs_handheld_\w+\s*\(",
           text, path, "UI must not call networking/storage/FFI directly")
 
-for board in ("tdeck", "tpager", "m9"):
+for board in ("tdeck", "tpager", "m9", "wio_tracker_l2"):
     path = ROOT / f"src/boards/{board}/main.cpp"
     text = path.read_text()
     shared = "lvgl_application::loop()" in text

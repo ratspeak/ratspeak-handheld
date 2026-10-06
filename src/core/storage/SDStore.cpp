@@ -6,6 +6,12 @@
 #include "hal/SharedSPIBus.h"
 #include "util/PerfTrace.h"
 #include "SPIFile.h"
+#if SD_USE_MMC
+#include <SD_MMC.h>
+#define SD_CARD SD_MMC
+#else
+#define SD_CARD SD
+#endif
 
 bool SDStore::begin(SPIClass* spi, int csPin) {
     handheld::storage::assertOwner();
@@ -16,23 +22,47 @@ bool SDStore::begin(SPIClass* spi, int csPin) {
     SharedSPILock lock;
     if (!lock.locked()) return false;
 
+#if SD_USE_MMC
+    // One-bit SDMMC on dedicated pins; the SPI bus and CS are unused.
+    (void)csPin;
+    SD_CARD.setPins(SDMMC_CLK, SDMMC_CMD, SDMMC_D0);
+    if (!SD_CARD.begin("/sdcard", true)) {
+        Serial.println("[SD] SDMMC mount failed, retrying...");
+        delay(100);
+        if (!SD_CARD.begin("/sdcard", true)) {
+            Serial.println("[SD] Card not detected or mount failed");
+            _ready = false;
+            return false;
+        }
+    }
+    if (SD_CARD.cardType() == CARD_NONE) {
+        Serial.println("[SD] No card inserted");
+        SD_CARD.end();
+        _ready = false;
+        return false;
+    }
+    _ready = true;
+    Serial.printf("[SD] SDMMC card ready, total=%llu MB, used=%llu MB\n",
+                  totalBytes() / (1024 * 1024), usedBytes() / (1024 * 1024));
+    return true;
+#else
     // Deassert CS, then try mounting at conservative 4MHz first
     pinMode(csPin, OUTPUT);
     digitalWrite(csPin, HIGH);
     delay(10);
 
-    if (!SD.begin(csPin, *spi, 4000000)) {
+    if (!SD_CARD.begin(csPin, *spi, 4000000)) {
         Serial.printf("[SD] Mount failed (CS=%d), retrying...\n", csPin);
         delay(100);
         // Second attempt
-        if (!SD.begin(csPin, *spi, 4000000)) {
+        if (!SD_CARD.begin(csPin, *spi, 4000000)) {
             Serial.println("[SD] Card not detected or mount failed");
             _ready = false;
             return false;
         }
     }
 
-    uint8_t cardType = SD.cardType();
+    uint8_t cardType = SD_CARD.cardType();
     if (cardType == CARD_NONE) {
         Serial.println("[SD] No card inserted");
         _ready = false;
@@ -47,10 +77,10 @@ bool SDStore::begin(SPIClass* spi, int csPin) {
     _ready = true;
 
     // Increase SPI speed for faster I/O after stable mount at 4MHz
-    SD.end();
-    if (!SD.begin(csPin, *spi, 16000000)) {
+    SD_CARD.end();
+    if (!SD_CARD.begin(csPin, *spi, 16000000)) {
         // 16MHz failed, fall back to 4MHz
-        if (!SD.begin(csPin, *spi, 4000000)) {
+        if (!SD_CARD.begin(csPin, *spi, 4000000)) {
             Serial.println("[SD] 16MHz failed and 4MHz fallback failed");
             _ready = false;
             return false;
@@ -65,6 +95,7 @@ bool SDStore::begin(SPIClass* spi, int csPin) {
     Serial.printf("[SD] %s card ready, total=%llu MB, used=%llu MB\n",
                   typeStr, totalBytes() / (1024 * 1024), usedBytes() / (1024 * 1024));
     return true;
+#endif
 }
 
 void SDStore::end() {
@@ -73,7 +104,7 @@ void SDStore::end() {
     if (!lease.held()) return ;
     SharedSPILock lock;
     if (!lock.locked()) return;
-    SD.end();
+    SD_CARD.end();
     _ready = false;
 }
 
@@ -84,7 +115,7 @@ uint64_t SDStore::totalBytes() const {
     if (!_ready) return 0;
     SharedSPILock lock;
     if (!lock.locked()) return 0;
-    return SD.totalBytes();
+    return SD_CARD.totalBytes();
 }
 
 uint64_t SDStore::usedBytes() const {
@@ -94,7 +125,7 @@ uint64_t SDStore::usedBytes() const {
     if (!_ready) return 0;
     SharedSPILock lock;
     if (!lock.locked()) return 0;
-    return SD.usedBytes();
+    return SD_CARD.usedBytes();
 }
 
 bool SDStore::ensureDir(const char* path) {
@@ -104,17 +135,17 @@ bool SDStore::ensureDir(const char* path) {
     if (!_ready) return false;
     SharedSPILock lock;
     if (!lock.locked()) return false;
-    if (SD.exists(path)) return true;
+    if (SD_CARD.exists(path)) return true;
     // Create parent directories recursively
     String pathStr = String(path);
     int lastSlash = pathStr.lastIndexOf('/');
     if (lastSlash > 0) {
         String parent = pathStr.substring(0, lastSlash);
-        if (!SD.exists(parent.c_str())) {
+        if (!SD_CARD.exists(parent.c_str())) {
             ensureDir(parent.c_str());
         }
     }
-    return SD.mkdir(path);
+    return SD_CARD.mkdir(path);
 }
 
 bool SDStore::exists(const char* path) {
@@ -124,7 +155,7 @@ bool SDStore::exists(const char* path) {
     if (!_ready) return false;
     SharedSPILock lock;
     if (!lock.locked()) return false;
-    return SD.exists(path);
+    return SD_CARD.exists(path);
 }
 
 bool SDStore::remove(const char* path) {
@@ -134,7 +165,7 @@ bool SDStore::remove(const char* path) {
     if (!_ready) return false;
     SharedSPILock lock;
     if (!lock.locked()) return false;
-    return SD.remove(path);
+    return SD_CARD.remove(path);
 }
 
 bool SDStore::rename(const char* from, const char* to) {
@@ -144,7 +175,7 @@ bool SDStore::rename(const char* from, const char* to) {
     if (!_ready) return false;
     SharedSPILock lock;
     if (!lock.locked()) return false;
-    return SD.rename(from, to);
+    return SD_CARD.rename(from, to);
 }
 
 File SDStore::openDir(const char* path) {
@@ -161,7 +192,7 @@ File SDStore::openFile(const char* path, const char* mode) {
     if (!_ready) return File();
     SharedSPILock lock;
     if (!lock.locked()) return File();
-    return sharedSPIFile(SD.open(path, mode));
+    return sharedSPIFile(SD_CARD.open(path, mode));
 }
 
 bool SDStore::removeDir(const char* path) {
@@ -171,7 +202,7 @@ bool SDStore::removeDir(const char* path) {
     if (!_ready) return false;
     SharedSPILock lock;
     if (!lock.locked()) return false;
-    return SD.rmdir(path);
+    return SD_CARD.rmdir(path);
 }
 
 bool SDStore::readFile(const char* path, uint8_t* buffer, size_t maxLen, size_t& bytesRead) {
@@ -295,9 +326,9 @@ bool SDStore::hasExistingData() {
     if (!_ready) return false;
     SharedSPILock lock;
     if (!lock.locked()) return false;
-    if (SD.exists(SD_PATH_USER_CONFIG)) return true;
-    if (SD.exists(SD_PATH_IDENTITY)) return true;
-    File dir = SD.open(SD_PATH_MESSAGES);
+    if (SD_CARD.exists(SD_PATH_USER_CONFIG)) return true;
+    if (SD_CARD.exists(SD_PATH_IDENTITY)) return true;
+    File dir = SD_CARD.open(SD_PATH_MESSAGES);
     if (dir && dir.isDirectory()) {
         File entry = dir.openNextFile();
         bool found = (bool)entry;

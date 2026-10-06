@@ -1,6 +1,7 @@
-// Audio output for T-Pager via I2S codec/amplifier path
-#include "AudioNotify.h"
+// Notification audio through an ES8311 codec and a switched amplifier.
 #include "config/BoardConfig.h"
+#if HAS_ES8311_AUDIO
+#include "audio/Es8311Notify.h"
 #include "hal/Power.h"
 #include <Wire.h>
 #include <driver/i2s.h>
@@ -8,6 +9,9 @@
 
 #define AUDIO_SAMPLE_RATE  16000
 #define I2S_PORT           I2S_NUM_0
+#ifndef AUDIO_AMP_SETTLE_MS
+#define AUDIO_AMP_SETTLE_MS 20
+#endif
 
 namespace {
 constexpr uint8_t ES8311_ADDR = 0x18;
@@ -92,7 +96,7 @@ void AudioNotify::begin() {
         Serial.println("[AUDIO] ES8311 codec init failed");
     } else {
         Power::setSpeakerPower(_enabled && _volume > 0);
-        delay(20);
+        delay(AUDIO_AMP_SETTLE_MS);
     }
 }
 
@@ -129,14 +133,19 @@ bool AudioNotify::writeCodecReg(uint8_t reg, uint8_t value) {
     Wire.beginTransmission(ES8311_ADDR);
     Wire.write(reg);
     Wire.write(value);
-    return Wire.endTransmission() == 0;
+    const uint8_t error = Wire.endTransmission();
+    if (error) Serial.printf("[AUDIO] ES8311 write 0x%02X failed (%u)\n", reg, error);
+    return error == 0;
 }
 
 bool AudioNotify::readCodecReg(uint8_t reg, uint8_t& value) {
     Wire.beginTransmission(ES8311_ADDR);
     Wire.write(reg);
-    if (Wire.endTransmission(false) != 0) return false;
-    if (Wire.requestFrom((uint8_t)ES8311_ADDR, (uint8_t)1) != 1) return false;
+    const uint8_t error = Wire.endTransmission(false);
+    if (error || Wire.requestFrom((uint8_t)ES8311_ADDR, (uint8_t)1) != 1) {
+        Serial.printf("[AUDIO] ES8311 read 0x%02X failed (%u)\n", reg, error);
+        return false;
+    }
     value = Wire.read();
     return true;
 }
@@ -174,9 +183,10 @@ bool AudioNotify::beginCodec() {
         return false;
     }
 
-    bool ok = true;
-    ok &= writeCodecReg(ES8311_GPIO_REG44, 0x08);
-    ok &= writeCodecReg(ES8311_GPIO_REG44, 0x08);
+    // The first write after power-up only raises I2C noise immunity, and the
+    // Wio Tracker L2 codec NACKs it; the repeated write must succeed.
+    writeCodecReg(ES8311_GPIO_REG44, 0x08);
+    bool ok = writeCodecReg(ES8311_GPIO_REG44, 0x08);
     ok &= writeCodecReg(ES8311_CLK_MANAGER_REG01, 0x30);
     ok &= writeCodecReg(ES8311_CLK_MANAGER_REG02, 0x00);
     ok &= writeCodecReg(ES8311_CLK_MANAGER_REG03, 0x10);
@@ -430,3 +440,5 @@ void AudioNotify::playBoot() {
 
     free(buf);
 }
+
+#endif

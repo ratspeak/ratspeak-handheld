@@ -24,6 +24,10 @@ public:
     void setUIManager(class UIManager* ui) { _ui = ui; }
     void setUserConfig(UserConfig* cfg) { _cfg = cfg; }
     bool handleLongPress() override;
+    TextInputRequest textInput() const override {
+        if (_actionState != NodeAction::NICKNAME_INPUT) return {};
+        return {TextInputMode::Text, _nicknameLbl};
+    }
 
     const char* title() const override { return "Peers"; }
 

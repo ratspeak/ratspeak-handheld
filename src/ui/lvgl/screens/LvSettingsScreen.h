@@ -60,6 +60,7 @@ public:
     void refreshUI() override;
     bool handleKey(const KeyEvent& event) override;
     bool handleLongPress() override;
+    TextInputRequest textInput() const override;
 
     void setUserConfig(UserConfig* cfg) {
         _cfg = cfg;

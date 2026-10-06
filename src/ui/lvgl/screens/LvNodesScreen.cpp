@@ -202,6 +202,8 @@ void LvNodesScreen::createUI(lv_obj_t* parent) {
     lv_obj_set_style_text_color(_nicknameHint, lv_color_hex(Theme::TEXT_MUTED), 0);
 #if HAS_TRACKBALL
     lv_label_set_text(_nicknameHint, "Enter saves / Hold click cancels");
+#elif !HAS_KEYBOARD
+    lv_label_set_text(_nicknameHint, "Enter saves / BOOT cancels");
 #else
     lv_label_set_text(_nicknameHint, "Enter saves / Alt+Back cancels");
 #endif
