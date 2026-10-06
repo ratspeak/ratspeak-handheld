@@ -56,7 +56,7 @@ struct VoiceWorker::Impl {
     uint8_t rxHead=0,rxCount=0,txHead=0,txCount=0;
     uint8_t profile=0;
     AudioUse use=AudioUse::Call;
-    uint16_t frameLimit=0, inputFrames=0;
+    uint16_t frameLimit=0, inputFrames=0, resumeFrame=0;
     uint32_t memoEpoch=0;
     uint32_t generation=0;
     uint8_t* codec=nullptr;
@@ -132,12 +132,17 @@ Code VoiceWorker::prepareMemo(uint32_t generation,AudioUse use,uint16_t frames,u
     if (!(capabilities() & (use==AudioUse::MemoRecord?1:2))) return Code::AudioUnavailable;
     return prepareUse(generation,MemoProfile,volume,use,frames,epoch);
 }
+Code VoiceWorker::prepareMemoPlayback(uint32_t generation,uint16_t frames,uint8_t volume,uint32_t epoch,uint16_t resumeFrame) {
+    if(!frames || frames>750 || resumeFrame>=frames || epoch==UINT32_MAX || epoch!=stopEpoch()) return Code::Invalid;
+    if(!(capabilities()&2)) return Code::AudioUnavailable;
+    return prepareUse(generation,MemoProfile,volume,AudioUse::MemoPlayback,frames,epoch,resumeFrame);
+}
 Code VoiceWorker::prepareUse(uint32_t generation,uint8_t profile,uint8_t volumeValue,
-    AudioUse use,uint16_t frames,uint32_t epoch) {
+    AudioUse use,uint16_t frames,uint32_t epoch,uint16_t resumeFrame) {
     if (!capabilities()) return Code::AudioUnavailable;
     if (!generation || !profileInfo(profile).native_samples) return Code::ProfileUnsupported;
     if (_impl && !_impl->stop.load() && !_impl->done.load() && _impl->generation==generation && _impl->profile==profile &&
-        _impl->use==use && _impl->frameLimit==frames && _impl->memoEpoch==epoch) return Code::Ok;
+        _impl->use==use && _impl->frameLimit==frames && _impl->memoEpoch==epoch && _impl->resumeFrame==resumeFrame) return Code::Ok;
     if (_impl) { stop(); if(!drained()) return Code::Busy; }
     portENTER_CRITICAL(&memoryMux);memoryReport={};portEXIT_CRITICAL(&memoryMux);
     if (heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)<StackBytes+sizeof(Impl)+FreeFloor ||
@@ -147,7 +152,7 @@ Code VoiceWorker::prepareUse(uint32_t generation,uint8_t profile,uint8_t volumeV
     if (!memory) return memoryFailure(MemoryStage::Owner,sizeof(Impl)+FreeFloor,sizeof(Impl));
     auto* i=new(memory) Impl;
     i->generation=generation;i->status.generation=generation;i->profile=profile;i->volume=volumeValue;
-    i->use=use;i->frameLimit=frames;i->memoEpoch=epoch;
+    i->use=use;i->frameLimit=frames;i->memoEpoch=epoch;i->resumeFrame=resumeFrame;i->status.frames=resumeFrame;
     if (!AudioCoordinator::instance().request()) {
         i->~Impl();heap_caps_free(i);return Code::Busy;
     }
@@ -352,7 +357,7 @@ void VoiceWorker::runMemo(Impl& i) {
         return elapsed<=(encoding?80000u:40000u);
     };
     auto frames=[&] {
-        portENTER_CRITICAL(&i.mux);i.status.frames=total;portEXIT_CRITICAL(&i.mux);
+        portENTER_CRITICAL(&i.mux);i.status.frames=std::max(total,size_t(i.resumeFrame));portEXIT_CRITICAL(&i.mux);
     };
     auto encode=[&](bool captureRunning=true) {
         const auto before=esp_timer_get_time();
@@ -420,7 +425,7 @@ void VoiceWorker::runMemo(Impl& i) {
                 const auto code=rs_handheld_voice_codec_decode_frame(i.codec,packet.bytes+at,4,i.pcm,320);
                 const bool timely=timing(before,false);
                 if(code!=RS_HANDHELD_OK || !timely) {failure=timely?Code::AudioUnavailable:Code::SlowCodec;break;}
-                for(size_t offset=0;offset<320 && !i.stop && !cancelled();offset+=160)
+                for(size_t offset=0;total>=i.resumeFrame && offset<320 && !i.stop && !cancelled();offset+=160)
                     if(i.device.write(i.pcm+offset,160)!=160) {failure=Code::AudioUnavailable;break;}
                 clear(i.pcm,PcmBytes);
                 if(failure!=Code::Ok || i.stop || cancelled()) break;

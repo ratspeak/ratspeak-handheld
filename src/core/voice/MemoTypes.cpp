@@ -10,11 +10,11 @@ const char* description(const Status& status) {
     case Code::UnsupportedAudio: return "Unsupported audio";
     case Code::AudioUnavailable: return "Audio unavailable";
     case Code::StorageUnavailable: return "Storage unavailable";
-    case Code::Interrupted: return "Recording interrupted";
+    case Code::Interrupted: return status.fromMessage?"Playback interrupted":"Recording interrupted";
     case Code::NoMemory: return "Not enough memory";
     case Code::TooShort: return "No audio recorded";
     case Code::DeviceBusy: return "Audio processing too slow";
-    case Code::InputLost: return "Recording stopped";
+    case Code::InputLost: return status.fromMessage?"Playback stopped":"Recording stopped";
     case Code::CaptureOverflow: return "Recording buffer full";
     case Code::Recovered: break;
     case Code::Ok: break;
@@ -30,6 +30,8 @@ const char* description(const Status& status) {
     case Phase::Saving: return "Saving...";
     case Phase::Review: return status.fromMessage ? "Voice message" : "Voice clip";
     case Phase::Playing: return "Playing";
+    case Phase::Pausing: return "Pausing...";
+    case Phase::Paused: return "Paused";
     case Phase::Sending: return status.fromMessage?"Retrying message...":"Adding to messages...";
     case Phase::Sent: return status.fromMessage?"Retry queued":"Added to messages";
     }

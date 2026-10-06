@@ -46,9 +46,10 @@ private:
     Work _work = Work::None;
     messaging::DeliveryPolicy _policy = messaging::DeliveryPolicy::DirectOnly;
     Code _failure = Code::Ok;
+    uint16_t _resumeFrame = 0;
     uint8_t _configuredVolume = 70;
     bool _accepting = false, _audioOwned = false, _recording = false, _stopping = false, _closed = false;
-    bool _conversation = false, _ending = false;
+    bool _conversation = false, _ending = false, _pausing = false;
 };
 static_assert(sizeof(Controller) <= 384, "Memo controller fixed retention budget changed");
 }

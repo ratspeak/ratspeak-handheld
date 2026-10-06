@@ -55,6 +55,12 @@ public:
     virtual uint8_t capabilities() const = 0; // capture=1, playback=2; board facts, not available memory
     virtual Code prepare(uint32_t generation, uint8_t profile, uint8_t volume) = 0;
     virtual Code prepareMemo(uint32_t, AudioUse, uint16_t, uint8_t, uint32_t) { return Code::AudioUnavailable; }
+    // Resume reconstructs the predictive decoder from the encoded prefix; no
+    // prefix PCM is played. A paused owner retains no worker/codec allocation.
+    virtual Code prepareMemoPlayback(uint32_t generation, uint16_t frames, uint8_t volume,
+                                    uint32_t epoch, uint16_t resumeFrame) {
+        return resumeFrame ? Code::AudioUnavailable : prepareMemo(generation, AudioUse::MemoPlayback, frames, volume, epoch);
+    }
     virtual void finishMemo() { stop(); }
     virtual void stop() = 0;
     virtual bool drained() = 0;

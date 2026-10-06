@@ -23,7 +23,7 @@ void Controller::begin(const Deps& deps,const uint8_t local[16],uint8_t volume) 
     _status={};_status.generation=generation;_status.volume=_configuredVolume=std::min(uint8_t(100),volume);
     _status.capabilities=_d.audio?_d.audio->capabilities():0;
     _draft={};_media={};_packet={};_stopping=_recording=false;
-    _conversation=_ending=false;_expiryRetry=0;
+    _conversation=_ending=_pausing=false;_resumeFrame=0;_expiryRetry=0;
     phase(Phase::Idle);
 }
 void Controller::phase(Phase value,Code code) {
@@ -31,7 +31,7 @@ void Controller::phase(Phase value,Code code) {
     if(_status.revision<UINT32_MAX) ++_status.revision;
 }
 void Controller::review(Code code) {
-    _recording=false;_stopping=false;_packet={};
+    _recording=false;_stopping=_pausing=false;_resumeFrame=0;_packet={};
     _status.draftRevision=_draft.revision;
     if(!_status.fromMessage) _status.length=_draft.state==sm::State::Ready?_draft.length:0;
     _status.frames=_status.length/sm::FrameBytes;
@@ -45,7 +45,7 @@ sm::Command Controller::binding() const {
     command.revision=_draft.revision;command.timestamp=_sendTime;command.policy=_policy;return command;
 }
 Code Controller::command(const Command& command,sm::Command send) {
-    if(!_d.store || !_d.audio || command.action>Action::EndConversation || command.volume>100) return Code::Invalid;
+    if(!_d.store || !_d.audio || command.action>Action::Pause || command.volume>100) return Code::Invalid;
     if(command.action==Action::Open) {
         if(!_accepting || !command.view || command.view<=_viewFloor || _status.generation==UINT32_MAX) return Code::Stale;
         if(!drained() || busy(_status.phase)) return Code::Busy;
@@ -53,7 +53,7 @@ Code Controller::command(const Command& command,sm::Command send) {
         _viewFloor=command.view;_status.view=command.view;++_status.generation;
         memcpy(_status.peer,command.peer,16);_status.counter=command.counter;_status.incoming=command.incoming;
         _status.fromMessage=command.counter!=0;_status.length=0;_status.frames=0;_status.retryable=false;_recordRevision=0;
-        _draft={};_media={};_failure=Code::Ok;_closed=false;_stopping=false;
+        _draft={};_media={};_failure=Code::Ok;_closed=false;_stopping=_pausing=false;_resumeFrame=0;
         _status.storageStep=_status.storageError=_status.audioError=0;
         _work=!_conversation?Work::Fresh:_status.fromMessage?Work::Message:Work::Inspect;phase(Phase::Loading);return Code::Ok;
     }
@@ -61,19 +61,28 @@ Code Controller::command(const Command& command,sm::Command send) {
         memcmp(command.peer,_status.peer,16)) return Code::Stale;
     if(command.action==Action::EndConversation) {
         if(_status.phase==Phase::Closed) return Code::Ok;
-        _ending=_closed=_stopping=true;_expiryRetry=0;
+        _ending=_closed=_stopping=true;_pausing=false;_expiryRetry=0;
         if(_audioOwned) _d.audio->stop();
         return Code::Ok;
     }
     if(command.action==Action::Stop || command.action==Action::Close) {
         if(command.action==Action::Close) _closed=true;
+        _pausing=false;
         if(_work==Work::ClearReplace) _stopping=true;
         else if(_status.phase==Phase::Starting || _status.phase==Phase::Recording || _status.phase==Phase::Stopping) {
             _stopping=true;_d.audio->finishMemo();phase(Phase::Stopping);
-        } else if(_status.phase==Phase::Playing) {_stopping=true;_d.audio->stop();}
+        } else if(_status.phase==Phase::Playing || _status.phase==Phase::Pausing) {_stopping=true;_d.audio->stop();}
+        else if(_status.phase==Phase::Paused) review();
         return Code::Ok;
     }
     if(!_accepting || _closed) return Code::Stale;
+    if(command.action==Action::Pause) {
+        if(_status.phase==Phase::Paused || _status.phase==Phase::Pausing) return Code::Ok;
+        if(_status.phase!=Phase::Playing) return Code::Invalid;
+        _pausing=_stopping=true;
+        if(_audioOwned) _d.audio->stop();
+        phase(Phase::Pausing);return Code::Ok;
+    }
     if(command.action==Action::Volume) {
         _status.volume=command.volume;_d.audio->volume(command.volume);phase(_status.phase,_status.reason);return Code::Ok;
     }
@@ -98,7 +107,8 @@ Code Controller::command(const Command& command,sm::Command send) {
             (_status.fromMessage && (_media.mode!=sm::Mode || _media.state!=1))) return Code::UnsupportedAudio;
         if(command.stopEpoch==UINT32_MAX || command.stopEpoch!=_d.audio->cancellationEpoch()) return Code::Stale;
         _epoch=command.stopEpoch;_offset=0;_started=_now;_packet={};_stopping=false;_recording=false;
-        _status.frames=0;phase(Phase::Playing);return Code::Ok;
+        _resumeFrame=_status.phase==Phase::Paused?uint16_t(_status.frames):0;
+        _status.frames=_resumeFrame;_pausing=false;phase(Phase::Playing);return Code::Ok;
     case Action::Send:
         if(_status.fromMessage || _draft.state!=sm::State::Ready) return Code::Invalid;
         _sendTime=send.timestamp;_policy=send.policy;_work=Work::Promote;phase(Phase::Sending);return Code::Ok;
@@ -119,6 +129,7 @@ void Controller::fail(Code code) {
     _packet={};
     if(!_audioOwned && !_ticket.valid()) {
         if(_recording && _draft.workingRevision) _work=Work::Cancel;
+        else if(_resumeFrame && !_closed) {_stopping=_pausing=false;phase(Phase::Paused,_failure);}
         else review(_failure);
     }
 }
@@ -264,8 +275,9 @@ void Controller::audio() {
         if(_stopping || _closed || _epoch!=_d.audio->cancellationEpoch()) {
             if(_recording) _work=Work::Cancel;else review();return;
         }
-        const auto code=_d.audio->prepareMemo(_status.generation,_recording?voice::AudioUse::MemoRecord:voice::AudioUse::MemoPlayback,
-            _recording?sm::RecordBytes/sm::FrameBytes:_status.length/sm::FrameBytes,_status.volume,_epoch);
+        const auto code=_recording?
+            _d.audio->prepareMemo(_status.generation,voice::AudioUse::MemoRecord,sm::RecordBytes/sm::FrameBytes,_status.volume,_epoch):
+            _d.audio->prepareMemoPlayback(_status.generation,_status.length/sm::FrameBytes,_status.volume,_epoch,_resumeFrame);
         if(code==voice::Code::Busy && _now-_started<3000) return;
         if(code!=voice::Code::Ok) {
             // A failed post-task memory check can still own a stopping worker.
@@ -276,7 +288,12 @@ void Controller::audio() {
         }
         _audioOwned=true;
     }
-    if(!_audioOwned) return;
+    if(!_audioOwned) {
+        if(_pausing && !_ticket.valid() && _work==Work::None) {
+            _packet={};_stopping=_pausing=false;phase(Phase::Paused);
+        }
+        return;
+    }
     const auto status=_d.audio->status();
     if(status.generation!=_status.generation) {fail(Code::AudioUnavailable);return;}
     if(_ending && status.finished && !_ticket.valid() && _d.audio->drained()) {
@@ -309,7 +326,12 @@ void Controller::audio() {
             _work=Work::Clip;
         if(status.finished && !_ticket.valid()) {
             _work=Work::None;_packet={};
-            if(_d.audio->drained()) {_audioOwned=false;review(_failure);}
+            if(_d.audio->drained()) {
+                _audioOwned=false;
+                if((_pausing || _resumeFrame) && !_closed && _status.frames<_status.length/sm::FrameBytes) {
+                    _stopping=_pausing=false;phase(Phase::Paused,_failure);
+                } else review(_failure);
+            }
         }
     }
 }
@@ -323,7 +345,7 @@ void Controller::poll(uint64_t now) {
     submit();
 }
 void Controller::stop() {
-    _accepting=false;_closed=true;_stopping=true;
+    _accepting=false;_closed=true;_stopping=true;_pausing=false;
     _ending=_status.view && _status.phase!=Phase::Closed;_expiryRetry=0;
     if(_audioOwned) {if(_recording) _d.audio->finishMemo();else _d.audio->stop();}
     if(_work==Work::Promote && !_ticket.valid()) {_work=Work::None;review();}

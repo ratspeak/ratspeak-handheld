@@ -20,6 +20,7 @@ public:
     uint8_t capabilities() const override;
     Code prepare(uint32_t generation, uint8_t profile, uint8_t volume) override;
     Code prepareMemo(uint32_t generation, AudioUse, uint16_t frames, uint8_t volume, uint32_t stopEpoch) override;
+    Code prepareMemoPlayback(uint32_t, uint16_t, uint8_t, uint32_t, uint16_t) override;
     void finishMemo() override;
     void stop() override;
     bool drained() override;
@@ -58,6 +59,6 @@ private:
     inline static std::atomic<uint32_t> _stopEpoch{1}, _inputHeartbeat{0};
     static void run(void*);
     static void runMemo(Impl&);
-    Code prepareUse(uint32_t, uint8_t, uint8_t, AudioUse, uint16_t, uint32_t);
+    Code prepareUse(uint32_t, uint8_t, uint8_t, AudioUse, uint16_t, uint32_t, uint16_t = 0);
 };
 }
