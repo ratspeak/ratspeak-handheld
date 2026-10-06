@@ -59,7 +59,8 @@ Code Controller::command(const Command& command,sm::Command send) {
         memcmp(command.peer,_status.peer,16)) return Code::Stale;
     if(command.action==Action::Stop || command.action==Action::Close) {
         if(command.action==Action::Close) _closed=true;
-        if(_status.phase==Phase::Starting || _status.phase==Phase::Recording || _status.phase==Phase::Stopping) {
+        if(_work==Work::ClearReplace) _stopping=true;
+        else if(_status.phase==Phase::Starting || _status.phase==Phase::Recording || _status.phase==Phase::Stopping) {
             _stopping=true;_d.audio->finishMemo();phase(Phase::Stopping);
         } else if(_status.phase==Phase::Playing) {_stopping=true;_d.audio->stop();}
         return Code::Ok;
@@ -79,7 +80,10 @@ Code Controller::command(const Command& command,sm::Command send) {
         if(command.action==Action::Record && _draft.state==sm::State::Ready) return Code::Invalid;
         if(command.stopEpoch==UINT32_MAX || command.stopEpoch!=_d.audio->cancellationEpoch()) return Code::Stale;
         _epoch=command.stopEpoch;_started=_now;_stopping=false;_written=0;_packet={};_status.frames=0;
-        _work=Work::Begin;phase(Phase::Starting);return Code::Ok;
+        // Record again is an explicit delete confirmation. Commit that deletion
+        // before a new recording, so cancellation/failure cannot revive the clip.
+        _work=command.action==Action::Replace?Work::ClearReplace:Work::Begin;
+        phase(command.action==Action::Replace?Phase::Saving:Phase::Starting);return Code::Ok;
     case Action::Play:
         if(!(_status.capabilities&2)) return Code::PlaybackUnavailable;
         if(!_status.length || _status.length>sm::PlaybackBytes || _status.length%sm::FrameBytes ||
@@ -125,7 +129,7 @@ void Controller::submit() {
         command.revision=_draft.workingRevision;
         submission=_d.store->requestMemo(_work==Work::Seal?Op::MemoSeal:Op::MemoCancel,command);break;
     case Work::Promote: submission=_d.store->requestMemo(Op::MemoPromote,command);break;
-    case Work::Clear: submission=_d.store->requestMemo(Op::MemoClear,command);break;
+    case Work::Clear: case Work::ClearReplace: submission=_d.store->requestMemo(Op::MemoClear,command);break;
     case Work::Message: submission=_d.store->requestRecord(key(),0,sizeof(storage::StoredRecordHeader));break;
     case Work::Retry: submission=_d.retry(_d.context,key(),_recordRevision);break;
     case Work::Clip:
@@ -204,6 +208,11 @@ void Controller::settle() {
         if(snapshot.workingLength!=_written+_packet.length) {fail(Code::Interrupted);break;}
         _written=snapshot.workingLength;_packet={};break;
     case Work::Seal: case Work::Clear: review();break;
+    case Work::ClearReplace:
+        _status.length=0;_status.frames=0;
+        if(_stopping || _closed || !_accepting || _epoch!=_d.audio->cancellationEpoch()) review();
+        else {_started=_now;_work=Work::Begin;phase(Phase::Starting);}
+        break;
     case Work::Cancel: _recording=false;review(_failure);break;
     case Work::Promote:
         _status.counter=result.key.counter;_status.length=0;

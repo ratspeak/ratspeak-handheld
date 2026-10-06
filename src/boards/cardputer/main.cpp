@@ -1055,8 +1055,9 @@ void loop() {
         pendingMessageSound = false;
         audio.playMessage();
     }
+    const bool voiceWasVisible=voicePanel.visible();
     voicePanel.poll(power.isScreenOn() && maintenance.accepting() && !helpOverlay.isVisible());
-    if(voicePanel.active() || voicePanel.visible()) ui.markAllDirty();
+    if(voiceWasVisible || voicePanel.active() || voicePanel.visible()) ui.markAllDirty();
     if(voicePanel.active() && power.isScreenOn()) power.activity();
     audio.loop();
 

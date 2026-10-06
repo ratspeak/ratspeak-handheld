@@ -9,11 +9,11 @@ void Ui::open(const uint8_t peer[16],uint32_t counter,bool incoming) {
     const auto caps=_status.capabilities,volume=_status.volume;
     _status={};_status.view=++nextView;_status.capabilities=caps;_status.volume=volume;
     memcpy(_status.peer,peer,16);_status.counter=counter;_status.incoming=incoming;_status.fromMessage=counter!=0;
-    _status.phase=Phase::Loading;_visible=true;_menu=Menu::Main;_focus=0;_stop=false;
+    _status.phase=Phase::Loading;_visible=true;_menu=Menu::Main;_focus=0;_stop=false;_deletion=Deletion::None;
     send(Action::Open);
 }
 void Ui::send(Action action) {
-    if(!_submit || _serial==UINT32_MAX) {_error=Code::Busy;return;}
+    if(!_submit || _serial==UINT32_MAX) {_error=Code::Busy;_deletion=Deletion::None;return;}
     Command c;c.action=action;c.view=_status.view;c.generation=_status.generation;
     c.draftRevision=_status.draftRevision;c.counter=_status.counter;c.incoming=_status.incoming;
     c.volume=_status.volume;c.stopEpoch=voice::VoiceWorker::stopEpoch();memcpy(c.peer,_status.peer,16);
@@ -25,6 +25,7 @@ void Ui::acknowledge(uint32_t serial,Code code) {
     if(serial!=_serial) return;
     if(code!=Code::Ok) {
         _pending=false;_error=code;
+        _deletion=Deletion::None;
         if(_action==Action::Open) {_status.phase=Phase::Unavailable;_close=_stop=false;}
     } else if(_action==Action::Close || _action==Action::Stop || _action==Action::Volume) {
         _pending=false;
@@ -37,13 +38,24 @@ void Ui::update(const Status& value,bool foregroundAllowed) {
     const auto before=layout();
     if(!value.view && _status.generation && value.generation>=_status.generation) {
         voice::VoiceWorker::emergencyStop();_status.generation=0;_status.phase=Phase::Unavailable;
-        _error=Code::Stale;_pending=_close=_stop=false;_menu=Menu::Main;
+        _error=Code::Stale;_pending=_close=_stop=false;_menu=Menu::Main;_deletion=Deletion::None;
     }
-    if(value.view==_status.view && !memcmp(value.peer,_status.peer,16)) {
+    if(value.view==_status.view && !memcmp(value.peer,_status.peer,16) &&
+        value.generation>=_status.generation && value.revision>=_status.revision) {
         if(!_pending || (_action!=Action::Close && _action!=Action::Stop && _action!=Action::Volume && value.revision>_anchor)) {
+            // A confirmation belongs to the clip the user saw, not a newer one.
+            if(value.draftRevision!=_status.draftRevision) _menu=Menu::Main;
             _status=value;
             if(_pending) {_pending=false;_error=Code::Ok;}
             if(_status.phase!=Phase::Review) _menu=Menu::Main;
+            if(_deletion!=Deletion::None) {
+                if(_status.reason!=Code::Ok) _deletion=Deletion::None;
+                else if(_status.draftRevision>_deleteRevision && !_status.length && _status.phase!=Phase::Saving) {
+                    const bool close=_deletion==Deletion::Close && _status.phase==Phase::Idle;
+                    _deletion=Deletion::None;
+                    if(close) hide();
+                }
+            }
         }
     }
     if(_visible && !foregroundAllowed) hide();
@@ -66,13 +78,20 @@ void Ui::hide() {
     if(!_status.generation && !_pending) return;
     stop(true);
 }
+void Ui::back() {
+    if(!_visible || _deletion!=Deletion::None) return;
+    const auto before=layout();
+    if(_menu!=Menu::Main) _menu=Menu::Main;else hide();
+    changed(before);
+}
 unsigned Ui::count() const {
     unsigned n=0;while(n<3 && choice(n)!=Choice::None) ++n;return n;
 }
 Ui::Choice Ui::choice(unsigned index) const {
     if(index>=3) return Choice::None;
+    if(_deletion!=Deletion::None) return Choice::None;
     if(_menu==Menu::Replace || _menu==Menu::Discard)
-        return index==0?Choice::Keep:index==1?(_menu==Menu::Replace?Choice::ConfirmReplace:Choice::ConfirmDiscard):Choice::None;
+        return index==0?Choice::Cancel:index==1?(_menu==Menu::Replace?Choice::ConfirmReplace:Choice::ConfirmDiscard):Choice::None;
     if(_menu==Menu::More) return index==0?Choice::Back:index==1?Choice::Replace:Choice::Discard;
     if(_pending && _action!=Action::Record && _action!=Action::Replace) return index==0?Choice::Back:Choice::None;
     if(_stop || _close) return index==0?Choice::Back:Choice::None;
@@ -98,8 +117,8 @@ void Ui::choose(Choice choiceValue) {
     if(!offered) return;
     const auto before=layout();
     switch(choiceValue) {
-    case Choice::Back: if(_menu!=Menu::Main) _menu=Menu::Main;else hide();break;
-    case Choice::Keep: _menu=Menu::Main;break;
+    case Choice::Back: back();break;
+    case Choice::Cancel: _menu=Menu::Main;break;
     case Choice::More: _menu=Menu::More;break;
     case Choice::Replace: _menu=Menu::Replace;break;
     case Choice::Discard: _menu=Menu::Discard;break;
@@ -108,8 +127,10 @@ void Ui::choose(Choice choiceValue) {
     case Choice::Play: send(Action::Play);break;
     case Choice::Send: send(Action::Send);break;
     case Choice::RetryDelivery: send(Action::Retry);break;
-    case Choice::ConfirmReplace: _menu=Menu::Main;send(Action::Replace);break;
-    case Choice::ConfirmDiscard: _menu=Menu::Main;send(Action::Discard);break;
+    case Choice::ConfirmReplace: case Choice::ConfirmDiscard:
+        _menu=Menu::Main;_deleteRevision=_status.draftRevision;
+        _deletion=choiceValue==Choice::ConfirmReplace?Deletion::RecordAgain:Deletion::Close;
+        send(choiceValue==Choice::ConfirmReplace?Action::Replace:Action::Discard);break;
     case Choice::Retry: {uint8_t peer[16];memcpy(peer,_status.peer,16);open(peer,_status.counter,_status.incoming);break;}
     case Choice::None: break;
     }
@@ -117,7 +138,7 @@ void Ui::choose(Choice choiceValue) {
 }
 void Ui::move(int delta) {const int n=int(count());if(n) _focus=uint8_t((int(_focus)+delta%n+n)%n);}
 void Ui::volume(int delta) {
-    if(!_visible || _pending || !(_status.capabilities&2)) return;
+    if(!_visible || _pending || _deletion!=Deletion::None || !(_status.capabilities&2)) return;
     _status.volume=uint8_t(std::max(0,std::min(100,int(_status.volume)+delta)));send(Action::Volume);
 }
 uint32_t Ui::layout() const {
@@ -130,14 +151,14 @@ const char* Ui::label(Choice c) {
     case Choice::StopPlayback: return "Stop playback";
     case Choice::RetryDelivery: return "Retry";
     case Choice::Send: return "Send";case Choice::More: return "More";case Choice::Back: return "Back";
-    case Choice::Replace: return "Record again";case Choice::Discard: return "Discard";case Choice::Keep: return "Keep draft";
-    case Choice::ConfirmReplace: return "Record again";case Choice::ConfirmDiscard: return "Discard";case Choice::Retry: return "Retry";
+    case Choice::Replace: return "Record again";case Choice::Discard: return "Discard";case Choice::Cancel: return "Cancel";
+    case Choice::ConfirmReplace: case Choice::ConfirmDiscard: return "Delete";case Choice::Retry: return "Retry";
     case Choice::None: return "";
     }return "";
 }
 const char* Ui::text() const {
-    if(_menu==Menu::Replace) return "Replace this recording?";
-    if(_menu==Menu::Discard) return "Discard this recording?";
+    if(_deletion!=Deletion::None) return "Deleting...";
+    if(_menu==Menu::Replace || _menu==Menu::Discard) return "Delete current clip?";
     if(_menu==Menu::More) return "Saved draft";
     if(_error!=Code::Ok) {auto s=_status;s.reason=_error;return description(s);}
     if(_stop || _close) return "Stopping...";
@@ -145,8 +166,8 @@ const char* Ui::text() const {
     return description(_status);
 }
 const char* Ui::guidance() const {
-    if(_menu==Menu::Replace) return "Keep the draft or record a new clip";
-    if(_menu==Menu::Discard) return "This removes the saved draft";
+    if(_menu==Menu::Replace || _deletion==Deletion::RecordAgain) return "Then record a new clip";
+    if(_menu==Menu::Discard || _deletion==Deletion::Close) return "Return to the conversation";
     if(_status.phase==Phase::Recording || _status.phase==Phase::Starting) return "Tap Stop when you are done";
     if(_status.reason==Code::Recovered) return "Previous recording wasn't saved";
     if(_status.reason==Code::NoMemory) return "Close other activity and retry";

@@ -25,7 +25,7 @@ void LvVoicePanel::hide() {
     _model.hide();_pressed=Ui::Choice::None;
     if(_root) {lv_obj_del(_root);_root=nullptr;}
 }
-void LvVoicePanel::action(Ui::Choice choice) {_model.choose(choice);render();}
+void LvVoicePanel::action(Ui::Choice choice) {_pressed=Ui::Choice::None;_model.choose(choice);render();}
 void LvVoicePanel::build() {
     if(_root || !_model.visible()) return;
     _root=lv_obj_create(lv_layer_top());lv_obj_set_size(_root,Theme::SCREEN_W,Theme::SCREEN_H);lv_obj_center(_root);
@@ -45,7 +45,7 @@ void LvVoicePanel::build() {
     };
     const int width=Theme::SCREEN_W-24;
     _back=button("Back",width-60,-3,60,26);
-    lv_obj_add_event_cb(_back,[](lv_event_t* e) {static_cast<LvVoicePanel*>(lv_event_get_user_data(e))->hide();},LV_EVENT_CLICKED,this);
+    lv_obj_add_event_cb(_back,[](lv_event_t* e) {auto& self=*static_cast<LvVoicePanel*>(lv_event_get_user_data(e));self._pressed=Ui::Choice::None;self._model.back();self.render();},LV_EVENT_CLICKED,this);
     for(unsigned i=0;i<3;++i) {
         _buttons[i]=button("",i==2?(width+6)/2:0,Theme::SCREEN_H-(i?80:130),i?(width-6)/2:width,i?32:40);
         lv_obj_add_event_cb(_buttons[i],[](lv_event_t* e) {
@@ -88,12 +88,14 @@ void LvVoicePanel::render() {
         backInActions|=choice==Ui::Choice::Back;
         lv_label_set_text(lv_obj_get_child(_buttons[i],0),Ui::label(choice));
         const bool selected=i==_model.focus();
-        const auto color=choice==Ui::Choice::Stop || choice==Ui::Choice::ConfirmDiscard?Theme::ERROR_CLR:Theme::PRIMARY;
+        const bool destructive=choice==Ui::Choice::Stop || choice==Ui::Choice::ConfirmDiscard || choice==Ui::Choice::ConfirmReplace;
+        const auto color=destructive?Theme::ERROR_CLR:Theme::PRIMARY;
+        lv_obj_set_style_text_color(lv_obj_get_child(_buttons[i],0),lv_color_hex(destructive?Theme::ERROR_CLR:Theme::TEXT_PRIMARY),0);
         lv_obj_set_style_border_color(_buttons[i],lv_color_hex(selected?color:Theme::BORDER),0);
         lv_obj_set_style_bg_color(_buttons[i],lv_color_hex(selected?Theme::PRIMARY_SUBTLE:Theme::BG_SURFACE),0);
     }
-    shown(_back,!backInActions);
-    shown(_quieter,s.capabilities&2);shown(_louder,s.capabilities&2);
+    shown(_back,!backInActions && _model.count());
+    shown(_quieter,(s.capabilities&2) && _model.count());shown(_louder,(s.capabilities&2) && _model.count());
     if(s.volume==0) lv_obj_add_state(_quieter,LV_STATE_DISABLED);else lv_obj_clear_state(_quieter,LV_STATE_DISABLED);
     if(s.volume==100) lv_obj_add_state(_louder,LV_STATE_DISABLED);else lv_obj_clear_state(_louder,LV_STATE_DISABLED);
 }
@@ -106,7 +108,10 @@ void LvVoicePanel::poll(bool allowed) {
 bool LvVoicePanel::handleKey(const KeyEvent& event) {
     if(!_model.visible()) return false;
     if(event.repeat) return true;
-    if(event.character==27 || event.del) hide();
+    // Mixing touch with keyboard navigation must require a fresh touch press,
+    // even if the user later returns to the same confirmation/layout.
+    _pressed=Ui::Choice::None;
+    if(event.character==27 || event.del) _model.back();
     else if(event.left || event.up) _model.move(-1);
     else if(event.right || event.down || event.tab) _model.move(1);
     else if(event.enter) _model.choose(_model.choice(_model.focus()));

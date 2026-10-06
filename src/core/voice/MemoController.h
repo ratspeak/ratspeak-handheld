@@ -24,7 +24,7 @@ public:
     bool drained() const;
     const Status& status() const { return _status; }
 private:
-    enum class Work : uint8_t { None, Inspect, Begin, Append, Seal, Cancel, Promote, Clear, Message, Clip, Retry };
+    enum class Work : uint8_t { None, Inspect, Begin, Append, Seal, Cancel, Promote, Clear, Message, Clip, Retry, ClearReplace };
     void phase(Phase, Code = Code::Ok);
     void review(Code = Code::Ok);
     void submit();

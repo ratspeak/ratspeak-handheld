@@ -39,18 +39,20 @@ void VoicePanel::render(M5Canvas& canvas) {
         const int x=6+i*(width+4);
         canvas.fillRoundRect(x,83,width,21,3,selected?Theme::PRIMARY_SUBTLE:Theme::BG_SURFACE);
         canvas.drawRoundRect(x,83,width,21,3,selected?Theme::PRIMARY:Theme::BORDER);
-        canvas.setTextColor(choice==Ui::Choice::Stop || choice==Ui::Choice::ConfirmDiscard?Theme::ERROR:selected?Theme::PRIMARY:Theme::TEXT_PRIMARY);
+        canvas.setTextColor(choice==Ui::Choice::Stop || choice==Ui::Choice::ConfirmDiscard || choice==Ui::Choice::ConfirmReplace?Theme::ERROR:selected?Theme::PRIMARY:Theme::TEXT_PRIMARY);
         const auto* label=Ui::label(choice);
         canvas.drawString(label,x+(width-int(strlen(label))*6)/2,90);
     }
     canvas.setTextColor(Theme::TEXT_SECONDARY);
-    canvas.drawString("Arrows: choose  Enter: select",6,111);
-    canvas.drawString("Esc: back      +/-: volume",6,123);
+    if(count) {
+        canvas.drawString("Arrows: choose  Enter: select",6,111);
+        canvas.drawString("Esc: back      +/-: volume",6,123);
+    }
 }
 bool VoicePanel::handleKey(const KeyEvent& e) {
     if(!visible()) return false;
     if(e.repeat) return true;
-    if(e.escape || e.backspace) hide();
+    if(e.escape || e.backspace) _model.back();
     else if(e.navPrevious()) _model.move(-1);
     else if(e.navNext() || e.tab) _model.move(1);
     else if(e.enter) _model.choose(_model.choice(_model.focus()));
