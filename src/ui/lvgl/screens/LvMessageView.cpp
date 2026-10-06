@@ -1194,7 +1194,7 @@ void LvMessageView::showSendModeMenu() {
     _sendMenuIdx = 0;_messagePressedSerial=0;
 
     _sendOverlay = lv_obj_create(lv_layer_top());
-    lv_obj_set_size(_sendOverlay,244,_rrcTools.visible()?std::min(Theme::CONTENT_H,268):_messageTools.visible()?std::min(Theme::CONTENT_H,64+28*sendMenuCount()):34+28*sendMenuCount());
+    lv_obj_set_size(_sendOverlay,244,_rrcTools.visible()?std::min(Theme::CONTENT_H,268):_messageTools.visible()?std::min(Theme::SCREEN_H-16,64+28*sendMenuCount()):34+28*sendMenuCount());
     lv_obj_center(_sendOverlay);
     lv_obj_add_style(_sendOverlay, LvTheme::styleModal(), 0);
     lv_obj_set_style_pad_all(_sendOverlay, 8, 0);
