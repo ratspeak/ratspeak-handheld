@@ -12,7 +12,8 @@ public:
     void hide() {_model.hide();}
     void closeConversation() {_model.closeConversation();}
     bool takeIncoming() {return false;}
-    bool visible() const {return _model.visible();}
+    bool visible() const {return _model.visible() && !_model.inlinePlayback();}
+    handheld::memo::Ui& model() {return _model;}
     bool active() const {return _model.active();}
     void render(M5Canvas&) override;
     bool handleKey(const KeyEvent&) override;

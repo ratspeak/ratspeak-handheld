@@ -70,6 +70,7 @@ public:
     bool older();
     bool newer();
     bool newest();
+    bool moveSelection(int direction);
     bool openFull(size_t span);
     bool backToChat();
     void refresh();
@@ -153,6 +154,7 @@ private:
         bool newBelow = false, followNewest = true, previousSlice = false;
         uint32_t observedStatusRevision = 0, sampledStatusRevision = 0, statusPublication = 0;
         bool statusDirty = false, statusFailed = false, statusReady = false;
+        int8_t selectEdge = 0; // Uses the existing control padding byte.
         uint32_t observedHistoryRevision = 0;
     };
     static_assert(sizeof(Control) <= 128, "History control exceeds its row-arena allocation");

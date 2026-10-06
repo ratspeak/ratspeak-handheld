@@ -124,6 +124,22 @@ bool HistoryWindow::newest() {
     if (!c.awaiting) c.phase = Phase::Idle;
     return true;
 }
+bool HistoryWindow::moveSelection(int direction) {
+    auto& c=control();
+    if(c.mode!=Mode::Chat || !visible() || !spanCount() || loading()) return false;
+    if(c.focus>=spanCount()) {
+        // From the composer the first arrow always selects the latest message.
+        if(canNewer()) {if(!newest()) return false;c.selectEdge=-1;}
+        else c.focus=spanCount()-1;
+    } else if(direction<0) {
+        if(c.focus) --c.focus;
+        else if(older()) c.selectEdge=-1;
+    } else if(c.focus+1<spanCount()) ++c.focus;
+    else if(canNewer()) {if(newer()) c.selectEdge=1;}
+    else c.focus=VisibleSpans;
+    if(!c.selectEdge) setViewportAtNewest(c.focus==VisibleSpans);
+    return true;
+}
 bool HistoryWindow::openFull(size_t index) {
     const auto* row = span(index);
     if (!row || row->unavailable() || control().mode != Mode::Chat) return false;
@@ -324,6 +340,8 @@ void HistoryWindow::publish() {
         const auto& row = candidateFrame().spans[i];
         if (equal(focus, {row.counter, row.incoming()})) { c.focus = i; break; }
     }
+    if(c.selectEdge && c.spanCount) c.focus=c.selectEdge<0?c.spanCount-1:0;
+    c.selectEdge=0;
     c.active ^= 1; ++c.publication; c.publicationHeld = true;
     c.phase = Phase::Idle; c.publish = false; c.state = State::Ready;
     c.statusDirty = true; c.statusReady = false; c.retryAt = 0;

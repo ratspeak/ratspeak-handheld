@@ -32,6 +32,7 @@ bool MessageView::setRrcConversation(const handheld::rrc::Conversation& binding,
         }
         if(_voiceClose) _voiceClose();
         _history.close();
+        _messageTools.close();
         _rrcMode=true;_rrcBinding=binding;memcpy(_rrcIdentity,context.local,16);++_rrcView;
         _peerHex.clear();_input.clear();rrcEdited();
         memset(_rrcInsert,0,sizeof _rrcInsert);

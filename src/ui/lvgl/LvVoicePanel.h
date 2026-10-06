@@ -13,7 +13,8 @@ public:
     void hide();
     void closeConversation();
     bool takeIncoming() {return false;}
-    bool visible() const {return _model.visible();}
+    bool visible() const {return _model.visible() && !_model.inlinePlayback();}
+    handheld::memo::Ui& model() {return _model;}
     bool active() const {return _model.active();}
     bool handleKey(const KeyEvent&);
 private:

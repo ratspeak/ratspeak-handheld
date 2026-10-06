@@ -1,4 +1,7 @@
 #include "LvMessageView.h"
+#include "ui/MessageAudio.h"
+#include "storage/Hex.h"
+#include <new>
 #include "reticulum/MessageStatusDetail.h"
 #include "Theme.h"
 #include "LvTheme.h"
@@ -417,6 +420,7 @@ bool LvMessageView::setPeerHex(const std::string& hex) {
     if (_rrcMode && !leaveRrcDraft()) return false;
     const bool wasRrc=_rrcMode;_rrcMode=false;++_rrcView;
     if (_peerHex == hex && !wasRrc) return true;
+    _messageTools.close();hideSendModeMenu();
     if(_ui) _ui->closeVoiceConversation();
     clearMessages();
     if (_service) _service->historyWindow().acknowledgePublication(_service->historyWindow().revision());
@@ -462,7 +466,8 @@ void LvMessageView::clearMessages() {
     _binding = true;
     if (_msgScroll) lv_obj_clean(_msgScroll);
     _statusLabels.fill(nullptr); _textLabels.fill(nullptr);
-    _bubbleBoxes.fill(nullptr); _readButtons.fill(nullptr);
+    _audioPressIndex=HistoryWindow::VisibleSpans;
+    _bubbleBoxes.fill(nullptr); _readButtons.fill(nullptr);_moreButtons.fill(nullptr);_audioErrors.fill(nullptr);
     _emptyLabel = nullptr; _touchScrolling = false;
     _rowCount = 0; _lastHistoryRevision = 0; _lastStatusRevision = 0;
     _boundMode = HistoryWindow::Mode::Closed; _boundIdentity = 0;
@@ -500,19 +505,20 @@ void LvMessageView::readFull(size_t index) {
     if(_rrcMode) {openRrcTools(index);return;}
     auto& window = _service->historyWindow();
     const auto* row = window.span(index);
-    if(row && row->hasAudio() && (!row->more() || window.mode()==HistoryWindow::Mode::Full)) {
-        if(_ui) _ui->openVoiceMessage(_peerHex.c_str(),row->counter,row->incoming());
+    if(row && row->hasAudio()) {
+        auto* memo=_ui?_ui->memoUi():nullptr;
+        if(memo && row->nativeAudio() && (memo->status().capabilities&2)) memo->toggleMessage(window.peer(),row->counter,row->incoming());
+        updateAudioControls();
         return;
     }
-    if (!row || !row->more() || window.mode() != HistoryWindow::Mode::Chat) return;
-    saveScroll(); window.focusSpan(index);
-    if (window.openFull(index)) { _scrollToEnd = false; refreshUI(); }
+    if(row) openMessageTools(index);
 }
 
 void LvMessageView::goBack() {
     if (_service && windowMatches() && _service->historyWindow().mode() == HistoryWindow::Mode::Full) {
         historyAction(2); return;
     }
+    if(hasReadFocus()) {_service->historyWindow().focusSpan(HistoryWindow::VisibleSpans);updateHistoryFocus();return;}
     if (_onBack) _onBack();
 }
 
@@ -537,15 +543,10 @@ bool LvMessageView::hasReadFocus() const {
 void LvMessageView::focusNextRead(int direction) {
     if (!boundWindow() || _service->historyWindow().mode() != HistoryWindow::Mode::Chat) return;
     auto& window = _service->historyWindow();
-    const auto first = window.focusedSpan();
-    size_t next = first;
-    for (size_t tries = 0; tries <= HistoryWindow::VisibleSpans; ++tries) {
-        if (direction < 0) next = next == 0 ? HistoryWindow::VisibleSpans : next - 1;
-        else next = next == HistoryWindow::VisibleSpans ? 0 : next + 1;
-        if (next == HistoryWindow::VisibleSpans || (next < _rowCount && _readButtons[next])) break;
-    }
-    window.focusSpan(next); updateHistoryFocus();
-    if (next < _rowCount && _readButtons[next]) lv_obj_scroll_to_view(_readButtons[next], LV_ANIM_OFF);
+    if(!window.moveSelection(direction)) return;
+    if(window.loading()) {_selectAfterPage=true;return;}
+    updateHistoryFocus();const auto next=window.focusedSpan();
+    if(next<_rowCount && _bubbleBoxes[next]) lv_obj_scroll_to_view(_bubbleBoxes[next],LV_ANIM_OFF);
 }
 
 void LvMessageView::updateHistoryFocus() {
@@ -555,13 +556,42 @@ void LvMessageView::updateHistoryFocus() {
         _service->historyWindow().focusSpan(HistoryWindow::VisibleSpans);
         focus = HistoryWindow::VisibleSpans;
     }
+    for(size_t i=0;i<_rowCount;++i) if(_bubbleBoxes[i]) {
+        lv_obj_set_style_border_color(_bubbleBoxes[i],lv_color_hex(i==focus?Theme::ACCENT:Theme::BORDER),0);
+        lv_obj_set_style_border_width(_bubbleBoxes[i],i==focus?2:1,0);
+    }
     for (size_t i = 0; i < _rowCount; ++i) if (_readButtons[i]) {
         lv_obj_set_style_border_color(_readButtons[i], lv_color_hex(i == focus ? Theme::ACCENT : Theme::BORDER), 0);
         lv_obj_set_style_bg_color(_readButtons[i], lv_color_hex(i == focus ? Theme::PRIMARY_SUBTLE : Theme::BG_ELEVATED), 0);
     }
 }
 
+void LvMessageView::updateAudioControls() {
+    if(_rrcMode || !boundWindow()) return;
+    const auto& window=_service->historyWindow();const auto* memo=_ui?_ui->memoUi():nullptr;
+    for(size_t i=0;i<_rowCount;++i) {
+        const auto* row=window.span(i);auto* button=_readButtons[i];
+        if(!button || !row || !row->hasAudio()) continue;
+        char control[96];
+        if(!row->nativeAudio()) snprintf(control,sizeof control,"%s",row->audioLabel());
+        else if(memo && !(memo->status().capabilities&2)) snprintf(control,sizeof control,"No speaker on this device");
+        else handheld::ui::messageAudioControl(memo,window.peer(),*row,control,sizeof control);
+        if(!row->nativeAudio() || !memo || !(memo->status().capabilities&2)) lv_obj_add_state(button,LV_STATE_DISABLED);
+        else lv_obj_clear_state(button,LV_STATE_DISABLED);
+        auto* label=lv_obj_get_child(button,0);
+        if(strcmp(lv_label_get_text(label),control)) lv_label_set_text(label,control);
+        if(_audioErrors[i]) {
+            const char* error=handheld::ui::messageAudioError(memo,window.peer(),*row);const auto* text=error?error:"";
+            if(strcmp(lv_label_get_text(_audioErrors[i]),text)) {
+                lv_label_set_text(_audioErrors[i],text);
+                if(error) lv_obj_clear_flag(_audioErrors[i],LV_OBJ_FLAG_HIDDEN);else lv_obj_add_flag(_audioErrors[i],LV_OBJ_FLAG_HIDDEN);
+                lv_obj_update_layout(_bubbleBoxes[i]);lv_obj_set_height(lv_obj_get_parent(_bubbleBoxes[i]),lv_obj_get_height(_bubbleBoxes[i]));
+            }
+        }
+    }
+}
 void LvMessageView::updateHistoryControls() {
+    updateAudioControls();
     if (!_historyNotice || !_service) return;
     auto& window = _service->historyWindow();
     const bool matches = windowMatches();
@@ -631,6 +661,7 @@ void LvMessageView::onEnter() {
 }
 
 void LvMessageView::onExit() {
+    _messageTools.close();
     if(_ui) _ui->closeVoiceConversation();
     _rrcTools.close();hideSendModeMenu();
     _rrcSendRequested=false; // Leaving cancels an intent still waiting for draft durability.
@@ -770,7 +801,7 @@ void LvMessageView::appendMessage(size_t index, const Span& span, const char* te
         auto* audio=lv_label_create(box);lv_obj_set_style_text_font(audio,font,0);
         lv_obj_set_style_text_color(audio,lv_color_hex(Theme::ACCENT),0);
         lv_obj_set_width(audio,textW);lv_label_set_long_mode(audio,LV_LABEL_LONG_WRAP);
-        if(span.nativeAudio()) lv_label_set_text_fmt(audio,"Voice message  0:%02u",span.audioSeconds());
+        if(span.nativeAudio()) lv_label_set_text_fmt(audio,"Voice message (0:%02u)",span.audioSeconds());
         else lv_label_set_text(audio,span.audioLabel());
     }
     lv_obj_t* lbl = lv_label_create(box);
@@ -779,18 +810,49 @@ void LvMessageView::appendMessage(size_t index, const Span& span, const char* te
     lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(lbl, textW);
     lv_label_set_text_static(lbl, text);
+    if(!_rrcMode && handheld::ui::generatedAudioText(span,text)) lv_obj_add_flag(lbl,LV_OBJ_FLAG_HIDDEN);
 
-    if (_service && ((!_rrcMode && span.hasAudio()) || ((span.more() || (_rrcMode && !span.unavailable())) && _service->historyWindow().mode() == HistoryWindow::Mode::Chat))) {
+    if(_service && !span.unavailable()) {
         auto* button = _readButtons[index] = lv_btn_create(box);
-        lv_obj_set_size(button, span.hasAudio()?110:78, 24); lv_obj_add_style(button, LvTheme::styleBtn(), 0);
+        lv_obj_set_size(button, span.hasAudio()?textW:78, 28); lv_obj_add_style(button, LvTheme::styleBtn(), 0);
         lv_obj_set_style_pad_all(button, 0, 0);
         lv_obj_set_user_data(button, (void*)(uintptr_t)index);
         lv_obj_add_event_cb(button, [](lv_event_t* e) {
             auto* self = static_cast<LvMessageView*>(lv_event_get_user_data(e));
-            self->readFull(uintptr_t(lv_obj_get_user_data(lv_event_get_target(e))));
-        }, LV_EVENT_CLICKED, this);
-        auto* label = lv_label_create(button); lv_label_set_text(label, _rrcMode?"Actions":span.hasAudio() && (!span.more() || _service->historyWindow().mode()==HistoryWindow::Mode::Full)?"Voice message":"Read full");
-        lv_obj_set_style_text_font(label, &lv_font_rsdeck_10, 0); lv_obj_center(label);
+            const auto index=uintptr_t(lv_obj_get_user_data(lv_event_get_target(e)));
+            if(index>=HistoryWindow::VisibleSpans || self->_readButtons[index]!=lv_event_get_target(e) || !self->boundWindow()) return;
+            auto& window=self->_service->historyWindow();const auto* row=window.span(index);
+            if(!row) return;
+            const auto code=lv_event_get_code(e);
+            if(self->_rrcMode || !row->hasAudio()) {if(code==LV_EVENT_CLICKED) self->readFull(index);return;}
+            const auto* memo=self->_ui?self->_ui->memoUi():nullptr;
+            const bool owns=handheld::ui::ownsMessageAudio(memo,window.peer(),*row);
+            const auto phase=owns?memo->status().phase:handheld::memo::Phase::Unavailable;
+            const auto owner=owns?memo->status().view:0;
+            if(code==LV_EVENT_PRESSED) {
+                self->_audioPressIndex=index;self->_audioPressPublication=window.revision();
+                self->_audioPressOwner=owner;self->_audioPressPhase=phase;
+            } else if(code==LV_EVENT_PRESS_LOST) self->_audioPressIndex=HistoryWindow::VisibleSpans;
+            else if(code==LV_EVENT_CLICKED) {
+                const bool valid=self->_audioPressIndex==index && self->_audioPressPublication==window.revision() &&
+                    self->_audioPressOwner==owner && self->_audioPressPhase==phase;
+                self->_audioPressIndex=HistoryWindow::VisibleSpans;
+                if(valid) self->readFull(index);
+            }
+        }, LV_EVENT_ALL, this);
+        auto* label = lv_label_create(button); lv_label_set_text(label,"Actions");
+        lv_obj_set_style_text_font(label, &lv_font_rsdeck_12, 0); lv_obj_center(label);
+        if(!_rrcMode && span.hasAudio()) {
+            auto* more=_moreButtons[index]=lv_btn_create(box);lv_obj_set_size(more,60,24);lv_obj_add_style(more,LvTheme::styleBtn(),0);
+            lv_obj_set_user_data(more,(void*)(uintptr_t)index);
+            lv_obj_add_event_cb(more,[](lv_event_t* e) {
+                auto& self=*static_cast<LvMessageView*>(lv_event_get_user_data(e));const auto i=uintptr_t(lv_obj_get_user_data(lv_event_get_target(e)));
+                if(i<HistoryWindow::VisibleSpans && self._moreButtons[i]==lv_event_get_target(e)) self.openMessageTools(i);
+            },LV_EVENT_CLICKED,this);
+            auto* caption=lv_label_create(more);lv_label_set_text(caption,"More");lv_obj_set_style_text_font(caption,&lv_font_rsdeck_10,0);lv_obj_center(caption);
+            auto* error=_audioErrors[index]=lv_label_create(box);lv_obj_set_width(error,textW);lv_obj_set_style_text_font(error,&lv_font_rsdeck_10,0);
+            lv_obj_set_style_text_color(error,lv_color_hex(Theme::ERROR_CLR),0);lv_label_set_text(error,"");lv_obj_add_flag(error,LV_OBJ_FLAG_HIDDEN);
+        }
     }
 
     char timeBuf[8] = {0};
@@ -838,6 +900,10 @@ void LvMessageView::rebuildMessages() {
         lv_obj_set_height(lv_obj_get_parent(_bubbleBoxes[i]), lv_obj_get_height(_bubbleBoxes[i]));
     lv_obj_update_layout(_msgScroll);
     lv_obj_scroll_to_y(_msgScroll, bottom ? LV_COORD_MAX : scroll, LV_ANIM_OFF);
+    if(_selectAfterPage) {
+        _selectAfterPage=false;const auto focus=window.focusedSpan();
+        if(focus<_rowCount && _bubbleBoxes[focus]) lv_obj_scroll_to_view(_bubbleBoxes[focus],LV_ANIM_OFF);
+    }
     _lastHistoryRevision = window.revision(); _lastStatusRevision = window.statusRevision();
     _boundMode = window.mode(); _boundIdentity = window.identityGeneration();
     _binding = false; _scrollToEnd = false; saveScroll();
@@ -979,9 +1045,27 @@ void LvMessageView::sendCurrentMessage(bool viaLink) {
 }
 
 bool LvMessageView::handleKey(const KeyEvent& event) {
-    if(!_rrcMode && boundWindow() && _service->historyWindow().mode()==HistoryWindow::Mode::Full &&
-       event.enter && !event.repeat && _service->historyWindow().span(0) && _service->historyWindow().span(0)->hasAudio()) {
-        readFull(0);return true;
+    _audioPressIndex=HistoryWindow::VisibleSpans;
+    if(_messageTools.visible()) {
+        _messagePressedSerial=0;
+        if(event.character==0x1B || event.del || event.character==0x08) {if(!event.repeat) {_messageTools.close();hideSendModeMenu();}return true;}
+        if(event.up || event.left) {_messageTools.move(-1);updateSendModeMenu();return true;}
+        if(event.down || event.right || event.tab) {_messageTools.move(1);updateSendModeMenu();return true;}
+        if(event.enter && !event.repeat) activateMessageTool();
+        return true;
+    }
+    if(!_rrcMode && hasReadFocus() && !event.repeat && (event.character=='m' || event.character=='M')) {
+        openMessageTools(_service->historyWindow().focusedSpan());return true;
+    }
+    if(!_rrcMode && boundWindow() && _service->historyWindow().mode()==HistoryWindow::Mode::Full) {
+        const auto* row=_service->historyWindow().span(0);
+        if(event.character==0x1B || event.del || event.character==0x08) {if(!event.repeat) goBack();}
+        else if(event.up || event.left) scrollHistory(-30);
+        else if(event.down || event.right) scrollHistory(30);
+        else if(!event.repeat && (event.enter || event.character=='m' || event.character=='M')) {
+            if(event.enter && row && row->hasAudio()) readFull(0);else openMessageTools(0);
+        }
+        return true; // No key may edit or send the hidden composer in a reader.
     }
     if(_rrcMode && _rrcTools.visible()) {
         if(event.character==0x1B || event.del || event.character==0x08) {if(!event.repeat) closeRrcTools();return true;}
@@ -1067,8 +1151,11 @@ bool LvMessageView::handleKey(const KeyEvent& event) {
         return true;
     }
 #endif
-    if (event.up) { scrollHistory(-30); return true; }
-    if (event.down) { scrollHistory(30); return true; }
+    if(event.up || event.down) {
+        if(boundWindow() && _service->historyWindow().mode()==HistoryWindow::Mode::Chat) focusNextRead(event.up?-1:1);
+        else scrollHistory(event.up?-30:30);
+        return true;
+    }
     if (event.tab) { focusNextRead(); return true; }
     if (event.left || event.right) return true;
 
@@ -1102,12 +1189,12 @@ bool LvMessageView::handleLongPress() {
 }
 
 void LvMessageView::showSendModeMenu() {
-    if (_inputText.empty() && !_rrcTools.visible() && sendMenuCount()==3) return;
+    if (_inputText.empty() && !_rrcTools.visible() && !_messageTools.visible() && sendMenuCount()==3) return;
     hideSendModeMenu();
-    _sendMenuIdx = 0;
+    _sendMenuIdx = 0;_messagePressedSerial=0;
 
     _sendOverlay = lv_obj_create(lv_layer_top());
-    lv_obj_set_size(_sendOverlay,244,_rrcTools.visible()?std::min(Theme::CONTENT_H,268):34+28*sendMenuCount());
+    lv_obj_set_size(_sendOverlay,244,_rrcTools.visible()?std::min(Theme::CONTENT_H,268):_messageTools.visible()?std::min(Theme::CONTENT_H,64+28*sendMenuCount()):34+28*sendMenuCount());
     lv_obj_center(_sendOverlay);
     lv_obj_add_style(_sendOverlay, LvTheme::styleModal(), 0);
     lv_obj_set_style_pad_all(_sendOverlay, 8, 0);
@@ -1116,14 +1203,20 @@ void LvMessageView::showSendModeMenu() {
     lv_obj_t* title = lv_label_create(_sendOverlay);
     lv_obj_set_style_text_font(title, &lv_font_rsdeck_12, 0);
     lv_obj_set_style_text_color(title, lv_color_hex(Theme::ACCENT), 0);
-    lv_label_set_text(title, _rrcTools.visible()?_rrcTools.title():"Chat actions");
+    lv_label_set_text(title, _rrcTools.visible()?_rrcTools.title():_messageTools.visible()?_messageTools.title():"Chat actions");
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 0);
 
+    const bool confirmation=_messageTools.state==handheld::ui::MessageMenu::State::Confirm;
+    if(_messageTools.visible()) {
+        auto* hint=lv_label_create(_sendOverlay);lv_label_set_text(hint,_messageTools.hint());
+        lv_obj_set_width(hint,224);lv_obj_set_style_text_align(hint,LV_TEXT_ALIGN_CENTER,0);lv_obj_set_style_text_font(hint,&lv_font_rsdeck_10,0);
+        lv_obj_set_style_text_color(hint,lv_color_hex(Theme::TEXT_SECONDARY),0);lv_obj_set_pos(hint,0,22);
+    }
     static const char* labels[3] = {"Send normally", "Send as link", "Cancel"};
     for (int i = 0; i < (_rrcTools.visible()?int(_rrcTools.count()):sendMenuCount()); i++) {
         lv_obj_t* row = lv_obj_create(_sendOverlay);
-        lv_obj_set_size(row, 220, 24);
-        lv_obj_set_pos(row, 12, 24 + i * 28);
+        lv_obj_set_size(row,confirmation?106:220,confirmation?32:24);
+        lv_obj_set_pos(row,confirmation?i*114:2,(_messageTools.visible()?44:24)+(confirmation?0:i*28));
         lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
         lv_obj_set_style_border_width(row, 1, 0);
         lv_obj_set_style_radius(row, 4, 0);
@@ -1134,12 +1227,20 @@ void LvMessageView::showSendModeMenu() {
         lv_obj_add_event_cb(row, [](lv_event_t* e) {
             auto* self = (LvMessageView*)lv_event_get_user_data(e);
             int idx = (int)(intptr_t)lv_obj_get_user_data(lv_event_get_target(e));
-            self->chooseSendMode(idx);
-        }, LV_EVENT_CLICKED, this);
+            if(idx<0 || idx>=8 || self->_sendRows[idx]!=lv_event_get_target(e)) return;
+            if(self->_messageTools.visible()) {
+                if(lv_event_get_code(e)==LV_EVENT_PRESSED) self->_messagePressedSerial=self->_messageTools.serial;
+                else if(lv_event_get_code(e)==LV_EVENT_PRESS_LOST) self->_messagePressedSerial=0;
+                else if(lv_event_get_code(e)==LV_EVENT_CLICKED && self->_messagePressedSerial==self->_messageTools.serial) {
+                    self->_messagePressedSerial=0;self->_messageTools.selected=uint8_t(idx);self->activateMessageTool();
+                }
+            } else if(lv_event_get_code(e)==LV_EVENT_CLICKED) self->chooseSendMode(idx);
+        }, LV_EVENT_ALL, this);
 
         _sendLabels[i] = lv_label_create(row);
         lv_obj_set_style_text_font(_sendLabels[i], &lv_font_rsdeck_12, 0);
         if(_rrcTools.visible()) {char label[64];_rrcTools.label(i,label,sizeof label);lv_label_set_text(_sendLabels[i],label);}
+        else if(_messageTools.visible()) lv_label_set_text(_sendLabels[i],_messageTools.label(i));
         else lv_label_set_text(_sendLabels[i],i==sendMenuCount()-1?"Cancel":sendMenuCount()==4 && i==2?"Voice message":_rrcMode && i==1?"Send as action":labels[i]);
         lv_obj_center(_sendLabels[i]);
         _sendRows[i] = row;
@@ -1162,7 +1263,7 @@ void LvMessageView::hideSendModeMenu() {
 void LvMessageView::updateSendModeMenu() {
     for (int i = 0; i < 8; i++) {
         if (!_sendRows[i] || !_sendLabels[i]) continue;
-        bool selected = i == _sendMenuIdx;
+        bool selected = _messageTools.visible()?i==_messageTools.selected:i == _sendMenuIdx;
         if(_rrcTools.visible()) {
             char label[64];_rrcTools.label(i,label,sizeof label);lv_label_set_text(_sendLabels[i],label);
             selected=i==_rrcTools.selected;
@@ -1172,13 +1273,17 @@ void LvMessageView::updateSendModeMenu() {
         lv_obj_set_style_border_color(_sendRows[i],
             lv_color_hex(selected ? Theme::BORDER_ACTIVE : Theme::BORDER), 0);
         lv_obj_set_style_text_color(_sendLabels[i],
-            lv_color_hex(selected ? Theme::ACCENT : Theme::TEXT_SECONDARY), 0);
+            lv_color_hex(_messageTools.state==handheld::ui::MessageMenu::State::Confirm && !i?Theme::ERROR_CLR:selected ? Theme::ACCENT : Theme::TEXT_SECONDARY), 0);
     }
     if(_rrcTools.visible() && _sendRows[_rrcTools.selected])
         lv_obj_scroll_to_view(_sendRows[_rrcTools.selected],LV_ANIM_OFF);
 }
 
 void LvMessageView::chooseSendMode(int idx) {
+    if(_messageTools.visible()) {
+        if(idx>=0 && unsigned(idx)<_messageTools.count()) {_messageTools.selected=uint8_t(idx);activateMessageTool();}
+        return;
+    }
     if(_rrcTools.visible()) {
         if(idx<0 || size_t(idx)>=_rrcTools.count()) return;
         _rrcTools.selected=uint8_t(idx);activateRrcTool();return;
@@ -1195,4 +1300,5 @@ void LvMessageView::chooseSendMode(int idx) {
     if (_rrcMode) _rrcEmote=false;
 }
 
+#include "LvMessageTools.inc"
 #include "LvRrcChat.inc"

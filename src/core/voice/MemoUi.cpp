@@ -3,16 +3,37 @@
 
 namespace handheld::memo {
 void Ui::open(const uint8_t peer[16],uint32_t counter,bool incoming) {
-    if(_end) {
-        memcpy(_nextOpen.peer,peer,16);_nextOpen.counter=counter;_nextOpen.incoming=incoming;
-        _openAfterEnd=_visible=true;return;
+    requestOpen(peer,counter,incoming,false);
+}
+void Ui::toggleMessage(const uint8_t peer[16],uint32_t counter,bool incoming) {
+    if(!counter) return;
+    if(_visible && _inline && !_openAfterClose && !_end && _status.counter==counter &&
+       _status.incoming==incoming && !memcmp(_status.peer,peer,16)) {
+        if(_pending || _status.phase==Phase::Pausing) return;
+        if(_status.phase==Phase::Playing) send(Action::Pause);
+        else if(_status.phase==Phase::Review || _status.phase==Phase::Paused) send(Action::Play);
+        else if(_status.phase==Phase::Unavailable || _status.phase==Phase::Sent) requestOpen(peer,counter,incoming,true,Action::Play);
+        return;
     }
-    if(_close || active()) {if(_status.view) _visible=true;return;}
+    requestOpen(peer,counter,incoming,true,Action::Play);
+}
+void Ui::retryMessage(const uint8_t peer[16],uint32_t counter,bool incoming) {
+    if(counter && !incoming) requestOpen(peer,counter,incoming,true,Action::Retry);
+}
+void Ui::requestOpen(const uint8_t peer[16],uint32_t counter,bool incoming,bool inlinePlayback,Action afterOpen) {
+    if(_end || _close || _pending || active()) {
+        memcpy(_nextOpen.peer,peer,16);_nextOpen.counter=counter;_nextOpen.incoming=incoming;
+        _nextInline=inlinePlayback;_nextAction=afterOpen;_visible=true;_openAction=Action::Close;
+        if(_end) _openAfterEnd=true;
+        else {_openAfterClose=true;stop(true);}
+        return;
+    }
     static uint32_t nextView=0;
     if(nextView==UINT32_MAX) return;
     const auto caps=_status.capabilities,volume=_status.volume;
     _status={};_status.view=++nextView;_status.capabilities=caps;_status.volume=volume;
     memcpy(_status.peer,peer,16);_status.counter=counter;_status.incoming=incoming;_status.fromMessage=counter!=0;
+    _inline=inlinePlayback;_openAction=afterOpen;_elapsed=0;
     _status.phase=Phase::Loading;_visible=true;_menu=Menu::Main;_focus=0;_stop=false;_deletion=Deletion::None;
     send(Action::Open);
 }
@@ -32,7 +53,7 @@ void Ui::acknowledge(uint32_t serial,Code code) {
         _deletion=Deletion::None;
         if(_action==Action::EndConversation) _endAccepted=false;
         if(_action==Action::Open) {
-            _status.phase=Phase::Unavailable;_close=_stop=false;
+            _status.phase=Phase::Unavailable;_close=_stop=false;_openAction=Action::Close;
             if(_end) {
                 if(_owner.generation) _status=_owner;
                 else _status.phase=Phase::Closed;
@@ -52,7 +73,7 @@ void Ui::update(const Status& value,bool foregroundAllowed) {
     if(!value.view && boundGeneration && value.generation>=boundGeneration) {
         voice::VoiceWorker::emergencyStop();_status.generation=0;_status.phase=Phase::Unavailable;
         _owner={};
-        _error=Code::Stale;_pending=_close=_stop=_end=_endAccepted=_openAfterEnd=false;_menu=Menu::Main;_deletion=Deletion::None;
+        _error=Code::Stale;_pending=_close=_stop=_end=_endAccepted=_openAfterEnd=_openAfterClose=false;_openAction=Action::Close;_menu=Menu::Main;_deletion=Deletion::None;
     }
     if(value.view==_status.view && !memcmp(value.peer,_status.peer,16) &&
         value.generation>=_status.generation && value.revision>=_status.revision) {
@@ -60,6 +81,9 @@ void Ui::update(const Status& value,bool foregroundAllowed) {
             (_action!=Action::Volume || value.volume==_status.volume))) {
             // A confirmation belongs to the clip the user saw, not a newer one.
             if(value.draftRevision!=_status.draftRevision) _menu=Menu::Main;
+            if(value.phase==Phase::Playing || value.phase==Phase::Pausing || value.phase==Phase::Paused) _elapsed=value.frames;
+            else if((_status.phase==Phase::Playing || _status.phase==Phase::Pausing) && value.phase==Phase::Review && value.reason==Code::Ok)
+                _elapsed=value.length/4;
             _status=value;
             _owner=value.phase==Phase::Closed?Status{}:value;
             if(_pending) {_pending=false;_error=Code::Ok;}
@@ -82,11 +106,19 @@ void Ui::update(const Status& value,bool foregroundAllowed) {
         _end=_endAccepted=_close=_stop=false;
         if(_openAfterEnd) {
             const auto next=_nextOpen;_openAfterEnd=false;
-            open(next.peer,next.counter,next.incoming);
+            requestOpen(next.peer,next.counter,next.incoming,_nextInline,_nextAction);
         }
     }
     if(((_end && !_endAccepted) || _close || _stop) && !_pending && _status.generation && value.view==_status.view)
         send(_end?Action::EndConversation:_close?Action::Close:Action::Stop);
+    if(_openAfterClose && !_end && !_close && !_pending && !active()) {
+        const auto next=_nextOpen;_openAfterClose=false;
+        requestOpen(next.peer,next.counter,next.incoming,_nextInline,_nextAction);
+    }
+    if(_openAction!=Action::Close && !_pending && !_close && !_end && !_openAfterClose && _status.phase==Phase::Review) {
+        const auto action=_openAction;_openAction=Action::Close;
+        if(_status.reason==Code::Ok && (action==Action::Play?bool(_status.capabilities&2):_status.retryable)) send(action);
+    }
     changed(before);
 }
 void Ui::stop(bool close) {
@@ -98,12 +130,12 @@ void Ui::stop(bool close) {
 void Ui::hide() {
     if(!_visible) return;
     _visible=false;
-    _openAfterEnd=false;
+    _openAfterEnd=_openAfterClose=false;_openAction=Action::Close;
     if(!_status.generation && !_pending) return;
     stop(true);
 }
 void Ui::closeConversation() {
-    _visible=false;_openAfterEnd=false;
+    _visible=false;_openAfterEnd=_openAfterClose=false;_openAction=Action::Close;
     if(!_status.view) return;
     if(!_status.generation && !_pending) {
         if(!_owner.generation) return;
@@ -134,7 +166,7 @@ Ui::Choice Ui::choice(unsigned index) const {
     if(_stop || _close) return index==0?Choice::Back:Choice::None;
     if((_pending && (_action==Action::Record || _action==Action::Replace)) || _status.phase==Phase::Starting || _status.phase==Phase::Recording || _status.phase==Phase::Playing)
         return index==0?(_status.phase==Phase::Playing?Choice::StopPlayback:Choice::Stop):index==1?Choice::Back:Choice::None;
-    if(_status.phase==Phase::Review) {
+    if(_status.phase==Phase::Review || _status.phase==Phase::Paused) {
         const bool play=(_status.capabilities&2) && _status.reason!=Code::UnsupportedAudio && _status.reason!=Code::AudioUnavailable;
         if(_status.fromMessage) {
             if(play && index==0) return Choice::Play;

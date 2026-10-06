@@ -31,7 +31,7 @@ void LvVoicePanel::closeConversation() {
 }
 void LvVoicePanel::action(Ui::Choice choice) {_pressed=Ui::Choice::None;_model.choose(choice);render();}
 void LvVoicePanel::build() {
-    if(_root || !_model.visible()) return;
+    if(_root || !visible()) return;
     _root=lv_obj_create(lv_layer_top());lv_obj_set_size(_root,Theme::SCREEN_W,Theme::SCREEN_H);lv_obj_center(_root);
     lv_obj_add_style(_root,LvTheme::styleModal(),0);lv_obj_set_style_pad_all(_root,10,0);lv_obj_clear_flag(_root,LV_OBJ_FLAG_SCROLLABLE);
     auto label=[&](const char* text,int y) {
@@ -112,11 +112,11 @@ void LvVoicePanel::render() {
 void LvVoicePanel::poll(bool allowed) {
     if(!_service) return;
     _model.update(_service->status().memo,allowed);
-    if(_model.visible()) {build();if(millis()-_painted>=100) {_painted=millis();render();}}
+    if(visible()) {build();if(millis()-_painted>=100) {_painted=millis();render();}}
     else if(_root) {lv_obj_del(_root);_root=nullptr;}
 }
 bool LvVoicePanel::handleKey(const KeyEvent& event) {
-    if(!_model.visible()) return false;
+    if(!visible()) return false;
     if(event.repeat) return true;
     // Mixing touch with keyboard navigation must require a fresh touch press,
     // even if the user later returns to the same confirmation/layout.

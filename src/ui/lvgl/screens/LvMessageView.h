@@ -8,6 +8,7 @@
 #include <array>
 #include "history/HistoryWindow.h"
 #include "ui/RrcMessageMenu.h"
+#include "ui/MessageMenu.h"
 
 
 class LvMessageView : public LvScreen {
@@ -37,6 +38,14 @@ public:
 private:
     using RrcTools=handheld::ui::RrcMessageMenu;
     RrcTools _rrcTools;
+    handheld::ui::MessageMenu _messageTools;
+    bool _messageActionPending=false,_selectAfterPage=false;
+    uint32_t _audioPressPublication=0,_audioPressOwner=0;
+    size_t _audioPressIndex=handheld::history::HistoryWindow::VisibleSpans;
+    handheld::memo::Phase _audioPressPhase=handheld::memo::Phase::Unavailable;
+    uint32_t _messagePressedSerial=0;
+    void openMessageTools(size_t);
+    void activateMessageTool();
     void openRrcTools(size_t index);
     void readRrcTool(RrcTools::Action action,bool metadata=false);
     void activateRrcTool();
@@ -79,6 +88,7 @@ private:
     void focusNextRead(int direction = 1);
     void updateHistoryControls();
     void updateHistoryFocus();
+    void updateAudioControls();
     void saveScroll(bool userChange = false);
     void updateHeader();
     void markVisibleConversationRead();
@@ -86,7 +96,7 @@ private:
     void refreshComposerPlaceholder();
     void updateComposerText();
     void composerEdited();
-    int sendMenuCount() const {return _rrcMode || !_service || !(_service->status().memo.capabilities&1)?3:4;}
+    int sendMenuCount() const {if(_messageTools.visible()) return int(_messageTools.count());return _rrcMode || !_service || !(_service->status().memo.capabilities&1)?3:4;}
     void showSendModeMenu();
     void hideSendModeMenu();
     void updateSendModeMenu();
@@ -137,7 +147,7 @@ private:
     bool _suppressNextSendClick = false;
 
     // Every label points into the client's leased publication, never a body copy.
-    std::array<lv_obj_t*, HistoryWindow::VisibleSpans> _statusLabels{}, _textLabels{}, _bubbleBoxes{}, _readButtons{};
+    std::array<lv_obj_t*, HistoryWindow::VisibleSpans> _statusLabels{}, _textLabels{}, _bubbleBoxes{}, _readButtons{}, _moreButtons{}, _audioErrors{};
 
     static constexpr size_t MAX_COMPOSER_CHARS = 120;
 };

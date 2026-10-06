@@ -1,4 +1,5 @@
 #include "MessageView.h"
+#include "storage/Hex.h"
 #include "StorageWindowAdapter.h"
 #include "ui/RrcCompose.h"
 #include "reticulum/MessageStatusDetail.h"
@@ -43,7 +44,7 @@ void drawFittedHeader(M5Canvas& canvas, const std::string& text, int x, int y, i
 // Walk only the fixed published text arena. No wrapped-line vector or complete
 // message string is retained. Sanitized UTF-8 scalars stay intact at every wrap.
 template <typename Visitor>
-int visitChatLines(const History& history, bool rrc, Visitor visit) {
+int visitChatLines(const History& history, bool rrc, const handheld::memo::Ui* memo, Visitor visit) {
     constexpr size_t width = (Theme::CONTENT_W - 4) / Theme::CHAR_W;
     int line = 0;
     auto emit = [&](size_t row, const char* text, uint16_t color) { visit(row, line++, text, color); };
@@ -71,12 +72,18 @@ int visitChatLines(const History& history, bool rrc, Visitor visit) {
         const char* source = history.text(index);
         if(!rrc && row.hasAudio()) {
             char audio[40];
-            if(row.nativeAudio()) snprintf(audio,sizeof audio,"Voice message  0:%02u",row.audioSeconds());
+            if(row.nativeAudio()) snprintf(audio,sizeof audio,"Voice message (0:%02u)",row.audioSeconds());
             else snprintf(audio,sizeof audio,"%s",row.audioLabel());
             emit(index,audio,Theme::ACCENT);
+            if(row.nativeAudio()) {
+                if(memo && !(memo->status().capabilities&2)) emit(index,"No speaker on this device",Theme::TEXT_SECONDARY);
+                else {handheld::ui::messageAudioControl(memo,history.peer(),row,audio,sizeof audio);emit(index,audio,Theme::ACCENT);}
+                if(const auto* error=handheld::ui::messageAudioError(memo,history.peer(),row)) emit(index,error,Theme::ERROR);
+            }
+            if(handheld::ui::generatedAudioText(row,source)) source="";
         }
         size_t at = 0;
-        do {
+        while(source[at]) {
             char segment[width + 1]; size_t used = 0;
             while (source[at] && source[at] != '\n') {
                 const auto byte = uint8_t(source[at]);
@@ -91,7 +98,7 @@ int visitChatLines(const History& history, bool rrc, Visitor visit) {
                 if (newline) emit(index, "", color);
                 break;
             }
-        } while (true);
+        }
         if (!rrc && !row.incoming() && !row.unavailable()) {
             const char* detail = !history.statusReady() || (row.flags & History::Span::StatusUnavailable) ? nullptr :
                 messageStatusDetail(LXMFStatus(row.status), row.flags & History::Span::StatusPending,
@@ -103,8 +110,8 @@ int visitChatLines(const History& history, bool rrc, Visitor visit) {
     return line;
 }
 
-int totalChatLines(const History& history, bool rrc) {
-    return visitChatLines(history, rrc, [](size_t, int, const char*, uint16_t) {});
+int totalChatLines(const History& history, bool rrc, const handheld::memo::Ui* memo) {
+    return visitChatLines(history, rrc, memo, [](size_t, int, const char*, uint16_t) {});
 }
 }
 
@@ -136,14 +143,18 @@ bool MessageView::prepareDraft(String& identity) {
 
 #include "RrcChat.inc"
 
+#include "MessageTools.inc"
+
 bool MessageView::setPeerHex(const std::string& peerHex) {
     if (!leaveRrcDraft()) return false;
     if((_rrcMode || _peerHex!=peerHex) && _voiceClose) _voiceClose();
     if (_rrcMode || _peerHex!=peerHex) _history.close();
+    _messageTools.close();_selectAfterPage=false;
     _rrcMode=false;++_rrcView;_peerHex=peerHex;
     return true;
 }
 void MessageView::onExit() {
+    _messageTools.close();_selectAfterPage=false;
     if(_voiceClose) _voiceClose();
     _rrcTools.close();
     _rrcSendRequested=false; // Already-admitted messages continue on their protocol owner.
@@ -202,6 +213,7 @@ void MessageView::refreshMessages() {
 }
 
 void MessageView::render(M5Canvas& canvas) {
+    if(_messageTools.visible()) {renderMessageTools(canvas);return;}
     if(_rrcMode && _rrcTools.visible()) {renderRrcTools(canvas);return;}
     int baseY = Theme::CONTENT_Y;
     const int headerH=CHAT_HEADER_H+(_rrcMode?Theme::CHAR_H+2:0);
@@ -248,7 +260,7 @@ void MessageView::render(M5Canvas& canvas) {
     const int chatY = baseY + headerH + 2;
     const int inputY = baseY + Theme::CONTENT_H - CHAT_INPUT_H;
     const int visible = visibleChatLines(_rrcMode);
-    const int maximum = std::max(0, totalChatLines(_history, _rrcMode) - visible);
+    const int maximum = std::max(0, totalChatLines(_history, _rrcMode, _memo) - visible);
     _history.setScrollOffset(_history.mode() == History::Mode::Chat && _history.followsNewest() ?
         uint32_t(maximum) : std::min(_history.scrollOffset(), uint32_t(maximum)));
     size_t previousRow=SIZE_MAX;int previousLine=-1;
@@ -257,7 +269,7 @@ void MessageView::render(M5Canvas& canvas) {
         const auto* row=_history.span(previousRow);
         if (row && !row->unavailable() && !row->more()) _rrcVisibleThrough=std::max(_rrcVisibleThrough,row->counter);
     };
-    visitChatLines(_history, _rrcMode, [&](size_t row, int line, const char* text, uint16_t color) {
+    visitChatLines(_history, _rrcMode, _memo, [&](size_t row, int line, const char* text, uint16_t color) {
         if (row!=previousRow) viewedEnd();previousRow=row;previousLine=line;
         if (line < int(_history.scrollOffset()) || line >= int(_history.scrollOffset()) + visible) return;
         const int y = chatY + (line - _history.scrollOffset()) * Theme::CHAR_H;
@@ -280,11 +292,11 @@ void MessageView::render(M5Canvas& canvas) {
     canvas.drawFastHLine(0, inputY - 2, Theme::CONTENT_W, Theme::DIVIDER);
     if (_history.mode() == History::Mode::Full) {
         canvas.setTextColor(Theme::TEXT_SECONDARY);
-        canvas.drawString(!_rrcMode && _history.span(0) && _history.span(0)->hasAudio()?"Enter: voice  Arrows: read":"Arrows: read  R: refresh", 2, inputY + 2);
+        canvas.drawString(!_rrcMode && _history.span(0) && _history.span(0)->hasAudio()?"Enter: play/pause M: more":"Enter: actions Arrows: read", 2, inputY + 2);
     } else if (_history.focusedSpan() < _history.spanCount()) {
         canvas.setTextColor(Theme::TEXT_SECONDARY);
         const auto* row=_history.span(_history.focusedSpan());
-        canvas.drawString(_rrcMode?"Enter: actions  R: refresh":row && row->hasAudio()?"Enter: open  V: voice":"Enter: read  R: refresh", 2, inputY + 2);
+        canvas.drawString(_rrcMode?"Enter: actions  R: refresh":row && row->hasAudio()?"Enter: play/pause M: more":"Enter: actions Esc: back", 2, inputY + 2);
     } else if (_rrcMode && (!rrcWritable() || !_rrcLoaded)) {
         canvas.setTextColor(Theme::TEXT_SECONDARY);
         canvas.drawString(!rrcWritable()?"Hub notices are read-only":"Loading draft...",2,inputY+2);
@@ -296,7 +308,23 @@ void MessageView::render(M5Canvas& canvas) {
     }
 }
 
+void MessageView::revealSelection() {
+    _input.setActive(_history.focusedSpan()==History::VisibleSpans);
+    bool located=false;
+    visitChatLines(_history,_rrcMode,_memo,[&](size_t row,int line,const char*,uint16_t) {
+        if(!located && row==_history.focusedSpan()) {_history.setScrollOffset(line);located=true;}
+    });
+    const auto maximum=uint32_t(std::max(0,totalChatLines(_history,_rrcMode,_memo)-visibleChatLines(_rrcMode)));
+    _history.setScrollOffset(std::min(_history.scrollOffset(),maximum));
+}
 bool MessageView::handleKey(const KeyEvent& event) {
+    if(_messageTools.visible()) {
+        if(event.escape || event.backspace) {if(!event.repeat) _messageTools.close();return true;}
+        if(event.up || event.left) {_messageTools.move(-1);return true;}
+        if(event.down || event.right || event.tab) {_messageTools.move(1);return true;}
+        if(event.enter && !event.repeat) activateMessageTool();
+        return true;
+    }
     if(!_rrcMode && event.ctrl && (event.character=='v' || event.character=='V')) {if(!event.repeat && _voice)_voice(_peerHex.c_str(),0,false);return true;}
     if(_rrcMode && _rrcTools.visible()) {
         if(event.escape || event.backspace) {if(!event.repeat) closeRrcTools();return true;}
@@ -307,9 +335,12 @@ bool MessageView::handleKey(const KeyEvent& event) {
     }
     const bool full = _history.mode() == History::Mode::Full;
     const auto* audioRow=_history.span(full?0:_history.focusedSpan());
+    if(!_rrcMode && audioRow && !event.ctrl && !event.repeat && (event.character=='m' || event.character=='M')) {
+        openMessageTools(full?0:_history.focusedSpan());return true;
+    }
     if(!_rrcMode && audioRow && audioRow->hasAudio() && !event.repeat &&
-       ((event.enter && (full || !audioRow->more())) || (!event.ctrl && (event.character=='v' || event.character=='V')))) {
-        if(_voice) _voice(_peerHex.c_str(),audioRow->counter,audioRow->incoming());
+       ((event.enter) || (!event.ctrl && (event.character=='v' || event.character=='V')))) {
+        if(_memo && audioRow->nativeAudio() && (_memo->status().capabilities&2)) _memo->toggleMessage(_history.peer(),audioRow->counter,audioRow->incoming());
         return true;
     }
     if (!_draftReady && !full && event.enter && !event.repeat) {
@@ -325,6 +356,10 @@ bool MessageView::handleKey(const KeyEvent& event) {
         } else if (_backCb) _backCb();
         return true;
     }
+    if(!full && (event.up || event.down)) {
+        if(_history.moveSelection(event.up?-1:1)) {if(_history.loading()) _selectAfterPage=true;else revealSelection();}
+        return true;
+    }
     if (!full && event.tab && !event.repeat) {
         const auto focus = _history.focusedSpan();
         _history.focusSpan(event.shift ? (focus == 0 ? History::VisibleSpans :
@@ -332,15 +367,15 @@ bool MessageView::handleKey(const KeyEvent& event) {
             focus < _history.spanCount() ? focus + 1 : 0);
         _input.setActive(_history.focusedSpan() == History::VisibleSpans);
         bool located = false;
-        visitChatLines(_history, _rrcMode, [&](size_t row, int line, const char*, uint16_t) {
+        visitChatLines(_history, _rrcMode, _memo, [&](size_t row, int line, const char*, uint16_t) {
             if (!located && row == _history.focusedSpan()) { _history.setScrollOffset(line); located = true; }
         });
-        const uint32_t maximum = std::max(0, totalChatLines(_history, _rrcMode) - visibleChatLines(_rrcMode));
+        const uint32_t maximum = std::max(0, totalChatLines(_history, _rrcMode, _memo) - visibleChatLines(_rrcMode));
         _history.setViewportAtNewest(_history.scrollOffset() >= maximum);
         return true;
     }
     if (event.up || event.down || (full && (event.left || event.right))) {
-        const uint32_t maximum = std::max(0, totalChatLines(_history, _rrcMode) - visibleChatLines(_rrcMode));
+        const uint32_t maximum = std::max(0, totalChatLines(_history, _rrcMode, _memo) - visibleChatLines(_rrcMode));
         const uint32_t offset = std::min(_history.scrollOffset(), maximum);
         if (event.up && offset) {
             _history.setScrollOffset(offset - 1); _history.setViewportAtNewest(false);
@@ -356,15 +391,17 @@ bool MessageView::handleKey(const KeyEvent& event) {
         (event.character == 'r' || event.character == 'R')) {
         _history.refresh(); return true;
     }
-    if (full) return true; // The retained composer is not edited in the reader.
+    if(full) {if(event.enter && !event.repeat && !_rrcMode) openMessageTools(0);return true;} // The reader never edits/sends a hidden composer.
     if (_history.focusedSpan() < _history.spanCount()) {
         if (event.enter && !event.repeat) {
             const auto selected = _history.focusedSpan();
             if (_history.span(selected)->unavailable()) _history.refresh();
             else if(_rrcMode) openRrcTools(selected);
-            else _history.openFull(selected);
+            else openMessageTools(selected);
+            return true;
         }
-        return true;
+        if(!event.character || event.ctrl) return true;
+        _history.focusSpan(History::VisibleSpans);_input.setActive(true);
     }
     // Backspace leaves an empty composer; Fn+Backspace remains forward Delete.
     if (event.backspace && _input.getText().empty()) {
@@ -425,6 +462,7 @@ bool MessageView::pollHistory(bool allowAdmission) {
                 _lxmf->requestHistoryPage(_peerHex, query.cursor, query.direction) :
                 _lxmf->requestRecord(key, query.offset, query.capacity);
         });
+    if(publication!=_history.revision() && _selectAfterPage) {_selectAfterPage=false;revealSelection();}
     if (_store) {
         handheld::storage::rrc::Context context;const auto rrcStatus=_backend?_backend->rrcStatus():handheld::rrc::Status{};
         const bool rrcVisible=_rrcMode && _visible && _backend && _backend->rrcContext(_rrcBinding.hub,_rrcBinding.room,
@@ -482,7 +520,7 @@ bool MessageView::pollReadMarker() {
 
 bool MessageView::pollSubmission() {
     if (!_backend) return false;
-    bool changed = false;
+    bool changed = pollMessageAction();
     if (_sendNotice && _draftReady && !_sendTicket.valid() && uint32_t(millis() - _sendNoticeSince) >= 4000) {
         _sendNotice = nullptr;
         changed = true;

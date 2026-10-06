@@ -804,6 +804,7 @@ void setup() {
     messageView.setLXMFManager(&lxmf);
     messageView.setBackend(backend);
     voicePanel.begin(backend);ui.setVoicePanel(&voicePanel);
+    messageView.setMemoUi(&voicePanel.model());
     messageView.setVoiceCallback([](const char* peer,uint32_t counter,bool incoming) {voicePanel.startMessage(peer,counter,incoming);});
     messageView.setVoiceCloseCallback([] {voicePanel.closeConversation();});
     messageView.setAnnounceManager(announceManager);
@@ -1057,8 +1058,12 @@ void loop() {
         audio.playMessage();
     }
     const bool voiceWasVisible=voicePanel.visible();
+    const auto voicePhase=voicePanel.model().status().phase;
+    const auto voiceSeconds=voicePanel.model().elapsedFrames()/25;
+    const auto voiceError=voicePanel.model().error();
     voicePanel.poll(power.isScreenOn() && maintenance.accepting() && !helpOverlay.isVisible());
-    if(voiceWasVisible || voicePanel.active() || voicePanel.visible()) ui.markAllDirty();
+    if(voiceWasVisible || voicePanel.visible() || voicePhase!=voicePanel.model().status().phase ||
+       voiceSeconds!=voicePanel.model().elapsedFrames()/25 || voiceError!=voicePanel.model().error()) ui.markAllDirty();
     if(voicePanel.active() && power.isScreenOn()) power.activity();
     audio.loop();
 

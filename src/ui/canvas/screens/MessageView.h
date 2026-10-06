@@ -8,6 +8,8 @@
 #include "RrcClient.h"
 #include "RrcHistoryAdapter.h"
 #include "ui/RrcMessageMenu.h"
+#include "ui/MessageAudio.h"
+#include "ui/MessageMenu.h"
 #include <string>
 
 class AnnounceManager;
@@ -23,6 +25,7 @@ public:
 
     void setLXMFManager(LXMFManager* lxmf) { _lxmf = lxmf; }
     void setVoiceCallback(std::function<void(const char*,uint32_t,bool)> callback) {_voice=std::move(callback);}
+    void setMemoUi(handheld::memo::Ui* ui) {_memo=ui;}
     void setVoiceCloseCallback(std::function<void()> callback) {_voiceClose=std::move(callback);}
     void setBackend(ProtocolBackend* backend) { _backend = backend; }
     void setMessageStore(MessageStore* store) { _store = store; }
@@ -95,6 +98,16 @@ private:
     BackCallback _backCb;
     std::function<void(const char*,uint32_t,bool)> _voice;
     std::function<void()> _voiceClose;
+    handheld::memo::Ui* _memo=nullptr;
+    void revealSelection();
+    handheld::ui::MessageMenu _messageTools;
+    handheld::storage::Ticket _actionTicket;
+    uint32_t _actionSerial=0;
+    bool _actionDelete=false,_actionSettled=false,_selectAfterPage=false;
+    void openMessageTools(size_t);
+    void activateMessageTool();
+    bool pollMessageAction();
+    void renderMessageTools(M5Canvas&);
     UnreadUpdateCb _unreadCb;
     bool _needsRefresh = false;
 
