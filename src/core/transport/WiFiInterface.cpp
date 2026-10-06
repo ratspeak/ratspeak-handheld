@@ -39,6 +39,7 @@ bool WiFiInterface::isSTAConnected() const {
 }
 
 bool WiFiInterface::startAP() {
+    WiFi.persistent(false); // Credentials persist through UserConfig, not SDK NVS.
     // Generate SSID from chip ID if not set
     if (_apSSID.isEmpty()) {
         uint32_t chip = ESP.getEfuseMac() & 0xFFFF;

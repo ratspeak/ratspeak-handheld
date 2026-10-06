@@ -13,6 +13,9 @@ bool eventsRegistered = false; // boot/protocol owner only
 }
 void WiFiConnection::initializeEvents() {
     if (eventsRegistered) return;
+    // UserConfig owns saved credentials. SDK reconnects must not write another
+    // NVS copy outside the storage lease while microphone capture is active.
+    WiFi.persistent(false);
     WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t) {
         if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED)
             disconnectSequence.fetch_add(1, std::memory_order_release);
