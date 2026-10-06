@@ -28,7 +28,7 @@ enum class Operation : uint8_t {
     RrcRead, RrcAppend, RrcWrite, RrcStatus, RrcPage, RrcMarkRead, RrcClear, RrcSavedRooms, RrcPrivateInbox, RrcObserve,
     ReadAudio,
     MemoRead, MemoBegin, MemoAppend, MemoSeal, MemoClear, MemoPromote, MemoCancel,
-    RetryOutgoing, MemoExpire
+    RetryOutgoing, MemoExpire, DeleteRecord
 };
 enum class Rejection : uint8_t {
     None, Busy, Invalid, TooLarge, NoMemory, Unavailable, Fenced, Exhausted

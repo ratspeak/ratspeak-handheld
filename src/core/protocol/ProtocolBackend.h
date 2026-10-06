@@ -87,6 +87,8 @@ public:
     virtual void lxmfStopAdmissions() = 0;
     virtual bool lxmfDrained() const = 0;
     virtual handheld::storage::Error lxmfDrainError() const = 0;
+    virtual bool lxmfBeginRecordDelete(const handheld::storage::RecordKey&) {return false;}
+    virtual void lxmfFinishRecordDelete(const handheld::storage::RecordKey&,const handheld::storage::Result&) {}
     virtual bool lxmfBeginPeerDelete(const uint8_t peer[16]) = 0;
     virtual void lxmfFinishPeerDelete(const uint8_t peer[16],
         const handheld::storage::Result&) = 0;

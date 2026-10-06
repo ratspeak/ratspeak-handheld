@@ -133,7 +133,7 @@ bool DeviceService::readyForCommand() {
         (request->operation >= Operation::RrcHubs && request->operation <= Operation::RrcContext && !rrcCatalog(request->operation))) return true;
     if (!_messages.deferredIO()) return false;
     switch (request->operation) {
-        case Operation::Send: case Operation::MarkRead: case Operation::DeleteConversation:
+        case Operation::Send: case Operation::MarkRead: case Operation::DeleteConversation: case Operation::DeleteRecord:
         case Operation::ConversationPage: case Operation::ConversationDetail:
         case Operation::HistoryPage: case Operation::ReadRecord: case Operation::HistoryStatus:
         case Operation::RrcHistoryPage: case Operation::RrcHistoryRecord: case Operation::RrcHistoryStatus:
@@ -409,17 +409,21 @@ void DeviceService::pollStorageWrites() {
         if (!_messages.peekResult(ticket, stored)) continue;
         uint8_t peer[16];
         const auto& request = _mailbox.request(slot);
-        const bool deleting = request.operation == Operation::DeleteConversation;
+        const bool recordDelete=request.operation==Operation::DeleteRecord;
+        const bool deleting = request.operation == Operation::DeleteConversation || recordDelete;
         const bool validPeer = deleting && storage::decodeHex(request.peer,
             strnlen(request.peer, sizeof(request.peer)), peer, 16);
         _storageWrites[slot] = {};
         _messages.releaseResult(ticket);
-        if (validPeer) _backend.lxmfFinishPeerDelete(peer, stored);
+        if(validPeer && recordDelete) {
+            storage::RecordKey key;memcpy(key.peer,peer,16);key.counter=request.argument;key.incoming=request.incoming;
+            _backend.lxmfFinishRecordDelete(key,stored);
+        } else if (validPeer) _backend.lxmfFinishPeerDelete(peer, stored);
         Result result;
         result.key = stored.key; result.revision = stored.revision; result.storageError = stored.error;
         result.outcome = stored.outcome == storage::Outcome::Committed ? Outcome::Ok : Outcome::Failed;
         if (result.outcome != Outcome::Ok) strlcpy(result.detail,
-            deleting ? "Conversation not deleted" : "Couldn't mark messages as read", sizeof(result.detail));
+            recordDelete?"Message not deleted":deleting ? "Conversation not deleted" : "Couldn't mark messages as read", sizeof(result.detail));
         _mailbox.complete(slot, result);
     }
 }
@@ -519,6 +523,19 @@ void DeviceService::execute(uint8_t slot) {
         const auto submitted = _messages.requestMarkRead(request.peer, request.generation);
         if (submitted.accepted()) _storageWrites[slot] = submitted.ticket;
         else complete(slot, Outcome::Failed, "Couldn't mark messages as read");
+        break;
+    }
+    case Operation::DeleteRecord: {
+        storage::RecordKey key;key.counter=request.argument;key.incoming=request.incoming;
+        uint8_t local[16];
+        if(!key.counter || !request.revision || !storage::decodeHex(request.peer,strnlen(request.peer,sizeof request.peer),key.peer,16) ||
+           !storage::decodeHex(_status.destination,strnlen(_status.destination,sizeof _status.destination),local,16)) {
+            complete(slot,Outcome::Invalid);break;
+        }
+        if(!_backend.lxmfBeginRecordDelete(key)) {complete(slot,Outcome::Failed,"Deletion busy; try again");break;}
+        const auto submitted=_messages.requestDeleteRecord(key,local,request.revision);
+        if(submitted.accepted()) _storageWrites[slot]=submitted.ticket;
+        else {storage::Result failure;_backend.lxmfFinishRecordDelete(key,failure);complete(slot,Outcome::Failed,"Message not deleted");}
         break;
     }
     case Operation::DeleteConversation: {

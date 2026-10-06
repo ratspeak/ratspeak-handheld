@@ -125,6 +125,8 @@ public:
     void lxmfStopAdmissions() override;
     bool lxmfDrained() const override;
     handheld::storage::Error lxmfDrainError() const override;
+    bool lxmfBeginRecordDelete(const handheld::storage::RecordKey&) override;
+    void lxmfFinishRecordDelete(const handheld::storage::RecordKey&,const handheld::storage::Result&) override;
     bool lxmfBeginPeerDelete(const uint8_t peer[16]) override;
     void lxmfFinishPeerDelete(const uint8_t peer[16], const handheld::storage::Result&) override;
     int lxmfQueuedCount() const override { return _enginesUp ? _lxmf.queuedCount() : 0; }

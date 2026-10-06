@@ -60,6 +60,22 @@ uint32_t ServiceClient::submit(Request request, const void* body, size_t length,
     return id;
 }
 
+uint32_t ServiceClient::deleteRecord(const storage::RecordKey& key,uint32_t revision,Completion completion) {
+    Request request;request.operation=Operation::DeleteRecord;request.argument=key.counter;request.incoming=key.incoming;request.revision=revision;
+    storage::encodeHex(key.peer,16,request.peer);
+    return submit(request,nullptr,0,0,[completion=std::move(completion)](const Result& result,const char*) {if(completion) completion(result);});
+}
+uint32_t ServiceClient::copyRecord(const storage::RecordKey& key,RecordCompletion completion) {
+    Request request;request.operation=Operation::ReadRecord;request.argument=key.counter;request.incoming=key.incoming;
+    storage::encodeHex(key.peer,16,request.peer);
+    return submit(request,nullptr,0,512,[completion=std::move(completion)](const Result& result,const char* bytes) {
+        storage::StoredRecordHeader header;
+        if(result.outcome==Outcome::Ok && result.length>=sizeof header) {
+            memcpy(&header,bytes,sizeof header);
+            if(completion) completion(result,header,reinterpret_cast<const uint8_t*>(bytes)+sizeof header,result.length-sizeof header);
+        } else if(completion) completion(result,header,nullptr,0);
+    });
+}
 uint32_t ServiceClient::voiceCommand(const voice::Command& command, Completion completion) {
     Request request;request.operation=Operation::VoiceCommand;
     return submit(request,&command,sizeof command,0,[completion=std::move(completion)](const Result& result,const char*) {

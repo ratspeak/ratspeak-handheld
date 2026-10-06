@@ -68,7 +68,7 @@ WriteQueue::Submission WriteQueue::submit(const Request& request, const PayloadP
     auto reject = [](Rejection reason) { return Submission{{}, reason}; };
     if (!_accepting) return reject(Rejection::Unavailable);
     if (_nextSequence == UINT64_MAX) return reject(Rejection::Exhausted);
-    if (request.operation > Operation::MemoExpire || partCount > 3 || (partCount && !parts))
+    if (request.operation > Operation::DeleteRecord || partCount > 3 || (partCount && !parts))
         return reject(Rejection::Invalid);
     size_t length = 0;
     for (size_t i = 0; i < partCount; ++i) {
@@ -85,7 +85,7 @@ WriteQueue::Submission WriteQueue::submit(const Request& request, const PayloadP
             return reject(Rejection::Invalid);
     }
     size_t first = 0, end = Budget::NormalSlots;
-    if (request.operation == Operation::DeleteConversation) {
+    if (request.operation == Operation::DeleteConversation || request.operation == Operation::DeleteRecord) {
         first = Budget::NormalSlots; end = first + 1;
     } else if (request.operation == Operation::UpdateStatus || request.operation == Operation::RetryOutgoing || request.operation == Operation::MarkRead) {
         first = Budget::NormalSlots + 1; end = first + 1;

@@ -27,7 +27,7 @@ public:
         uint8_t peer[16] = {};
         uint32_t cutoff = 0;
         uint8_t medium = 0;
-        bool opened = false;
+        bool opened = false, includeDeleted = false;
         Error error = Error::None;
     };
     // Caller holds an explicit filesystem lease. No retained filename vector.
@@ -87,6 +87,8 @@ private:
     void update(const Request&, Result&);
     void markRead(const Request&, Result&);
     void erase(const Request&, Result&);
+    void eraseRecord(const Request&, Result&);
+    Error recordDeletion(const RecordKey&, bool&, StoredRecordHeader* = nullptr);
     void read(const Request&, uint8_t*, size_t, Result&);
     void history(const Request&, uint8_t*, size_t, Result&);
     void pending(const Request&, uint8_t*, size_t, Result&);

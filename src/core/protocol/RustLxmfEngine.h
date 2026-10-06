@@ -54,6 +54,8 @@ public:
     void stopAdmissions();
     bool drained() const;
     handheld::storage::Error drainError() const;
+    bool beginRecordDelete(const handheld::storage::RecordKey&);
+    void finishRecordDelete(const handheld::storage::RecordKey&,const handheld::storage::Result&);
     bool beginPeerDelete(const uint8_t peer[16]);
     void finishPeerDelete(const uint8_t peer[16], const handheld::storage::Result&);
     int queuedCount() const;
@@ -174,6 +176,8 @@ private:
     RelayWork _relay;
     handheld::storage::RecordKey _recoveryCursor;
     uint8_t _deletingPeer[16] = {};
+    uint32_t _deletingCounter=0;
+    bool _deletingIncoming=false;
     uint32_t _identityGeneration = 0, _statusRevision = 0;
     uint8_t _cursor = 0;
     bool _propagationWasEnabled = false;

@@ -83,6 +83,8 @@ bool MessageTransactions::filename(const char* name, uint32_t& counter, bool& in
     counter = uint32_t(value); incoming = name[14] == 'i'; return true;
 }
 
+#include "DeleteRecord.inc"
+
 uint32_t MessageTransactions::deletedThrough(const uint8_t peer[16]) {
     MessageDocument document; return deletedThrough(peer, document);
 }
@@ -162,8 +164,18 @@ bool MessageTransactions::nextRecord(Cursor& cursor, RecordKey& key) {
             cursor.directory.close(); cursor.opened = false; ++cursor.medium; continue;
         }
         uint32_t counter = 0; bool incoming = false;
-        if (file.isDirectory() || !filename(file.name(), counter, incoming) || counter <= cursor.cutoff) continue;
+        if(file.isDirectory()) continue;
+        char name[32];snprintf(name,sizeof name,"%s",file.name());
+        const size_t length=strlen(name);
+        const bool tombstone=(length==24 && !strcmp(name+20,".del")) || (length==28 && !strcmp(name+20,".del.bak"));
+        if(tombstone && cursor.includeDeleted) name[20]=0;
+        if(!filename(name,counter,incoming) || counter<=cursor.cutoff) continue;
         key = {}; memcpy(key.peer, cursor.peer, 16); key.counter = counter; key.incoming = incoming;
+        if(!cursor.includeDeleted) {
+            bool deleted=false;cursor.error=recordDeletion(key,deleted);
+            if(cursor.error!=Error::None) return false;
+            if(deleted) continue;
+        } else if(tombstone) return true;
         // A key is visited once even when it has a backup or an optional mirror.
         char primary[128]; path(key, cursor.medium, primary);
         const bool backup = strlen(file.name()) == 24;
@@ -244,6 +256,9 @@ Error MessageTransactions::load(const RecordKey& key, MessageDocument& document,
     const auto cutoff = deletedThrough(key.peer, document, nullptr, &markerError);
     if (markerError != Error::None) return markerError;
     if (key.counter <= cutoff) return Error::Stale;
+    bool deleted=false;markerError=recordDeletion(key,deleted);
+    if(markerError!=Error::None) return markerError;
+    if(deleted) return Error::Stale;
     int best = -1, loaded = -1; uint32_t revision = 0; _blockedMedia = _preferBackup = 0;
     uint32_t primaryRevision[2] = {}, backupRevision[2] = {};
     bool primaryValid[2] = {}, backupValid[2] = {};
@@ -309,7 +324,7 @@ bool MessageTransactions::initializeCounter() {
     char previous[33] = {}, peerHex[33]; Error scanError = Error::None;
     while (nextPeer(previous, peerHex, scanError)) {
         memcpy(previous, peerHex, 33); uint8_t peer[16]; decodeHex(peerHex, 32, peer, 16);
-        Cursor cursor; beginRecords(cursor, peer); RecordKey key;
+        Cursor cursor; beginRecords(cursor, peer);cursor.includeDeleted=true; RecordKey key;
         if (cursor.cutoff == UINT32_MAX) { _nextCounter = UINT32_MAX; return true; }
         _nextCounter = std::max(_nextCounter, cursor.cutoff + 1);
         while (nextRecord(cursor, key)) {
@@ -424,11 +439,28 @@ Error MessageTransactions::commit(const RecordKey& key, MessageDocument& documen
 void MessageTransactions::create(const Request& request, uint8_t* bytes, Result& result, uint32_t reservedCounter) {
     const uint32_t cutoff = deletedThrough(request.key.peer);
     if (cutoff == UINT32_MAX) { result.error = Error::CounterExhausted; return; }
+    if (reservedCounter) {
+        RecordKey reserved=request.key;reserved.counter=reservedCounter;bool deleted=false;
+        result.error=recordDeletion(reserved,deleted);
+        if(result.error!=Error::None) return;
+        if(deleted) {result.error=Error::Stale;return;}
+    }
     MessageDocument document;
     bool conversationExists = false;
     {
         Cursor cursor; beginRecords(cursor, request.key.peer, &document); RecordKey key;
+        cursor.includeDeleted=request.key.incoming && request.hasMessageId;
         while (nextRecord(cursor, key)) {
+            bool deleted=false;StoredRecordHeader deletedHeader;
+            result.error=recordDeletion(key,deleted,&deletedHeader);if(result.error!=Error::None) return;
+            if(deleted) {
+                if(request.key.incoming && request.hasMessageId && deletedHeader.incoming && deletedHeader.hasMessageId &&
+                   !memcmp(deletedHeader.destination,request.destination,16) && !memcmp(deletedHeader.messageId,request.messageId,32)) {
+                    result.key=key;result.revision=deletedHeader.revision;result.duplicate=true;
+                    result.oldStatus=result.newStatus=deletedHeader.status;result.outcome=Outcome::Committed;return;
+                }
+                continue;
+            }
             conversationExists = true;
             if (!request.key.incoming || !request.hasMessageId) break;
             StoredRecordHeader header;
@@ -1302,6 +1334,7 @@ void MessageTransactions::execute(const Request& request, uint8_t* bytes, size_t
         update(request, result); break;
     case Operation::MarkRead: markRead(request, result); break;
     case Operation::DeleteConversation: erase(request, result); break;
+    case Operation::DeleteRecord: eraseRecord(request,result);break;
     case Operation::ReadRecord: read(request, bytes, capacity, result); break;
     case Operation::ReadAudio: readAudio(request, bytes, capacity, result); break;
     case Operation::ReadPending: pending(request, bytes, capacity, result); break;

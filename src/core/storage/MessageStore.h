@@ -43,6 +43,7 @@ public:
     // Exact author/revision CAS; never creates a record or changes frozen policy.
     Submission requestRetry(const RecordKey&, const uint8_t local[16], uint32_t revision);
     Submission requestMarkRead(const std::string& peer, uint32_t identityGeneration = 0, uint32_t peerGeneration = 0);
+    Submission requestDeleteRecord(const handheld::storage::RecordKey&, const uint8_t local[16], uint32_t revision);
     Submission requestDelete(const std::string& peer, uint32_t identityGeneration = 0, uint32_t peerGeneration = 0);
     Submission requestRecord(const RecordKey&, uint32_t offset = 0, uint16_t capacity = 4096);
     // Same fixed header followed by a verified slice of the raw audio sidecar.

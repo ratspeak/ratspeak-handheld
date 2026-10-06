@@ -91,6 +91,11 @@ MessageStore::Submission MessageStore::requestRetry(const RecordKey& key,const u
     memcpy(request.source,local,16);return submit(request);
 }
 
+MessageStore::Submission MessageStore::requestDeleteRecord(const RecordKey& key,const uint8_t local[16],uint32_t revision) {
+    if(!key.counter || !revision || !local) return {{},Rejection::Invalid};
+    Request request;request.operation=Operation::DeleteRecord;request.key=key;request.offset=revision;
+    memcpy(request.source,local,16);return submit(request);
+}
 MessageStore::Submission MessageStore::requestDelete(const std::string& peer,
                                                     uint32_t identityGeneration, uint32_t peerGeneration) {
     Request request; request.operation = Operation::DeleteConversation;
@@ -283,7 +288,7 @@ void MessageStore::settle(const Request& request, const Result& result) noexcept
     // Only committed aggregate deltas and invalidation live here. There is no
     // presentation cache or allocation between persistence and result visibility.
     if ((request.operation == Operation::CreateIncoming || request.operation == Operation::CreateOutgoing ||
-         request.operation == Operation::DeleteConversation || request.operation == Operation::Trim ||
+         request.operation == Operation::DeleteConversation || request.operation == Operation::DeleteRecord || request.operation == Operation::Trim ||
          request.operation == Operation::MemoPromote) &&
         _historyRevision < UINT32_MAX) ++_historyRevision;
     if (result.conversationDelta > 0 && _totalConversations < UINT32_MAX) ++_totalConversations;

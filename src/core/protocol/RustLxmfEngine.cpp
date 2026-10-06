@@ -160,7 +160,7 @@ handheld::storage::Submission RustLxmfEngine::requestRetry(const handheld::stora
     using Reject=handheld::storage::Rejection;
     if(!_accepting || !_d.store) return {{},Reject::Unavailable};
     if(!key.counter || key.incoming || !revision) return {{},Reject::Invalid};
-    if(_deleting && !memcmp(_deletingPeer,key.peer,16)) return {{},Reject::Fenced};
+    if(_deleting && !memcmp(_deletingPeer,key.peer,16) && (!_deletingCounter || (_deletingCounter==key.counter && _deletingIncoming==key.incoming))) return {{},Reject::Fenced};
     Ticket previous;
     for(uint8_t i=0;i<RowCount;++i) {
         const auto& value=_rows[i];
@@ -184,7 +184,7 @@ RustLxmfEngine::Submission RustLxmfEngine::submitMedia(const uint8_t dest[16], c
     if (!_accepting) return {{}, Rejection::Stopped};
     if (_recovering) return {{}, Rejection::Recovering};
     if (!dest || (titleLength && !title) || (contentLength && !content)) return {{}, Rejection::Invalid};
-    if (_deleting && !memcmp(_deletingPeer, dest, 16)) return {{}, Rejection::Fenced};
+    if (_deleting && !_deletingCounter && !memcmp(_deletingPeer, dest, 16)) return {{}, Rejection::Fenced};
     if (!sendableBody(titleLength, contentLength, audio)) return {{}, Rejection::TooLarge};
     const Ticket ticket = allocate();
     auto* value = row(ticket);
@@ -288,9 +288,42 @@ bool RustLxmfEngine::cancel(Ticket ticket) {
     ++_statusRevision;
     return true;
 }
+bool RustLxmfEngine::beginRecordDelete(const handheld::storage::RecordKey& record) {
+    if(!_accepting || _deleting || !record.counter) return false;
+    _deleting=true;_deletingCounter=record.counter;_deletingIncoming=record.incoming;
+    memcpy(_deletingPeer,record.peer,16);
+    for(uint8_t i=0;i<RowCount;++i) {
+        auto& value=_rows[i];if(value.phase==Phase::Free) continue;
+        // A pre-deletion recovery query may contain this record without having
+        // a bound row yet. Retire that query and restart discovery after commit.
+        if(value.storageOperation==Operation::ReadPending && value.storageSequence) {
+            cancel({value.generation,i});_recoveryCursor={};_recoverAgain=true;continue;
+        }
+        if(!record.incoming && value.counter==record.counter && !memcmp(value.peer,record.peer,16)) {
+            value.flags|=DeletePending;cancel({value.generation,i});
+        }
+    }
+    return true;
+}
+void RustLxmfEngine::finishRecordDelete(const handheld::storage::RecordKey& record,const handheld::storage::Result& result) {
+    if(!_deleting || _deletingCounter!=record.counter || _deletingIncoming!=record.incoming || memcmp(_deletingPeer,record.peer,16)) return;
+    for(auto& value:_rows) {
+        if(value.phase==Phase::Free || !(value.flags&DeletePending) || value.counter!=record.counter || memcmp(value.peer,record.peer,16)) continue;
+        value.flags&=~DeletePending;
+        if(result.outcome==Outcome::Committed && result.key.counter==record.counter && result.key.incoming==record.incoming && !memcmp(result.key.peer,record.peer,16)) {
+            value.flags|=Deleted;value.error=Error::None;
+        } else {
+            // Failed deletion keeps the record and restores ordinary recovery;
+            // cancellation must not strand an unrelated or surviving outbox row.
+            value.desired=value.durable;value.proofCount=0;
+        }
+        ++_statusRevision;
+    }
+    _deleting=false;_deletingCounter=0;storedMessage();
+}
 bool RustLxmfEngine::beginPeerDelete(const uint8_t peer[16]) {
     if (!_accepting || _deleting || !peer) return false;
-    _deleting = true; memcpy(_deletingPeer, peer, 16);
+    _deleting = true;_deletingCounter=0; memcpy(_deletingPeer, peer, 16);
     _inbox.dropPeer(peer);
     _incoming.dropPeer(peer);
     for (uint8_t i = 0; i < RowCount; ++i) {
@@ -303,7 +336,7 @@ bool RustLxmfEngine::beginPeerDelete(const uint8_t peer[16]) {
     return true;
 }
 void RustLxmfEngine::finishPeerDelete(const uint8_t peer[16], const handheld::storage::Result& result) {
-    if (!_deleting || memcmp(_deletingPeer, peer, 16)) return;
+    if (!_deleting || _deletingCounter || memcmp(_deletingPeer, peer, 16)) return;
     _deleting = false;
     for (uint8_t i = 0; i < RowCount; ++i) {
         auto& value = _rows[i];
@@ -842,6 +875,7 @@ void RustLxmfEngine::advance(Ticket ticket) {
     if (now < value->nextAttempt) return;
     if (value->flags & Suppressed) return;
     if (value->phase == Phase::Query) {
+        if(_deleting) return;
         const auto admission = _d.store->requestPending(_recoveryCursor);
         if (admission.accepted()) hold(*value, admission, Operation::ReadPending);
         return;

@@ -956,6 +956,12 @@ handheld::storage::Error ProtocolRuntime::lxmfDrainError() const {
     return _enginesUp ? _lxmf.drainError() : handheld::storage::Error::None;
 }
 
+bool ProtocolRuntime::lxmfBeginRecordDelete(const handheld::storage::RecordKey& key) {
+    handheld::assertDeviceOwner();return _enginesUp && _lxmf.beginRecordDelete(key);
+}
+void ProtocolRuntime::lxmfFinishRecordDelete(const handheld::storage::RecordKey& key,const handheld::storage::Result& result) {
+    handheld::assertDeviceOwner();if(_enginesUp) _lxmf.finishRecordDelete(key,result);
+}
 bool ProtocolRuntime::lxmfBeginPeerDelete(const uint8_t peer[16]) {
     handheld::assertDeviceOwner();
     return _enginesUp && _lxmf.beginPeerDelete(peer);

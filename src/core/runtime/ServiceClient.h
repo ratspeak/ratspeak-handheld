@@ -71,6 +71,9 @@ public:
     const Status& status() const { return _status; }
     uint32_t action(Operation op, const std::string& peer = "", const std::string& body = "",
                     uint32_t argument = 0, Completion completion = {});
+    uint32_t deleteRecord(const storage::RecordKey&,uint32_t revision,Completion);
+    using RecordCompletion=std::function<void(const Result&,const storage::StoredRecordHeader&,const uint8_t*,size_t)>;
+    uint32_t copyRecord(const storage::RecordKey&,RecordCompletion);
     uint32_t requestPeerName(const std::string& peer, TextCompletion completion);
     using PropagationCompletion = std::function<void(const Result&, const propagation::NodeView*, size_t)>;
     uint32_t requestPropagationNodes(PropagationCompletion);

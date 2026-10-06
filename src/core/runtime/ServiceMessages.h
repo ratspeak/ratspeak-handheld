@@ -16,7 +16,7 @@ enum class Operation : uint8_t {
     RrcHubs, RrcRooms, RrcChannels, RrcPeople, RrcDirectory, RrcContext, RrcHistoryPage, RrcHistoryRecord, RrcHistoryStatus, RrcDraft, RrcDetail, RrcSavedRooms, RrcInbox, RrcRoom,
     Send, MarkRead, DeleteConversation, SaveContact, DeleteContact, RenameContact,
     ApplySettings, Announce, CreateIdentity, ImportIdentity, Diagnostics,
-    PropagationSync, RrcCommand, VoiceCommand, MemoCommand, HomeReady, Restart, PowerOff, SwitchIdentity, FormatSD, WipeSD, FactoryReset,
+    PropagationSync, RrcCommand, VoiceCommand, MemoCommand, HomeReady, DeleteRecord, Restart, PowerOff, SwitchIdentity, FormatSD, WipeSD, FactoryReset,
     EnableSDAndRestart, ClearOldDataAndRestart
 };
 enum class Admission : uint8_t { Admitted, Busy, NotReady, Invalid };
