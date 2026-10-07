@@ -57,8 +57,9 @@ public:
         uint8_t audio = 0;
         bool hasAudio() const { return audio != 0; }
         bool nativeAudio() const { return (audio & 0xc0) == 0x40; }
+        bool audioRemoved() const { return (audio && audio<0x40) || audio==0x81; }
         uint8_t audioSeconds() const { return audio & 0x3f; }
-        const char* audioLabel() const { return nativeAudio() ? "Voice message" : audio == 0x80 ? "Unsupported audio" : "Audio unavailable"; }
+        const char* audioLabel() const { return audioRemoved()?"Audio removed":nativeAudio() ? "Voice message" : audio == 0x80 ? "Unsupported audio" : "Audio unavailable"; }
         bool incoming() const { return flags & Incoming; }
         bool unavailable() const { return flags & Unavailable; }
         bool more() const { return !unavailable() && sourceOffset + sourceLength < uint32_t(titleLength) + contentLength; }

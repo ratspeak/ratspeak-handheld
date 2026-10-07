@@ -520,7 +520,13 @@ void SettingsScreen::commitEdit(const std::string& value) {
     };
     try {
 
-    if (_subMenu == MENU_PROPAGATION_CHOICE) {
+    if (_subMenu == MENU_VOICE) {
+        int32_t limit;
+        if(_editField!=1 || !handheld::settings::parseInteger(value,1,50,limit)) {showToast("Enter a number from 1 to 50");return;}
+        s.voice.maxMessages=uint8_t(limit);
+        if(!applyAndSave()) return;
+        buildVoiceMenu();_list.setSelected(1);
+    } else if (_subMenu == MENU_PROPAGATION_CHOICE) {
         handheld::propagation::Settings parsed;
         if (value.size() != 32 || !parsed.setManual(value.data(), value.size())) {
             showToast("Enter 32 hexadecimal characters", 2500); return;

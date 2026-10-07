@@ -977,6 +977,7 @@ void ProtocolRuntime::configureVoice(const handheld::voice::Settings& settings) 
     auto unavailable=settings;unavailable.enabled=false;
     _voice.configure(unavailable);_voiceEnabled=false;_nextVoiceAnnounce=0;
     _memos.configureVolume(settings.volume);
+    _memos.configureRetention(settings.maxMessages);
 }
 
 handheld::memo::Code ProtocolRuntime::memoCommand(const handheld::memo::Command& command) {

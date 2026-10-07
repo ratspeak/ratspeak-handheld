@@ -76,7 +76,9 @@ public:
         uint8_t limit = ConversationPageCapacity);
     Submission requestConversation(const handheld::storage::ConversationSelector&);
     Submission requestTrim(const std::string& peer);
-    void poll();
+    void configureVoiceRetention(uint8_t limit);
+    void protectVoiceRecord(const RecordKey&); // Memo owner; ordered before opening any audio read.
+    void poll(bool allowMaintenanceIo=false);
     bool peekResult(Ticket, Result&, Request* request = nullptr) const;
     bool readPayload(Ticket, void*, size_t length, size_t offset = 0) const;
     bool releaseResult(Ticket);
@@ -113,6 +115,7 @@ public:
     WriteQueue& writeQueue() { return _writeQueue; }
 
 private:
+    void pollVoiceRetention(bool allowIo);
     bool loadStartupMetadata();
     void bumpRevision();
     Submission submit(Request, const WriteQueue::PayloadPart* = nullptr, size_t count = 0, size_t capacity = 0);
@@ -129,6 +132,11 @@ private:
     handheld::storage::MessageTransactions& transactions() const;
     alignas(std::max_align_t) mutable uint8_t _transactionState[64 +
         handheld::storage::Budget::conversationSummaryBytes(WriteQueue::CompactProfile)];
+    RecordKey _protectedVoiceRecord;
+    Ticket _audioRetentionTicket;
+    uint32_t _audioRetentionRetry=0;
+    uint8_t _maxVoiceMessages=2;
+    bool _audioRetentionConfigured=false,_audioRetentionDirty=true,_audioExternalReady=false;
     Ticket _deleteFence;
     uint8_t _fencedPeer[16] = {};
     uint64_t _settledThrough = 0;

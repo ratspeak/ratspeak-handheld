@@ -21,6 +21,7 @@ public:
     void poll(uint64_t now);
     void stop();
     void configureVolume(uint8_t);
+    void configureRetention(uint8_t);
     bool drained() const;
     const Status& status() const { return _status; }
 private:

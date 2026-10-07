@@ -25,7 +25,7 @@ struct MessageMenu {
         const auto* row=window.span(index);if(!row || row->unavailable() || serial==UINT32_MAX) return false;
         ++serial;memcpy(key.peer,window.peer(),16);key.counter=row->counter;key.incoming=row->incoming();
         memcpy(local,identity,16);revision=row->recordRevision;more=window.mode()==history::HistoryWindow::Mode::Chat && row->more();copyable=row->textLength && !generatedAudioText(*row,window.text(index));
-        retryable=row->hasAudio() && !row->incoming() && window.statusReady() &&
+        retryable=row->hasAudio() && !row->audioRemoved() && !row->incoming() && window.statusReady() &&
             !(row->flags&(history::HistoryWindow::Span::StatusPending|history::HistoryWindow::Span::StatusUnavailable)) && messaging::retryableStatus(row->status);
         state=State::Menu;selected=0;notice=nullptr;return true;
     }

@@ -100,6 +100,7 @@ private:
     void conversationPage(const Request&, uint8_t*, size_t, Result&);
     void conversation(const Request&, uint8_t*, size_t, Result&);
     void trim(const Request&, Result&);
+    void retainAudio(const Request&, Result&);
     bool reserveCounter(uint32_t&);
     bool reserveRrcCounter(uint32_t& counter, uint32_t minimum);
     bool retainedCopy(const RecordKey&, unsigned medium, MessageDocument&);

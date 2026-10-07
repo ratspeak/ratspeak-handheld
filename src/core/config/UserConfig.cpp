@@ -376,6 +376,10 @@ bool UserConfig::parseJson(const char* json, size_t length, bool persisted, bool
         const int voiceVolume=doc["voice_volume"] | 70;
         const int voiceRoute=doc["voice_route"] | 0;
         if(voiceVolume<0 || voiceVolume>100 || voiceRoute<0 || voiceRoute>2) return false;
+        if(!doc["voice_max_messages"].isNull() && !doc["voice_max_messages"].is<uint8_t>()) return false;
+        const unsigned voiceMax=doc["voice_max_messages"] | 2u;
+        if(voiceMax<1 || voiceMax>50) return false;
+        parsed.voice.maxMessages=uint8_t(voiceMax);
         parsed.voice.volume=static_cast<uint8_t>(voiceVolume);
         parsed.voice.route=static_cast<handheld::voice::Route>(voiceRoute);
         parsed.propagation.enabled = doc["prop_on"] | false;
@@ -487,10 +491,11 @@ String UserConfig::serializeToJson(bool persisted, size_t limit, bool* unavailab
     doc["announce_int"] = _settings.announceInterval;
     doc["dev_mode"]     = _settings.devMode;
     if (!_settings.propagation.valid()) return "";
-    if(_settings.voice.volume>100 || uint8_t(_settings.voice.route)>2) return "";
+    if(_settings.voice.volume>100 || uint8_t(_settings.voice.route)>2 || _settings.voice.maxMessages<1 || _settings.voice.maxMessages>50) return "";
     doc["voice_on"]=_settings.voice.enabled;
     doc["voice_contacts"]=_settings.voice.contactsOnly;
     doc["voice_volume"]=_settings.voice.volume;
+    doc["voice_max_messages"]=_settings.voice.maxMessages;
     doc["voice_route"]=uint8_t(_settings.voice.route);
     doc["prop_on"] = _settings.propagation.enabled;
     doc["prop_select"] = static_cast<uint8_t>(_settings.propagation.selection);

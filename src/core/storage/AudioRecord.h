@@ -7,7 +7,7 @@
 namespace handheld::storage::audio {
 
 inline bool valid(const AudioMetadata& value) {
-    if (value.state == 1) return value.length <= Budget::MaxMessageBody;
+    if (value.state == 1 || value.state == 3) return value.length <= Budget::MaxMessageBody;
     return (value.state == 0 || value.state == 2) &&
         !value.mode && !value.length && !value.checksum;
 }

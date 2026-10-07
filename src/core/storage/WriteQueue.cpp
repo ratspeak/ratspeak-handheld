@@ -68,7 +68,7 @@ WriteQueue::Submission WriteQueue::submit(const Request& request, const PayloadP
     auto reject = [](Rejection reason) { return Submission{{}, reason}; };
     if (!_accepting) return reject(Rejection::Unavailable);
     if (_nextSequence == UINT64_MAX) return reject(Rejection::Exhausted);
-    if (request.operation > Operation::DeleteRecord || partCount > 3 || (partCount && !parts))
+    if (request.operation > Operation::RetainAudio || partCount > 3 || (partCount && !parts))
         return reject(Rejection::Invalid);
     size_t length = 0;
     for (size_t i = 0; i < partCount; ++i) {

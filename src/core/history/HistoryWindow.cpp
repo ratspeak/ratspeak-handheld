@@ -446,9 +446,10 @@ bool HistoryWindow::recordResult(const storage::Result& result, const uint8_t* b
     auto& frame = candidateFrame();
     Span row; row.counter = key.counter; row.recordRevision = header.revision;
     if(header.audio.state) {
-        row.audio=header.audio.state!=1?0xc0:
-            header.audio.mode==3 && header.audio.length && header.audio.length<=3000 && !(header.audio.length%4)?
-                uint8_t(0x40 | ((uint32_t(header.audio.length)*10+999)/1000)):0x80;
+        const bool native=header.audio.mode==3 && header.audio.length && header.audio.length<=3000 && !(header.audio.length%4);
+        const auto seconds=uint8_t((uint32_t(header.audio.length)*10+999)/1000);
+        row.audio=header.audio.state==3?(native?seconds:0x81):header.audio.state!=1?0xc0:
+            native?uint8_t(0x40|seconds):0x80;
     }
     row.timestamp = header.timestamp <= 0 ? 0 : header.timestamp >= UINT32_MAX ? UINT32_MAX : uint32_t(header.timestamp);
     row.titleLength = header.titleLength; row.contentLength = header.contentLength;

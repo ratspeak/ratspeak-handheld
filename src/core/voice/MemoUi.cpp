@@ -167,7 +167,7 @@ Ui::Choice Ui::choice(unsigned index) const {
     if((_pending && (_action==Action::Record || _action==Action::Replace)) || _status.phase==Phase::Starting || _status.phase==Phase::Recording || _status.phase==Phase::Playing)
         return index==0?(_status.phase==Phase::Playing?Choice::StopPlayback:Choice::Stop):index==1?Choice::Back:Choice::None;
     if(_status.phase==Phase::Review || _status.phase==Phase::Paused) {
-        const bool play=(_status.capabilities&2) && _status.reason!=Code::UnsupportedAudio && _status.reason!=Code::AudioUnavailable;
+        const bool play=(_status.capabilities&2) && _status.reason!=Code::UnsupportedAudio && _status.reason!=Code::AudioUnavailable && _status.reason!=Code::AudioRemoved;
         if(_status.fromMessage) {
             if(play && index==0) return Choice::Play;
             const unsigned remaining=index-(play?1:0);

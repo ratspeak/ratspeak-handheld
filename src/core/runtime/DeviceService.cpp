@@ -157,10 +157,11 @@ void DeviceService::poll() {
     // Only the reserved explicit recovery result is ours after refusal. The
     // setup owner retains every storage/engine/driver and outstanding credit.
     if (!_storageOwnerBound) return;
-    _backend.pollRadioBeforeBlockingWork();
-    // Settlement only publishes completed worker results; it never performs I/O.
-    // Keep it and network polling live while an independent radio is busy.
-    _messages.poll();
+    const bool maintenanceIo=_backend.pollRadioBeforeBlockingWork();
+    // Deferred maintenance uses the storage worker. Immediate diagnostic builds
+    // may perform maintenance only when the radio owner permits blocking I/O.
+    _messages.configureVoiceRetention(_config.settings().voice.maxMessages);
+    _messages.poll(maintenanceIo);
     // Observe UI cancellation before the pump can start another queued frame.
     pollSends();
     if (_status.state == ServiceState::Running) { _backend.configureVoice(_config.settings().voice);_backend.configurePropagation(_config.settings().propagation); }

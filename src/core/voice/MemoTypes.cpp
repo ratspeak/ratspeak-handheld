@@ -7,6 +7,7 @@ const char* description(const Status& status) {
     case Code::Invalid: return "Voice message unavailable";
     case Code::MicrophoneUnavailable: return "Microphone unavailable";
     case Code::PlaybackUnavailable: return "Playback unavailable";
+    case Code::AudioRemoved: return "Audio removed";
     case Code::UnsupportedAudio: return "Unsupported audio";
     case Code::AudioUnavailable: return "Audio unavailable";
     case Code::StorageUnavailable: return "Storage unavailable";

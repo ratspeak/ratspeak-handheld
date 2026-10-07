@@ -72,9 +72,10 @@ int visitChatLines(const History& history, bool rrc, const handheld::memo::Ui* m
         const char* source = history.text(index);
         if(!rrc && row.hasAudio()) {
             char audio[40];
-            if(row.nativeAudio()) snprintf(audio,sizeof audio,"Voice message");
+            if(row.nativeAudio() || row.audioRemoved()) snprintf(audio,sizeof audio,"Voice message");
             else snprintf(audio,sizeof audio,"%s",row.audioLabel());
             emit(index,audio,Theme::ACCENT);
+            if(row.audioRemoved()) emit(index,"Audio removed",Theme::TEXT_SECONDARY);
             if(row.nativeAudio()) {
                 if(memo && !(memo->status().capabilities&2)) emit(index,"No speaker on this device",Theme::TEXT_SECONDARY);
                 else {handheld::ui::messageAudioControl(memo,history.peer(),row,audio,sizeof audio);emit(index,audio,Theme::ACCENT);}

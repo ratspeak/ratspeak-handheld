@@ -9,7 +9,7 @@ using AudioSpan=history::HistoryWindow::Span;
 // Generated text exists for peers without audio rendering. Hide only this exact
 // complete fallback; titles, captions, unsupported media and wire bytes survive.
 inline bool generatedAudioText(const AudioSpan& row,const char* text) {
-    if(!row.nativeAudio() || row.titleLength || row.sourceOffset || row.more()) return false;
+    if((!row.nativeAudio() && !(row.audioRemoved() && row.audio<0x40)) || row.titleLength || row.sourceOffset || row.more()) return false;
     char expected[40];std::snprintf(expected,sizeof expected,"Voice message (%us)",row.audioSeconds());
     return !std::strcmp(text,expected);
 }

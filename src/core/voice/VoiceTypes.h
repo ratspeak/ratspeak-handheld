@@ -8,6 +8,7 @@ struct Settings {
     bool enabled = false;
     bool contactsOnly = true;
     uint8_t volume = 70;
+    uint8_t maxMessages = 2; // Completed clips on internal storage; SD remains unrestricted.
     Route route = Route::Auto;
 };
 enum class Phase : uint8_t { Unavailable, Off, Idle, Finding, Calling, Incoming, Connecting, Ready, Talking, Receiving, Ending, Ended };

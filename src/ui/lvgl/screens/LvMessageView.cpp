@@ -847,7 +847,7 @@ void LvMessageView::appendMessage(size_t index, const Span& span, const char* te
         auto* audio=lv_label_create(box);lv_obj_set_style_text_font(audio,font,0);
         lv_obj_set_style_text_color(audio,lv_color_hex(Theme::ACCENT),0);
         lv_obj_set_width(audio,textW);lv_label_set_long_mode(audio,LV_LABEL_LONG_WRAP);
-        if(span.nativeAudio()) lv_label_set_text(audio,"Voice message");
+        if(span.nativeAudio() || span.audioRemoved()) lv_label_set_text(audio,"Voice message");
         else lv_label_set_text(audio,span.audioLabel());
     }
     lv_obj_t* lbl = lv_label_create(box);
@@ -858,7 +858,7 @@ void LvMessageView::appendMessage(size_t index, const Span& span, const char* te
     lv_label_set_text_static(lbl, text);
     if(!_rrcMode && handheld::ui::generatedAudioText(span,text)) lv_obj_add_flag(lbl,LV_OBJ_FLAG_HIDDEN);
 
-    if(_service && !span.unavailable() && !_rrcMode && span.hasAudio()) {
+    if(_service && !span.unavailable() && !_rrcMode && span.nativeAudio()) {
         auto* button = _readButtons[index] = lv_btn_create(box);
         lv_obj_set_size(button, span.hasAudio()?textW:78, 28); lv_obj_add_style(button, LvTheme::styleBtn(), 0);
         lv_obj_set_style_pad_all(button, 0, 0);
@@ -893,6 +893,11 @@ void LvMessageView::appendMessage(size_t index, const Span& span, const char* te
             auto* error=_audioErrors[index]=lv_label_create(box);lv_obj_set_width(error,textW);lv_obj_set_style_text_font(error,&lv_font_rsdeck_10,0);
             lv_obj_set_style_text_color(error,lv_color_hex(Theme::ERROR_CLR),0);lv_label_set_text(error,"");lv_obj_add_flag(error,LV_OBJ_FLAG_HIDDEN);
         }
+    }
+
+    if(!_rrcMode && span.audioRemoved()) {
+        auto* removed=lv_label_create(box);lv_label_set_text(removed,"Audio removed");
+        lv_obj_set_style_text_font(removed,font,0);lv_obj_set_style_text_color(removed,lv_color_hex(Theme::TEXT_MUTED),0);
     }
 
     char timeBuf[8] = {0};

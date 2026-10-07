@@ -52,6 +52,7 @@ Code Controller::command(const Command& command,sm::Command send) {
         if(_conversation && memcmp(command.peer,_status.peer,16)) return Code::Stale;
         _viewFloor=command.view;_status.view=command.view;++_status.generation;
         memcpy(_status.peer,command.peer,16);_status.counter=command.counter;_status.incoming=command.incoming;
+        _d.store->protectVoiceRecord(command.counter?key():storage::RecordKey{});
         _status.fromMessage=command.counter!=0;_status.length=0;_status.frames=0;_status.retryable=false;_recordRevision=0;
         _draft={};_media={};_failure=Code::Ok;_closed=false;_stopping=_pausing=false;_resumeFrame=0;
         _status.storageStep=_status.storageError=_status.audioError=0;
@@ -259,8 +260,9 @@ void Controller::settle() {
         phase(Phase::Sent);break;
     case Work::Message:
         _media=header.audio;_status.length=header.audio.length;_recordRevision=header.revision;
-        _status.retryable=!header.incoming && messaging::retryableStatus(header.status);
-        if(header.audio.state!=1) review(Code::AudioUnavailable);
+        _status.retryable=header.audio.state!=3 && !header.incoming && messaging::retryableStatus(header.status);
+        if(header.audio.state==3) review(Code::AudioRemoved);
+        else if(header.audio.state!=1) review(Code::AudioUnavailable);
         else if(header.audio.mode!=sm::Mode || !header.audio.length || header.audio.length>sm::PlaybackBytes || header.audio.length%sm::FrameBytes)
             review(Code::UnsupportedAudio);
         else review();
@@ -343,6 +345,7 @@ void Controller::poll(uint64_t now) {
         _work=Work::Expire;_packet={};_recording=false;phase(Phase::Saving);
     }
     submit();
+    if(_closed && drained()) _d.store->protectVoiceRecord({});
 }
 void Controller::stop() {
     _accepting=false;_closed=true;_stopping=true;_pausing=false;
@@ -350,6 +353,7 @@ void Controller::stop() {
     if(_audioOwned) {if(_recording) _d.audio->finishMemo();else _d.audio->stop();}
     if(_work==Work::Promote && !_ticket.valid()) {_work=Work::None;review();}
 }
+void Controller::configureRetention(uint8_t limit) {if(_d.store) _d.store->configureVoiceRetention(limit);}
 void Controller::configureVolume(uint8_t value) {
     value=std::min(value,uint8_t(100));
     if(value==_configuredVolume) return;

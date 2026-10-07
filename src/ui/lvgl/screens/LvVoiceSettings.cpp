@@ -7,6 +7,8 @@ void LvSettingsScreen::buildVoiceItems(int& idx) {
     _items.push_back({"Playback volume",SettingType::INTEGER,[&settings] {return int(settings.volume);},[&settings](int value) {settings.volume=value;},[](int value) {return String(value)+"%";},0,100,10});++idx;
     _items.push_back({"Voice messages",SettingType::READONLY,nullptr,nullptr,[](int) {return String("Up to 15 seconds");}});++idx;
 #endif
+    _items.push_back({"Max voice messages",SettingType::INTEGER,[&settings] {return int(settings.maxMessages);},[&settings](int value) {settings.maxMessages=value;},nullptr,1,50,1});++idx;
+    _items.push_back({"Storage limit",SettingType::READONLY,nullptr,nullptr,[](int) {return String("Internal storage only");}});++idx;
     _items.push_back({"Live calls",SettingType::READONLY,nullptr,nullptr,[](int) {return String("Unavailable");}});++idx;
     _categories.push_back({"Voice",start,idx-start,[&settings] {
 #ifdef RSM9

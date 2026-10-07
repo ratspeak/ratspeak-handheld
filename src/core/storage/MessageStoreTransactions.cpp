@@ -242,7 +242,7 @@ MessageStore::Submission MessageStore::requestConversation(const ConversationSel
     return submit(request, nullptr, 0, sizeof(ConversationView));
 }
 
-void MessageStore::poll() {
+void MessageStore::poll(bool allowMaintenanceIo) {
     handheld::assertDeviceOwner();
     for (;;) {
         const Ticket ticket = _writeQueue.nextReady(_settledThrough);
@@ -254,6 +254,7 @@ void MessageStore::poll() {
         _settledThrough = ticket.sequence;
         if (_deleteFence == ticket) _deleteFence = {};
     }
+    pollVoiceRetention(allowMaintenanceIo);
 }
 
 bool MessageStore::peekResult(Ticket ticket, Result& result, Request* request) const {
@@ -273,11 +274,45 @@ bool MessageStore::finishStop() {
 bool MessageStore::setExternalStorageEnabled(bool enabled) {
     handheld::assertDeviceOwner();
     if (_writeQueue.drainCount() != 0) return false;
-    _externalStorageEnabled = enabled; transactions().setExternal(enabled); return true;
+    _externalStorageEnabled = enabled; transactions().setExternal(enabled);_audioRetentionDirty=true;return true;
+}
+
+void MessageStore::configureVoiceRetention(uint8_t limit) {
+    handheld::assertDeviceOwner();
+    if(limit<1 || limit>50) return;
+    if(!_audioRetentionConfigured || limit!=_maxVoiceMessages) {
+        _maxVoiceMessages=limit;_audioRetentionConfigured=true;_audioRetentionDirty=true;
+    }
+}
+void MessageStore::protectVoiceRecord(const RecordKey& key) {
+    handheld::assertDeviceOwner();
+    if(_protectedVoiceRecord.counter==key.counter && _protectedVoiceRecord.incoming==key.incoming &&
+       !memcmp(_protectedVoiceRecord.peer,key.peer,16)) return;
+    _protectedVoiceRecord=key;_audioRetentionDirty=true;
+}
+void MessageStore::pollVoiceRetention(bool allowIo) {
+    const uint32_t now=millis();
+    if(_audioRetentionTicket.valid()) {
+        Result result;
+        if(!peekResult(_audioRetentionTicket,result)) return;
+        _audioRetentionDirty|=result.more || result.error!=Error::None || result.outcome!=Outcome::Committed;
+        _audioRetentionRetry=now+(result.error!=Error::None?1000:0);
+        releaseResult(_audioRetentionTicket);_audioRetentionTicket={};
+    }
+    const bool externalReady=_externalStorageEnabled && _sd && _sd->isReady();
+    if(externalReady!=_audioExternalReady) {_audioExternalReady=externalReady;_audioRetentionDirty=true;}
+    if((!_writeQueue.deferred() && !allowIo) || !_audioRetentionConfigured || !_audioRetentionDirty ||
+       !_writeQueue.accepting() || int32_t(now-_audioRetentionRetry)<0) return;
+    Request request;request.operation=Operation::RetainAudio;request.offset=_maxVoiceMessages;request.key=_protectedVoiceRecord;
+    const auto accepted=submit(request);
+    if(accepted.accepted()) {_audioRetentionTicket=accepted.ticket;_audioRetentionDirty=false;}
 }
 
 void MessageStore::settle(const Request& request, const Result& result) noexcept {
     if (result.outcome != Outcome::Committed) return;
+    if(request.operation==Operation::RetainAudio && !result.total) return;
+    if(((request.operation==Operation::CreateIncoming || request.operation==Operation::CreateOutgoing) && request.audio.state==1) ||
+       request.operation==Operation::MemoPromote || request.operation==Operation::UpdateStatus) _audioRetentionDirty=true;
     if (rrc::operation(request.operation)) return; // RRC owner publishes its own revision/unread.
     if (memo::operation(request.operation) && request.operation != Operation::MemoPromote) return;
     if (request.operation == Operation::ReadRecord || request.operation == Operation::ReadAudio || request.operation == Operation::ReadHistoryPage ||
@@ -289,7 +324,7 @@ void MessageStore::settle(const Request& request, const Result& result) noexcept
     // presentation cache or allocation between persistence and result visibility.
     if ((request.operation == Operation::CreateIncoming || request.operation == Operation::CreateOutgoing ||
          request.operation == Operation::DeleteConversation || request.operation == Operation::DeleteRecord || request.operation == Operation::Trim ||
-         request.operation == Operation::MemoPromote) &&
+         request.operation == Operation::MemoPromote || request.operation==Operation::RetainAudio) &&
         _historyRevision < UINT32_MAX) ++_historyRevision;
     if (result.conversationDelta > 0 && _totalConversations < UINT32_MAX) ++_totalConversations;
     if (result.conversationDelta < 0 && _totalConversations) --_totalConversations;

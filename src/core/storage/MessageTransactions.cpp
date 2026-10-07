@@ -481,6 +481,10 @@ void MessageTransactions::create(const Request& request, uint8_t* bytes, Result&
                     document.document()["store_revision"] = ++header.revision;
                     result.revision = header.revision;
                     result.enriched = true;
+                } else if (header.audio.state==3 && media.state==1 && media.mode==header.audio.mode &&
+                           media.length==header.audio.length && media.checksum==header.audio.checksum) {
+                    // An authenticated duplicate must not resurrect locally expired audio.
+                    media.state=3;
                 } else if (memcmp(&media, &header.audio, sizeof(media))) {
                     result.error = Error::Verify; return;
                 }
@@ -522,7 +526,7 @@ void MessageTransactions::update(const Request& request, Result& result) {
     uint8_t target=request.status;
     if(retry) {
         if(header.incoming || header.revision!=request.offset || memcmp(header.source,request.source,16) ||
-           !messaging::retryableStatus(header.status)) {result.error=Error::Stale;return;}
+           (!messaging::retryableStatus(header.status) || header.audio.state==3)) {result.error=Error::Stale;return;}
         target=uint8_t(header.deliveryPolicy==messaging::DeliveryPolicy::Always || messaging::relayStatus(header.status)?
             LXMFStatus::PROP_QUEUED:LXMFStatus::QUEUED);
     }
@@ -1292,6 +1296,7 @@ void MessageTransactions::purgeJournal(const Request& request, uint8_t* bytes, s
 
 #include "RrcTransactions.inc"
 #include "MemoTransactions.inc"
+#include "AudioRetention.inc"
 
 void MessageTransactions::execute(const Request& request, uint8_t* bytes, size_t length, size_t capacity, Result& result) {
     if (_deferred && !bindWorker()) {
@@ -1315,12 +1320,13 @@ void MessageTransactions::execute(const Request& request, uint8_t* bytes, size_t
         ++_mutationEpoch;
         // Invalidate before attempting a write: partial mirrors, failed cleanup
         // and exceptions can all change persistent state even on failure.
-        invalidateSummary(request.key.peer);
+        if(request.operation==Operation::RetainAudio) clearSummaries();
+        else invalidateSummary(request.key.peer);
     }
     switch (request.operation) {
     case Operation::MemoPromote: memoTransaction(request, bytes, length, capacity, result); break;
     case Operation::CreateIncoming: case Operation::CreateOutgoing:
-        if (!audio::validBody(request.titleLength, request.contentLength, request.audio) || request.audio.checksum ||
+        if (request.audio.state==3 || !audio::validBody(request.titleLength, request.contentLength, request.audio) || request.audio.checksum ||
             length != size_t(request.titleLength) + request.contentLength + request.audio.length ||
             !messaging::validDelivery(request.status, request.deliveryPolicy, request.key.incoming) ||
             !std::isfinite(request.timestamp) ||
@@ -1342,6 +1348,7 @@ void MessageTransactions::execute(const Request& request, uint8_t* bytes, size_t
     case Operation::ReadConversationPage: conversationPage(request, bytes, capacity, result); break;
     case Operation::ReadConversation: conversation(request, bytes, capacity, result); break;
     case Operation::Trim: trim(request, result); break;
+    case Operation::RetainAudio: retainAudio(request,result);break;
     case Operation::LoadPrepared: case Operation::WritePrepared:
         prepared(request, bytes, length, capacity, result); break;
     case Operation::LoadPurge: case Operation::WritePurge: case Operation::ClearPurge:

@@ -28,7 +28,7 @@ enum class Operation : uint8_t {
     RrcRead, RrcAppend, RrcWrite, RrcStatus, RrcPage, RrcMarkRead, RrcClear, RrcSavedRooms, RrcPrivateInbox, RrcObserve,
     ReadAudio,
     MemoRead, MemoBegin, MemoAppend, MemoSeal, MemoClear, MemoPromote, MemoCancel,
-    RetryOutgoing, MemoExpire, DeleteRecord
+    RetryOutgoing, MemoExpire, DeleteRecord, RetainAudio
 };
 enum class Rejection : uint8_t {
     None, Busy, Invalid, TooLarge, NoMemory, Unavailable, Fenced, Exhausted
@@ -61,7 +61,7 @@ struct RecordKey {
 struct AudioMetadata {
     uint32_t checksum = 0; // Local storage integrity; never network authentication.
     uint16_t length = 0;
-    uint8_t mode = 0, state = 0; // 0 absent, 1 field present, 2 malformed field
+    uint8_t mode = 0, state = 0; // 0 absent, 1 field present, 2 malformed field, 3 locally removed (descriptor retained)
 };
 static_assert(sizeof(AudioMetadata) == 8, "Audio metadata budget changed");
 

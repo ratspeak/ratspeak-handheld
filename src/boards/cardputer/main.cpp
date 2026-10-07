@@ -929,7 +929,8 @@ void loop() {
     // Keep the cooperative UI running, but service TX completion before
     // background storage/settings work can occupy the radio owner.
     const bool radioReady = backend->pollRadioBeforeBlockingWork();
-    messageStore.poll(); // Completed result settlement never performs storage I/O.
+    messageStore.configureVoiceRetention(userConfig.settings().voice.maxMessages);
+    messageStore.poll(radioReady); // Deferred cleanup stays on the existing storage worker.
     M5.update();
     if (radioReady) { pollCardSettings(); pollCardRadioSettings(); }
     if (maintenance.accepting() && radioReady) {

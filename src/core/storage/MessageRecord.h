@@ -51,6 +51,13 @@ inline bool recordHeader(JsonVariantConst document, StoredRecordHeader& header) 
                         media[1].as<uint8_t>(), media[0].as<uint8_t>()};
         if (!audio::valid(header.audio)) return false;
     }
+    if(!document["audio_removed"].isNull()) {
+        const auto removed=document["audio_removed"].as<JsonArrayConst>();
+        if(header.audio.state!=2 || removed.size()!=3 || !removed[0].is<uint8_t>() ||
+           !removed[1].is<uint16_t>() || !removed[2].is<uint32_t>()) return false;
+        header.audio={removed[2].as<uint32_t>(),removed[1].as<uint16_t>(),removed[0].as<uint8_t>(),3};
+        if(!audio::valid(header.audio)) return false;
+    }
     if (header.prepared && (header.incoming || !header.hasMessageId ||
                             header.deliveryPolicy == messaging::DeliveryPolicy::DirectOnly)) return false;
     if (header.hasMessageId) {
@@ -62,9 +69,18 @@ inline bool recordHeader(JsonVariantConst document, StoredRecordHeader& header) 
 
 inline bool recordAudio(JsonDocument& document, const AudioMetadata& media) {
     if (!audio::valid(media)) return false;
+    document.remove("audio_removed");
     if (!media.state) { document.remove("audio"); return true; }
     auto value = document["audio"].to<JsonArray>();
-    value.add(media.state); value.add(media.mode); value.add(media.length); value.add(media.checksum);
+    if(media.state==3) {
+        // Older firmware still reads this message as unavailable audio. The
+        // local-only extension keeps the original descriptor for MID dedup.
+        value.add(2);value.add(0);value.add(0);value.add(0);
+        auto removed=document["audio_removed"].to<JsonArray>();
+        removed.add(media.mode);removed.add(media.length);removed.add(media.checksum);
+    } else {
+        value.add(media.state);value.add(media.mode);value.add(media.length);value.add(media.checksum);
+    }
     return !document.overflowed();
 }
 
