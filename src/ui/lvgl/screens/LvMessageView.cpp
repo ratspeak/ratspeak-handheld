@@ -470,8 +470,8 @@ void LvMessageView::clearMessages() {
     _binding = true;
     if (_msgScroll) lv_obj_clean(_msgScroll);
     _statusLabels.fill(nullptr); _textLabels.fill(nullptr);
-    _audioPressIndex=HistoryWindow::VisibleSpans;
-    _bubbleBoxes.fill(nullptr); _readButtons.fill(nullptr);_moreButtons.fill(nullptr);_audioErrors.fill(nullptr);
+    _audioPressIndex=_messagePressIndex=HistoryWindow::VisibleSpans;
+    _bubbleBoxes.fill(nullptr); _readButtons.fill(nullptr);_audioErrors.fill(nullptr);
     _emptyLabel = nullptr; _touchScrolling = false;
     _rowCount = 0; _lastHistoryRevision = 0; _lastStatusRevision = 0;
     _boundMode = HistoryWindow::Mode::Closed; _boundIdentity = 0;
@@ -542,7 +542,7 @@ void LvMessageView::scrollHistory(int pixels) {
 bool LvMessageView::hasReadFocus() const {
     return boundWindow() && _service->historyWindow().mode() == HistoryWindow::Mode::Chat &&
         _service->historyWindow().focusedSpan() < _rowCount &&
-        _readButtons[_service->historyWindow().focusedSpan()];
+        _bubbleBoxes[_service->historyWindow().focusedSpan()];
 }
 
 bool LvMessageView::dismissSelection() {
@@ -561,7 +561,7 @@ void LvMessageView::selectVisibleMessage() {
     int best=0;size_t selected=HistoryWindow::VisibleSpans;
     // Select what the user is reading, including an older page. At the
     // newest end, the first action starts with the most recent message.
-    for (size_t i=0;i<_rowCount;++i) if (_readButtons[i] && _bubbleBoxes[i]) {
+    for (size_t i=0;i<_rowCount;++i) if (_bubbleBoxes[i] && !_service->historyWindow().span(i)->unavailable()) {
         lv_area_t row;lv_obj_get_coords(_bubbleBoxes[i],&row);
         const int overlap=std::min(row.y2,viewport.y2)-std::max(row.y1,viewport.y1)+1;
         if (overlap>0 && (overlap>=best || _atBottom)) {best=overlap;selected=i;}
@@ -574,8 +574,8 @@ void LvMessageView::selectVisibleMessage() {
 void LvMessageView::revealSelection() {
     updateHistoryFocus();
     const auto focus=_service->historyWindow().focusedSpan();
-    if (focus<_rowCount && _readButtons[focus]) {
-        auto* target=lv_obj_has_state(_readButtons[focus],LV_STATE_DISABLED) && _moreButtons[focus] ? _moreButtons[focus] : _readButtons[focus];
+    if (focus<_rowCount && _bubbleBoxes[focus]) {
+        auto* target=_readButtons[focus] ? _readButtons[focus] : _bubbleBoxes[focus];
         lv_obj_scroll_to_view(target,LV_ANIM_OFF);
         saveScroll();
     }
@@ -594,7 +594,7 @@ void LvMessageView::focusNextRead(int direction) {
 void LvMessageView::updateHistoryFocus() {
     size_t focus = _service ? _service->historyWindow().focusedSpan() : HistoryWindow::VisibleSpans;
     if (boundWindow() && _service->historyWindow().mode() == HistoryWindow::Mode::Chat &&
-        focus < HistoryWindow::VisibleSpans && !_readButtons[focus]) {
+        focus < HistoryWindow::VisibleSpans && (!_bubbleBoxes[focus] || _service->historyWindow().span(focus)->unavailable())) {
         _service->historyWindow().focusSpan(HistoryWindow::VisibleSpans);
         focus = HistoryWindow::VisibleSpans;
     }
@@ -847,7 +847,7 @@ void LvMessageView::appendMessage(size_t index, const Span& span, const char* te
         auto* audio=lv_label_create(box);lv_obj_set_style_text_font(audio,font,0);
         lv_obj_set_style_text_color(audio,lv_color_hex(Theme::ACCENT),0);
         lv_obj_set_width(audio,textW);lv_label_set_long_mode(audio,LV_LABEL_LONG_WRAP);
-        if(span.nativeAudio()) lv_label_set_text_fmt(audio,"Voice message (0:%02u)",span.audioSeconds());
+        if(span.nativeAudio()) lv_label_set_text(audio,"Voice message");
         else lv_label_set_text(audio,span.audioLabel());
     }
     lv_obj_t* lbl = lv_label_create(box);
@@ -858,7 +858,7 @@ void LvMessageView::appendMessage(size_t index, const Span& span, const char* te
     lv_label_set_text_static(lbl, text);
     if(!_rrcMode && handheld::ui::generatedAudioText(span,text)) lv_obj_add_flag(lbl,LV_OBJ_FLAG_HIDDEN);
 
-    if(_service && !span.unavailable()) {
+    if(_service && !span.unavailable() && !_rrcMode && span.hasAudio()) {
         auto* button = _readButtons[index] = lv_btn_create(box);
         lv_obj_set_size(button, span.hasAudio()?textW:78, 28); lv_obj_add_style(button, LvTheme::styleBtn(), 0);
         lv_obj_set_style_pad_all(button, 0, 0);
@@ -886,16 +886,10 @@ void LvMessageView::appendMessage(size_t index, const Span& span, const char* te
                 if(valid) self->readFull(index);
             }
         }, LV_EVENT_ALL, this);
-        auto* label = lv_label_create(button); lv_label_set_text(label,"Actions");
+        lv_obj_add_flag(button,LV_OBJ_FLAG_EVENT_BUBBLE);
+        auto* label = lv_label_create(button); lv_label_set_text(label,"");
         lv_obj_set_style_text_font(label, &lv_font_rsdeck_12, 0); lv_obj_center(label);
         if(!_rrcMode && span.hasAudio()) {
-            auto* more=_moreButtons[index]=lv_btn_create(box);lv_obj_set_size(more,60,24);lv_obj_add_style(more,LvTheme::styleBtn(),0);
-            lv_obj_set_user_data(more,(void*)(uintptr_t)index);
-            lv_obj_add_event_cb(more,[](lv_event_t* e) {
-                auto& self=*static_cast<LvMessageView*>(lv_event_get_user_data(e));const auto i=uintptr_t(lv_obj_get_user_data(lv_event_get_target(e)));
-                if(i<HistoryWindow::VisibleSpans && self._moreButtons[i]==lv_event_get_target(e)) self.openMessageTools(i);
-            },LV_EVENT_CLICKED,this);
-            auto* caption=lv_label_create(more);lv_label_set_text(caption,"More");lv_obj_set_style_text_font(caption,&lv_font_rsdeck_10,0);lv_obj_center(caption);
             auto* error=_audioErrors[index]=lv_label_create(box);lv_obj_set_width(error,textW);lv_obj_set_style_text_font(error,&lv_font_rsdeck_10,0);
             lv_obj_set_style_text_color(error,lv_color_hex(Theme::ERROR_CLR),0);lv_label_set_text(error,"");lv_obj_add_flag(error,LV_OBJ_FLAG_HIDDEN);
         }
@@ -929,6 +923,24 @@ void LvMessageView::appendMessage(size_t index, const Span& span, const char* te
     _statusLabels[index] = statusLbl;
     _textLabels[index] = lbl;
     _bubbleBoxes[index] = box;
+    if (_service && !span.unavailable()) {
+        lv_obj_add_flag(box,LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_user_data(box,reinterpret_cast<void*>(index));
+        lv_obj_add_event_cb(box,[](lv_event_t* e) {
+            auto& self=*static_cast<LvMessageView*>(lv_event_get_user_data(e));
+            const auto index=uintptr_t(lv_obj_get_user_data(lv_event_get_current_target(e)));
+            if(index>=self._rowCount || self._bubbleBoxes[index]!=lv_event_get_current_target(e) || !self.boundWindow()) return;
+            const auto code=lv_event_get_code(e);
+            if(code==LV_EVENT_PRESSED) {
+                self._messagePressIndex=index;self._messagePressPublication=self._service->historyWindow().revision();
+            } else if(code==LV_EVENT_PRESS_LOST) self._messagePressIndex=HistoryWindow::VisibleSpans;
+            else if(code==LV_EVENT_LONG_PRESSED && self._messagePressIndex==index &&
+                    self._messagePressPublication==self._service->historyWindow().revision()) {
+                self._messagePressIndex=self._audioPressIndex=HistoryWindow::VisibleSpans;
+                if(self._rrcMode) self.openRrcTools(index);else self.openMessageTools(index);
+            }
+        },LV_EVENT_ALL,this);
+    }
 }
 
 void LvMessageView::rebuildMessages() {
@@ -1092,7 +1104,7 @@ bool LvMessageView::handleKey(const KeyEvent& event) {
     const bool deleting=event.del || event.character==0x08;
     if(event.repeat && deleting && _dismissedDelete) return true;
     if(!event.repeat && deleting) _dismissedDelete=false;
-    _audioPressIndex=HistoryWindow::VisibleSpans;
+    _audioPressIndex=_messagePressIndex=HistoryWindow::VisibleSpans;
     if(_messageTools.visible()) {
         _messagePressedSerial=0;
         if(event.character==0x1B || deleting) {if(!event.repeat) {_dismissedDelete=deleting;_messageTools.close();hideSendModeMenu();}return true;}
@@ -1193,7 +1205,7 @@ bool LvMessageView::handleKey(const KeyEvent& event) {
 
     if(event.up || event.down) {
         if(!hasReadFocus() && event.repeat) return true;
-        if(event.source!=InputSource::Keyboard && !hasReadFocus()) scrollHistory(event.up?-30:30);
+        if(event.source==InputSource::Trackball && !hasReadFocus()) scrollHistory(event.up?-30:30);
         else if(boundWindow() && _service->historyWindow().mode()==HistoryWindow::Mode::Chat) focusNextRead(event.up?-1:1);
         else scrollHistory(event.up?-30:30);
         return true;

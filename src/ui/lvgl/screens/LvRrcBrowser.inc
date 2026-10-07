@@ -17,11 +17,11 @@ void LvMessagesScreen::switchFamily(bool direct) {
     if (direct) {
         _service->watchConversations();
         for (auto* button:_navigation) lv_obj_clear_flag(button,LV_OBJ_FLAG_HIDDEN);
-        lv_obj_clear_flag(_caption,LV_OBJ_FLAG_HIDDEN);lv_obj_clear_flag(_list,LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(_list,LV_OBJ_FLAG_HIDDEN);
     } else {
         _service->closeConversations();
         for (auto* button:_navigation) lv_obj_add_flag(button,LV_OBJ_FLAG_HIDDEN);
-        for (auto* object:{_caption,_list,_empty,_emptyState,_update}) lv_obj_add_flag(object,LV_OBJ_FLAG_HIDDEN);
+        for (auto* object:{_list,_empty,_emptyState,_update}) lv_obj_add_flag(object,LV_OBJ_FLAG_HIDDEN);
     }
     refreshUI();
 }
@@ -65,7 +65,7 @@ void LvMessagesScreen::renderRrc() {
     _binding=true;
     clearRrc();
     for (auto* button:_navigation) lv_obj_add_flag(button,LV_OBJ_FLAG_HIDDEN);
-    for (auto* object:{_caption,_list,_empty,_emptyState,_update}) lv_obj_add_flag(object,LV_OBJ_FLAG_HIDDEN);
+    for (auto* object:{_list,_empty,_emptyState,_update}) lv_obj_add_flag(object,LV_OBJ_FLAG_HIDDEN);
     _rrcPanel=lv_obj_create(_screen);
     lv_obj_set_pos(_rrcPanel,0,FamilyHeight);lv_obj_set_size(_rrcPanel,Theme::CONTENT_W,Theme::CONTENT_H-FamilyHeight);
     lv_obj_set_style_pad_all(_rrcPanel,4,0);lv_obj_set_style_pad_row(_rrcPanel,3,0);

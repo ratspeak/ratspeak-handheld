@@ -66,7 +66,7 @@ private:
     UIManager* _ui = nullptr;
     OpenCallback _onOpen;
     RowWidgets _rows[RowCount];
-    lv_obj_t *_list = nullptr, *_caption = nullptr, *_empty = nullptr, *_update = nullptr;
+    lv_obj_t *_list = nullptr, *_empty = nullptr, *_update = nullptr;
     lv_obj_t* _emptyState = nullptr;
     lv_obj_t* _navigation[4] = {};
     lv_obj_t* _actionOverlay = nullptr;

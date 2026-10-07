@@ -72,7 +72,7 @@ int visitChatLines(const History& history, bool rrc, const handheld::memo::Ui* m
         const char* source = history.text(index);
         if(!rrc && row.hasAudio()) {
             char audio[40];
-            if(row.nativeAudio()) snprintf(audio,sizeof audio,"Voice message (0:%02u)",row.audioSeconds());
+            if(row.nativeAudio()) snprintf(audio,sizeof audio,"Voice message");
             else snprintf(audio,sizeof audio,"%s",row.audioLabel());
             emit(index,audio,Theme::ACCENT);
             if(row.nativeAudio()) {

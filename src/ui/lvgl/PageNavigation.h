@@ -7,7 +7,7 @@ inline void drawPageNavigation(lv_event_t* event) {
     auto* button=lv_event_get_target(event);
     const auto index=reinterpret_cast<uintptr_t>(lv_obj_get_user_data(button));
     lv_area_t area;lv_obj_get_coords(button,&area);
-    const lv_coord_t cx=(area.x1+area.x2)/2,cy=(area.y1+area.y2)/2;
+    const lv_coord_t cx=(area.x1+area.x2+1)/2,cy=(area.y1+area.y2)/2;
     const bool doubleArrow=index==0 || index==3;
     lv_draw_line_dsc_t stroke;lv_draw_line_dsc_init(&stroke);
     stroke.width=2;stroke.round_start=1;stroke.round_end=1;

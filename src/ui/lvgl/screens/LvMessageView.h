@@ -40,7 +40,8 @@ private:
     RrcTools _rrcTools;
     handheld::ui::MessageMenu _messageTools;
     bool _messageActionPending=false,_selectAfterPage=false,_dismissedDelete=false;
-    uint32_t _audioPressPublication=0,_audioPressOwner=0;
+    uint32_t _audioPressPublication=0,_audioPressOwner=0,_messagePressPublication=0;
+    size_t _messagePressIndex=handheld::history::HistoryWindow::VisibleSpans;
     size_t _audioPressIndex=handheld::history::HistoryWindow::VisibleSpans;
     handheld::memo::Phase _audioPressPhase=handheld::memo::Phase::Unavailable;
     uint32_t _messagePressedSerial=0;
@@ -150,7 +151,7 @@ private:
     bool _suppressNextSendClick = false;
 
     // Every label points into the client's leased publication, never a body copy.
-    std::array<lv_obj_t*, HistoryWindow::VisibleSpans> _statusLabels{}, _textLabels{}, _bubbleBoxes{}, _readButtons{}, _moreButtons{}, _audioErrors{};
+    std::array<lv_obj_t*, HistoryWindow::VisibleSpans> _statusLabels{}, _textLabels{}, _bubbleBoxes{}, _readButtons{}, _audioErrors{};
 
     static constexpr size_t MAX_COMPOSER_CHARS = 120;
 };

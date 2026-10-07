@@ -107,11 +107,11 @@ void LvMessagesScreen::createUI(lv_obj_t* parent) {
     lv_obj_set_style_pad_all(parent,0,0);lv_obj_set_style_bg_color(parent,lv_color_hex(Theme::BG),0);
     for (size_t n=0;n<2;++n) {
         auto* button=_family[n]=lv_btn_create(parent);
-        lv_obj_set_pos(button,n*92,0);lv_obj_set_size(button,92,FamilyHeight);
+        lv_obj_set_pos(button,n*(Theme::CONTENT_W/2),0);lv_obj_set_size(button,Theme::CONTENT_W/2,FamilyHeight);
         lv_obj_add_style(button,LvTheme::styleListBtn(),0);
         lv_obj_add_style(button,LvTheme::styleListBtnFocused(),LV_STATE_FOCUSED);
         lv_obj_set_style_pad_all(button,0,0);
-        auto* text=label(button,&lv_font_rsdeck_12,Theme::TEXT_PRIMARY,0,0,92);
+        auto* text=label(button,&lv_font_rsdeck_12,Theme::TEXT_PRIMARY,0,0,Theme::CONTENT_W/2);
         lv_obj_set_style_text_align(text,LV_TEXT_ALIGN_CENTER,0);lv_label_set_text(text,n?"Hubs":"Direct");lv_obj_center(text);
         lv_obj_set_user_data(button,reinterpret_cast<void*>(n));
         lv_obj_add_event_cb(button,[](lv_event_t* e) {
@@ -119,7 +119,6 @@ void LvMessagesScreen::createUI(lv_obj_t* parent) {
         },LV_EVENT_CLICKED,this);
         lv_group_add_obj(LvInput::group(),button);
     }
-    _caption=label(parent,&lv_font_rsdeck_10,Theme::TEXT_SECONDARY,192,5,Theme::CONTENT_W-200);
     _list=lv_obj_create(parent);
     lv_obj_set_pos(_list,0,FamilyHeight);lv_obj_set_size(_list,Theme::CONTENT_W,Theme::CONTENT_H-FamilyHeight-NavigationSpace);
     lv_obj_add_style(_list,LvTheme::styleList(),0);
@@ -135,7 +134,7 @@ void LvMessagesScreen::createUI(lv_obj_t* parent) {
     lv_obj_set_style_text_align(_empty,LV_TEXT_ALIGN_CENTER,0);
     _emptyState=createEmptyState(parent);
     _update=lv_btn_create(parent);
-    lv_obj_set_pos(_update,Theme::CONTENT_W-116,3);lv_obj_set_size(_update,112,18);
+    lv_obj_set_pos(_update,(Theme::CONTENT_W-112)/2,Theme::CONTENT_H-NavigationHeight-3);lv_obj_set_size(_update,112,NavigationHeight);
     lv_obj_add_style(_update,LvTheme::styleListBtn(),0);
     lv_obj_add_style(_update,LvTheme::styleListBtnFocused(),LV_STATE_FOCUSED);
     lv_obj_set_style_pad_all(_update,0,0);
@@ -194,7 +193,7 @@ void LvMessagesScreen::onExit() {
     }
 }
 void LvMessagesScreen::destroyUI() {
-    onExit();_list=nullptr;_caption=nullptr;_empty=nullptr;_update=nullptr;_emptyState=nullptr;
+    onExit();_list=nullptr;_empty=nullptr;_update=nullptr;_emptyState=nullptr;
     for (auto& button:_navigation) button=nullptr;
     for (auto& button:_family) button=nullptr;
     LvScreen::destroyUI();
@@ -344,12 +343,8 @@ void LvMessagesScreen::updateStatuses() {
     _statusRevision=window.statusRevision();
 }
 void LvMessagesScreen::updateCaptions() {
-    if (!_screen || !_caption) return;
+    if (!_screen) return;
     const auto* window=_service?&_service->conversationWindow():nullptr;
-    char text[100];
-    if (!window || !_active) snprintf(text,sizeof(text),"Conversations closed");
-    else snprintf(text,sizeof(text),"Page %u",unsigned(_rowCount?_boundPage:window->pageNumber()));
-    lv_label_set_text(_caption,text);
     const bool emptyReady=window && _active && !_rowCount && window->state()==Window::State::Ready &&
         !window->loading() && window->statusReady();
     if (emptyReady) lv_obj_clear_flag(_emptyState,LV_OBJ_FLAG_HIDDEN);
@@ -368,15 +363,18 @@ void LvMessagesScreen::updateCaptions() {
     lv_label_set_text_static(lv_obj_get_child(_update,0),retry?"Retry":"Check updates");
     if (update) lv_obj_clear_flag(_update,LV_OBJ_FLAG_HIDDEN);
     else lv_obj_add_flag(_update,LV_OBJ_FLAG_HIDDEN);
-    if (update) lv_obj_add_flag(_caption,LV_OBJ_FLAG_HIDDEN);
-    else lv_obj_clear_flag(_caption,LV_OBJ_FLAG_HIDDEN);
     for (size_t i=0;i<4;++i) {
         const bool enabled=window && _active && !window->loading() && (i<2?window->canPrevious():window->canNext());
         if (enabled) lv_obj_clear_state(_navigation[i],LV_STATE_DISABLED);
         else lv_obj_add_state(_navigation[i],LV_STATE_DISABLED);
     }
-    // Keep paging controls visible at a stable position, including empty lists.
-    // Recovery stays in the header; both previews always fit above the arrows.
+    // Recovery shares the navigation row only when needed. The two families
+    // always keep equal full-width targets and both conversation previews fit.
+    const int navWidth=(Theme::CONTENT_W-8-(update?116:0))/4;
+    for(size_t i=0;i<4;++i) {
+        lv_obj_set_x(_navigation[i],4+int(i)*navWidth+(update && i>=2?116:0));
+        lv_obj_set_width(_navigation[i],navWidth-3);
+    }
     const int top=FamilyHeight;
     _binding=true;
     const int height=Theme::CONTENT_H-top-NavigationSpace;
