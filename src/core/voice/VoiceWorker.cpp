@@ -342,8 +342,23 @@ void VoiceWorker::runMemo(Impl& i) {
     size_t used=0,total=0;
     Encoded packet;packet.generation=i.generation;
     const uint64_t started=nowMs();uint64_t waiting=started;
-    auto alive=[&] {return uint32_t(nowMs())-VoiceWorker::_inputHeartbeat.load()<=1000;};
+    auto inputAge=[&] {return uint32_t(nowMs())-VoiceWorker::_inputHeartbeat.load();};
+    auto alive=[&] {return inputAge()<=1000;};
     auto cancelled=[&] {return i.finish.load() || i.memoEpoch!=VoiceWorker::_stopEpoch.load();};
+    auto foreground=[&] {
+        // A bounded clip has no open microphone. A slow UI-owned DMA handoff
+        // or redraw can miss the recording watchdog without losing the view.
+        // Pause before decoding/writing more PCM, then require a fresh UI
+        // heartbeat to resume. Actual abandonment still has a finite timeout;
+        // explicit Pause/Close/lock cancellation does not wait for recovery.
+        while(!alive()) {
+            if(i.stop || cancelled()) return false;
+            if(record || inputAge()>=3000) {failure=Code::InputLost;return false;}
+            if(!owned && nowMs()-started>=2000) {failure=Code::AudioUnavailable;return false;}
+            i.update(ready,false,false);vTaskDelay(1);
+        }
+        return true;
+    };
     auto timing=[&](int64_t before,bool encoding) {
         const uint32_t elapsed=uint32_t(esp_timer_get_time()-before);
         portENTER_CRITICAL(&i.mux);
@@ -371,7 +386,7 @@ void VoiceWorker::runMemo(Impl& i) {
         ++total;frames();return true;
     };
     while(!i.stop && !cancelled() && !owned) {
-        if(!alive()) {failure=Code::InputLost;break;}
+        if(!foreground()) break;
         owned=AudioCoordinator::instance().claim();
         if(!owned && nowMs()-started>=2000) {failure=Code::AudioUnavailable;break;}
         if(!owned) vTaskDelay(1);
@@ -389,14 +404,13 @@ void VoiceWorker::runMemo(Impl& i) {
             }
         }
         if(failure==Code::Ok && !i.stop && !cancelled()) {
-            if(!alive()) failure=Code::InputLost;
-            else {ready=i.device.prepare(i.volume,record);if(!ready) failure=i.device.error();}
+            if(foreground() && !i.stop && !cancelled()) {ready=i.device.prepare(i.volume,record);if(!ready) failure=i.device.error();}
         }
     }
     if(ready && !memorySafe()) {ready=false;failure=memoryFailure(MemoryStage::Driver,FreeFloor,LargestFloor);}
     i.update(ready,ready&&record,false,failure);
     while(ready && !i.stop) {
-        if(!alive()) {failure=Code::InputLost;break;}
+        if(!foreground()) break;
         if(cancelled() || total==i.frameLimit) {normalStop=true;break;}
         if(!memorySafe()) {failure=memoryFailure(MemoryStage::RunningHeap,FreeFloor,LargestFloor);break;}
         if(uxTaskGetStackHighWaterMark(nullptr)<StackReserve) {failure=memoryFailure(MemoryStage::RunningStack,FreeFloor,LargestFloor);break;}
@@ -420,7 +434,7 @@ void VoiceWorker::runMemo(Impl& i) {
             }
             waiting=nowMs();i.update(true,false,true);
             for(size_t at=0;at<packet.length && !i.stop && !cancelled();at+=4) {
-                if(!alive()) {failure=Code::InputLost;break;}
+                if(!foreground()) break;
                 const auto before=esp_timer_get_time();
                 const auto code=rs_handheld_voice_codec_decode_frame(i.codec,packet.bytes+at,4,i.pcm,320);
                 const bool timely=timing(before,false);
