@@ -263,11 +263,14 @@ void ServiceClient::watchHistory(const std::string& peer) {
     if (!storage::decodeHex(peer.data(), peer.size(), decoded, 16)) { closeHistory(); return; }
     if (_history.mode() != history::HistoryWindow::Mode::Closed &&
         _history.identityGeneration() == _status.generation && !memcmp(_history.peer(), decoded, 16)) return;
-    _history.open(decoded, _status.generation);
+    _history.observeHistoryRevision(_status.historyRevision);
+    _history.observeStatusRevision(_status.statusRevision);
+    _history.resume(decoded, _status.generation);
 }
 void ServiceClient::closeHistory() {
     // A mode/peer change invalidates presentation, never the callback that owns
     // an accepted mailbox result. Hidden views still copy/release that result.
+    if (_rrcHistory) _history.refresh(); // A native RRC key is not a Direct peer binding.
     _history.close();
     _rrcHistory = false;
     if (_rrcViewRevision != UINT32_MAX) ++_rrcViewRevision;

@@ -149,6 +149,7 @@ bool MessageView::prepareDraft(String& identity) {
 bool MessageView::setPeerHex(const std::string& peerHex) {
     if (!leaveRrcDraft()) return false;
     if((_rrcMode || _peerHex!=peerHex) && _voiceClose) _voiceClose();
+    if (_rrcMode) _history.refresh();
     if (_rrcMode || _peerHex!=peerHex) _history.close();
     _messageTools.close();_selectAfterPage=false;
     _rrcMode=false;++_rrcView;_peerHex=peerHex;
@@ -164,6 +165,7 @@ void MessageView::onExit() {
         _retainedDraft=_input.getText();_retainedPeer=_peerHex;
         _retainedIdentity=_backend->destinationHashHex().c_str();
     }
+    if (_rrcMode) _history.refresh(); // Do not resume an RRC bank as a Direct chat.
     _visible=false;_readRequested=false;_input.setActive(false);_history.close();
 }
 void MessageView::onEnter() {
@@ -208,7 +210,9 @@ void MessageView::refreshMessages() {
     if (_history.mode() == History::Mode::Closed || memcmp(_history.peer(), peer.data(), 16)) {
         // Cardputer identity replacement performs an orderly restart. This
         // presentation belongs to the one identity established for this boot.
-        _history.open(peer.data(), 1);
+        _history.observeHistoryRevision(_lxmf->historyRevision());
+        if (_backend) _history.observeStatusRevision(_backend->lxmfStatusRevision());
+        _history.resume(peer.data(), 1);
         _history.setScrollOffset(UINT32_MAX);
     } else _history.refresh();
     _needsRefresh = false;

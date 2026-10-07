@@ -38,6 +38,23 @@ void HistoryWindow::open(const uint8_t peer[16], uint32_t identity) {
     c.focus = VisibleSpans; c.selectEdge = 0;
     if (!c.awaiting) c.phase = Phase::Idle;
 }
+void HistoryWindow::resume(const uint8_t peer[16], uint32_t identity) {
+    const auto& info = livePage().info;
+    bool reusable = peer && identity && control().publication && info.identity == identity &&
+        !memcmp(info.peer, peer, 16) && !info.full && !info.moreNewer && info.last == info.count &&
+        !control().newBelow && freshnessAvailable() && info.sourceRevision == control().observedHistoryRevision;
+    for (size_t i = 0; reusable && i < info.spans; ++i)
+        reusable = !liveFrame().spans[i].unavailable();
+    if (!reusable) { open(peer, identity); return; }
+    if (!changeView()) return;
+    auto& c = control();
+    memcpy(c.peer, peer, 16); c.identity = identity;
+    c.mode = Mode::Chat; c.state = State::Ready; c.intent = Intent::None;
+    c.newBelow = false; c.followNewest = true; c.scrollOffset = 0;
+    c.focus = VisibleSpans; c.selectEdge = 0;
+    if (!c.statusReady || c.statusFailed) c.statusDirty = true;
+    if (!c.awaiting) c.phase = Phase::Idle;
+}
 void HistoryWindow::close() {
     changeView();
     auto& c = control();
@@ -162,6 +179,7 @@ bool HistoryWindow::backToChat() {
     return true;
 }
 void HistoryWindow::refresh() {
+    _pages[control().active].value.info.sourceRevision = UINT32_MAX;
     auto& c = control();
     if (c.mode == Mode::Closed || c.state == State::Exhausted) return;
     // Coalesce refreshes behind a bounded in-progress publication. Unrelated
@@ -228,6 +246,7 @@ void HistoryWindow::beginIntent() {
         if (c.followNewest) { info.bound = {}; info.direction = storage::HistoryDirection::Before; }
         c.phase = Phase::Page;
     }
+    info.sourceRevision = c.observedHistoryRevision;
     c.buildIndex = info.first;
     if (c.phase == Phase::Preview && c.buildIndex == info.last) { c.publish = true; publish(); }
 }

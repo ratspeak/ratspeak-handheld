@@ -67,6 +67,9 @@ public:
     static_assert(sizeof(Span) == 32, "History span metadata budget changed");
 
     void open(const uint8_t peer[16], uint32_t identityGeneration);
+    // Direct-chat reentry may reuse the existing newest bank. Other contexts
+    // use open(), which always invalidates retained presentation.
+    void resume(const uint8_t peer[16], uint32_t identityGeneration);
     void close();
     bool older();
     bool newer();
@@ -172,6 +175,7 @@ private:
         uint32_t identity = 0;
         storage::HistoryEntry bound;
         uint32_t total = 0;
+        uint32_t sourceRevision = UINT32_MAX;
         uint8_t count = 0, first = 0, last = 0, spans = 0;
         storage::HistoryDirection direction = storage::HistoryDirection::Before;
         bool moreOlder = false, moreNewer = false, full = false;

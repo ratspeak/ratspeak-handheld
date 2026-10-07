@@ -17,7 +17,7 @@ void MessageTransactions::retainAudio(const Request& request, Result& result) {
     uint32_t count=0;
     while(nextPeer(peers,peerHex)) {
         uint8_t peer[16];decodeHex(peerHex,32,peer,16);
-        Cursor records;beginRecords(records,peer,&document);RecordKey key;
+        Cursor records;beginRecords(records,peer,&document);records.audioOnly=true;RecordKey key;
         while(nextRecord(records,key)) {
             StoredRecordHeader header;
             result.error=load(key,document,header);
@@ -49,6 +49,9 @@ void MessageTransactions::retainAudio(const Request& request, Result& result) {
     document.document().remove("prop_prepared");
     document.document()["store_revision"]=++header.revision;
     result.key=oldest;result.revision=header.revision;
+    // Only this peer may change, including a partial/failed commit. A no-op
+    // sweep must preserve the summaries reduced during startup.
+    invalidateSummary(oldest.peer);
     result.error=commit(oldest,document,false,result,nullptr,UINT8_MAX,true);
     if(result.error!=Error::None || !result.flash.committed) return;
     // Publish a durable removed descriptor before destroying any bytes. It also

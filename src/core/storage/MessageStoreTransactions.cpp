@@ -274,7 +274,10 @@ bool MessageStore::finishStop() {
 bool MessageStore::setExternalStorageEnabled(bool enabled) {
     handheld::assertDeviceOwner();
     if (_writeQueue.drainCount() != 0) return false;
-    _externalStorageEnabled = enabled; transactions().setExternal(enabled);_audioRetentionDirty=true;return true;
+    _externalStorageEnabled = enabled; transactions().setExternal(enabled);_audioRetentionDirty=true;
+    _audioExternalReady = enabled && _sd && _sd->isReady();
+    if (_historyRevision < UINT32_MAX) ++_historyRevision;
+    bumpRevision(); return true;
 }
 
 void MessageStore::configureVoiceRetention(uint8_t limit) {
@@ -292,6 +295,12 @@ void MessageStore::protectVoiceRecord(const RecordKey& key) {
 }
 void MessageStore::pollVoiceRetention(bool allowIo) {
     const uint32_t now=millis();
+    const bool externalReady=_externalStorageEnabled && _sd && _sd->isReady();
+    if(externalReady!=_audioExternalReady) {
+        _audioExternalReady=externalReady;_audioRetentionDirty=true;
+        if (_historyRevision < UINT32_MAX) ++_historyRevision;
+        bumpRevision(); // Hidden banks must not survive a changed storage medium.
+    }
     if(_audioRetentionTicket.valid()) {
         Result result;
         if(!peekResult(_audioRetentionTicket,result)) return;
@@ -299,8 +308,6 @@ void MessageStore::pollVoiceRetention(bool allowIo) {
         _audioRetentionRetry=now+(result.error!=Error::None?1000:0);
         releaseResult(_audioRetentionTicket);_audioRetentionTicket={};
     }
-    const bool externalReady=_externalStorageEnabled && _sd && _sd->isReady();
-    if(externalReady!=_audioExternalReady) {_audioExternalReady=externalReady;_audioRetentionDirty=true;}
     if((!_writeQueue.deferred() && !allowIo) || !_audioRetentionConfigured || !_audioRetentionDirty ||
        !_writeQueue.accepting() || int32_t(now-_audioRetentionRetry)<0) return;
     Request request;request.operation=Operation::RetainAudio;request.offset=_maxVoiceMessages;request.key=_protectedVoiceRecord;
@@ -311,8 +318,9 @@ void MessageStore::pollVoiceRetention(bool allowIo) {
 void MessageStore::settle(const Request& request, const Result& result) noexcept {
     if (result.outcome != Outcome::Committed) return;
     if(request.operation==Operation::RetainAudio && !result.total) return;
+    if(request.operation==Operation::MarkRead && !result.total) return;
     if(((request.operation==Operation::CreateIncoming || request.operation==Operation::CreateOutgoing) && request.audio.state==1) ||
-       request.operation==Operation::MemoPromote || request.operation==Operation::UpdateStatus) _audioRetentionDirty=true;
+       request.operation==Operation::MemoPromote || result.audioBecameRetainable) _audioRetentionDirty=true;
     if (rrc::operation(request.operation)) return; // RRC owner publishes its own revision/unread.
     if (memo::operation(request.operation) && request.operation != Operation::MemoPromote) return;
     if (request.operation == Operation::ReadRecord || request.operation == Operation::ReadAudio || request.operation == Operation::ReadHistoryPage ||

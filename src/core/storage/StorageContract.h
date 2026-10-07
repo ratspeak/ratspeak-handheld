@@ -140,6 +140,7 @@ struct Result {
     bool duplicate = false;
     bool enriched = false; // A resend attached previously discarded media to the same MID.
     bool more = false;
+    bool audioBecameRetainable = false; // UpdateStatus made a queued audio clip eligible for cleanup.
 };
 
 // A bounded history-page payload contains these complete record selectors.

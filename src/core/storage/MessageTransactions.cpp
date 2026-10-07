@@ -167,10 +167,32 @@ bool MessageTransactions::nextRecord(Cursor& cursor, RecordKey& key) {
         if(file.isDirectory()) continue;
         char name[32];snprintf(name,sizeof name,"%s",file.name());
         const size_t length=strlen(name);
+        // Retention visits sidecar-bearing records only. Text-only history and
+        // already-cleaned audio tombstones need no JSON parse or deletion read.
+        const char* audioSuffixes[] = {".audio", ".audio.bak", ".audio.tmp", ".prop", ".prop.bak", ".prop.tmp"};
+        size_t audioSuffix = 0;
+        if (cursor.audioOnly) {
+            while (audioSuffix < 6 && (length <= 20 || strcmp(name + 20, audioSuffixes[audioSuffix]))) ++audioSuffix;
+            if (audioSuffix == 6) continue;
+            name[20] = 0;
+        }
         const bool tombstone=(length==24 && !strcmp(name+20,".del")) || (length==28 && !strcmp(name+20,".del.bak"));
         if(tombstone && cursor.includeDeleted) name[20]=0;
         if(!filename(name,counter,incoming) || counter<=cursor.cutoff) continue;
         key = {}; memcpy(key.peer, cursor.peer, 16); key.counter = counter; key.incoming = incoming;
+        if (cursor.audioOnly) {
+            bool duplicate = false;
+            for (size_t i = 0; i < audioSuffix; ++i) {
+                char candidate[128]; path(key, cursor.medium, candidate, audioSuffixes[i]);
+                if (store.exists(candidate)) { duplicate = true; break; }
+            }
+            if (duplicate) continue;
+            char record[128]; path(key, cursor.medium, record);
+            if (!store.exists(record)) {
+                path(key, cursor.medium, record, ".bak");
+                if (!store.exists(record)) continue; // Uncommitted orphan, not a retained message.
+            }
+        }
         if(!cursor.includeDeleted) {
             bool deleted=false;cursor.error=recordDeletion(key,deleted);
             if(cursor.error!=Error::None) return false;
@@ -531,6 +553,8 @@ void MessageTransactions::update(const Request& request, Result& result) {
             LXMFStatus::PROP_QUEUED:LXMFStatus::QUEUED);
     }
     result.oldStatus = header.status; result.newStatus = target;
+    result.audioBecameRetainable = header.audio.state == 1 && messaging::pendingStatus(header.status) &&
+        !messaging::pendingStatus(target) && target != uint8_t(LXMFStatus::DRAFT);
     if (!messaging::validDelivery(target, header.deliveryPolicy, header.incoming) ||
         (messaging::relayStatus(header.status) && target < 7 && target != 4 && target != 5)) {
         result.error = Error::Stale; return;
@@ -1312,6 +1336,13 @@ void MessageTransactions::execute(const Request& request, uint8_t* bytes, size_t
         memoTransaction(request, bytes, length, capacity, result); return;
     }
     checkSummaryMedia();
+    // An unchanged, fully read conversation needs no directory scan or cache
+    // invalidation. Every real mutation already invalidates its peer summary.
+    if (request.operation == Operation::MarkRead) {
+        if (const auto* summary = findSummary(request.key.peer)) if (!summary->row.unreadCount) {
+            result.outcome = Outcome::Committed; return;
+        }
+    }
     if (request.operation != Operation::ReadRecord && request.operation != Operation::ReadAudio && request.operation != Operation::ReadPending &&
         request.operation != Operation::ReadHistoryPage && request.operation != Operation::ReadConversationPage &&
         request.operation != Operation::ReadConversation && request.operation != Operation::LoadPurge &&
@@ -1320,8 +1351,7 @@ void MessageTransactions::execute(const Request& request, uint8_t* bytes, size_t
         ++_mutationEpoch;
         // Invalidate before attempting a write: partial mirrors, failed cleanup
         // and exceptions can all change persistent state even on failure.
-        if(request.operation==Operation::RetainAudio) clearSummaries();
-        else invalidateSummary(request.key.peer);
+        if(request.operation!=Operation::RetainAudio) invalidateSummary(request.key.peer);
     }
     switch (request.operation) {
     case Operation::MemoPromote: memoTransaction(request, bytes, length, capacity, result); break;

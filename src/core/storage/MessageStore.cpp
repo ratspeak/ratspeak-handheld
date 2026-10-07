@@ -13,6 +13,7 @@ bool MessageStore::begin(FlashStore* flash, SDStore* sd, bool externalStorageEna
     handheld::assertDeviceOwner();
     if (_writeQueue.accepting() || !_writeQueue.stopped() || _writeQueue.drainCount()) return false;
     _flash = flash; _sd = sd; _externalStorageEnabled = externalStorageEnabled;
+    _audioExternalReady = _externalStorageEnabled && _sd && _sd->isReady();
     _audioRetentionConfigured=false;_audioRetentionDirty=true;_protectedVoiceRecord={};_audioRetentionRetry=0;
     if (!_flash || !_flash->isReady()) return false;
     if (!handheld::storage::StorageLease::initialize()) return false;

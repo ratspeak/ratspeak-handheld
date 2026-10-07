@@ -27,7 +27,7 @@ public:
         uint8_t peer[16] = {};
         uint32_t cutoff = 0;
         uint8_t medium = 0;
-        bool opened = false, includeDeleted = false;
+        bool opened = false, includeDeleted = false, audioOnly = false;
         Error error = Error::None;
     };
     // Caller holds an explicit filesystem lease. No retained filename vector.
