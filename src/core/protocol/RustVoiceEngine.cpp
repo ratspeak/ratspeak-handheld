@@ -286,7 +286,13 @@ void RustVoiceEngine::mediaOutcome(uint32_t token,bool started) {
 }
 void RustVoiceEngine::stop() {_accepting=false;if(active(_status.phase))terminate(Code::Local);if(_d.ctx)rs_handheld_voice_enable(_d.ctx,0);}
 bool RustVoiceEngine::drained() const {return !active(_status.phase) && (!_d.audio || _d.audio->drained());}
-void RustVoiceEngine::end() {stop();if(_d.links)_d.links->setVoiceSink(nullptr);}
+void RustVoiceEngine::end() {
+    stop();
+    if(_d.links) _d.links->setVoiceSink(nullptr);
+    // The owner has drained the session and may now free its protocol context.
+    // Repeated shutdown (including the owner's destructor) must not reuse it.
+    _d={};
+}
 
 bool RustVoiceEngine::voiceMediaEligible(RustLinkManager::Handle h,uint32_t) const {
     return same(h) && !_closing && (_result.flags&2) && _view && _d.audio && _inputEpoch==_d.audio->cancellationEpoch();

@@ -25,6 +25,7 @@ public:
     void loop(uint32_t cancellationEpoch);
     void stop();
     bool drained() const;
+    // Stop and drain before releasing dependencies; repeated end() is safe.
     void end();
     bool voiceMediaEligible(RustLinkManager::Handle,uint32_t) const override;
     bool admitVoice(uint8_t,uint8_t) const override;
