@@ -372,7 +372,8 @@ void VoiceWorker::runMemo(Impl& i) {
         return elapsed<=(encoding?80000u:40000u);
     };
     auto frames=[&] {
-        portENTER_CRITICAL(&i.mux);i.status.frames=std::max(total,size_t(i.resumeFrame));portEXIT_CRITICAL(&i.mux);
+        const size_t completed=record?total:std::min(total,size_t(i.resumeFrame)+i.device.playedSamples()/320);
+        portENTER_CRITICAL(&i.mux);i.status.frames=std::max(completed,size_t(i.resumeFrame));portEXIT_CRITICAL(&i.mux);
     };
     auto encode=[&](bool captureRunning=true) {
         const auto before=esp_timer_get_time();
@@ -449,6 +450,14 @@ void VoiceWorker::runMemo(Impl& i) {
             if(failure!=Code::Ok) break;
         }
     }
+    if(!record && ready && total==i.frameLimit && !i.stop && !cancelled() && failure==Code::Ok) {
+        const auto interrupted=[](void* context) {
+            const auto& owner=*static_cast<Impl*>(context);
+            return owner.stop.load() || owner.finish.load() || owner.memoEpoch!=VoiceWorker::_stopEpoch.load();
+        };
+        if(!i.device.drain(interrupted,&i) && !i.stop && !cancelled()) failure=Code::AudioUnavailable;
+    }
+    if(!record) frames(); // Pause retains only a fully played frame boundary.
     // Stop DMA/microphone before the tail is encoded. Only a final partial
     // native frame is padded (less than 40 ms), never another packet/read.
     if(owned) i.device.end();

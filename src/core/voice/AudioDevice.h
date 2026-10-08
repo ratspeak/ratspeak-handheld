@@ -13,6 +13,11 @@ public:
     bool capture(bool enabled);
     size_t read(int16_t* pcm, size_t samples);
     size_t write(const int16_t* pcm, size_t samples);
+    // Eight-kHz samples known to have left the backend. Legacy I2S has no
+    // per-write completion token: retain a conservative DMA/mixer/FIFO allowance
+    // until drain(), so Pause may replay a short tail but never skip it.
+    uint32_t playedSamples() const { return _playedSamples; }
+    bool drain(bool (*cancelled)(void*) = nullptr, void* context = nullptr);
     void volume(uint8_t value) { _volume=value; }
     void end();
     void flush();
@@ -20,6 +25,7 @@ public:
 private:
     bool _ready=false, _capture=false, _rx=false, _tx=false;
     uint8_t _volume=70;
+    uint32_t _writtenSamples=0, _playedSamples=0;
 #ifdef RSCARDPUTER
     // Two 40 ms vendor recording buffers. Requeue the consumed buffer before
     // encoding so capture never waits for the codec or resets between chunks.

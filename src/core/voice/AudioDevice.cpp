@@ -1,6 +1,7 @@
 #include "voice/AudioDevice.h"
 #include "config/Config.h"
 #include <Arduino.h>
+#include <algorithm>
 #include <cstring>
 #if defined(RSCARDPUTER)
 #include <M5Unified.h>
@@ -16,6 +17,22 @@
 #endif
 
 namespace handheld::voice {
+#if defined(RSCARDPUTER) || defined(RSDECK) || defined(RATPAGER)
+namespace {
+constexpr size_t TxDescriptors=4, TxSamples=160;
+#if defined(RSCARDPUTER)
+// M5's source-channel completion precedes its mixer write and DMA completion.
+// Allow the ring plus mixer and peripheral FIFO slack when reporting frames.
+constexpr uint32_t TxPendingSamples=(TxDescriptors+2)*TxSamples/2;
+constexpr size_t TxDrainSamples=(TxDescriptors+3)*TxSamples;
+#else
+// DMA EOF permits descriptor reuse while its tail can still be in the TX
+// peripheral FIFO. One extra 160-sample block exceeds that FIFO's capacity.
+constexpr size_t TxDrainBytes=(TxDescriptors+1)*TxSamples*sizeof(int16_t);
+constexpr uint32_t TxPendingSamples=TxDrainBytes/(2*sizeof(int16_t)); // 16k output -> 8k input.
+#endif
+}
+#endif
 #if defined(RSDECK) || defined(RATPAGER)
 namespace {
 bool install(bool input, void*& events) {
@@ -28,7 +45,7 @@ bool install(bool input, void*& events) {
     cfg.mode=i2s_mode_t(I2S_MODE_MASTER|(input?I2S_MODE_RX:I2S_MODE_TX));
     cfg.sample_rate=16000;cfg.bits_per_sample=I2S_BITS_PER_SAMPLE_16BIT;
     cfg.channel_format=I2S_CHANNEL_FMT_ONLY_LEFT;cfg.communication_format=I2S_COMM_FORMAT_STAND_I2S;
-    cfg.intr_alloc_flags=ESP_INTR_FLAG_LEVEL1;cfg.dma_buf_count=input?8:4;cfg.dma_buf_len=160;
+    cfg.intr_alloc_flags=ESP_INTR_FLAG_LEVEL1;cfg.dma_buf_count=input?8:TxDescriptors;cfg.dma_buf_len=TxSamples;
     cfg.tx_desc_auto_clear=true;cfg.mclk_multiple=I2S_MCLK_MULTIPLE_256;
     QueueHandle_t queue=nullptr;
     if(i2s_driver_install(port,&cfg,input?32:0,input?&queue:nullptr)!=ESP_OK) return false;
@@ -68,9 +85,11 @@ bool codec(bool capture) {
 #endif
 bool AudioDevice::prepare(uint8_t value, bool record) {
     _volume=value;_capture=false;_rate.reset();_error=Code::AudioUnavailable;
+    _writtenSamples=_playedSamples=0;
 #if defined(RSCARDPUTER)
     M5.Mic.end();M5.Speaker.end();
-    auto cfg=M5.Speaker.config();cfg.sample_rate=16000;cfg.dma_buf_count=4;cfg.dma_buf_len=160;M5.Speaker.config(cfg);
+    auto cfg=M5.Speaker.config();cfg.sample_rate=16000;cfg.stereo=false;
+    cfg.dma_buf_count=TxDescriptors;cfg.dma_buf_len=TxSamples;M5.Speaker.config(cfg);
     if(record) {_ready=true;return capture(true);}
     _ready=_tx=M5.Speaker.begin();M5.Speaker.setVolume(255);
 #elif defined(RSDECK)
@@ -128,7 +147,7 @@ bool AudioDevice::capture(bool enabled) {
 #else
     return false;
 #endif
-    _capture=enabled;_rate.reset();
+    _capture=enabled;_rate.reset();_writtenSamples=_playedSamples=0;
 #if defined(RSDECK) || defined(RATPAGER)
     if(enabled && _ready) {
 #ifdef RSDECK
@@ -195,14 +214,58 @@ size_t AudioDevice::write(const int16_t* pcm,size_t samples) {
     if(!M5.Speaker.playRaw(_io,320,16000,false,1,0,true)) return 0;
     const uint32_t started=millis();while(M5.Speaker.isPlaying(0) && millis()-started<40) delay(1);
     if(M5.Speaker.isPlaying(0)) {M5.Speaker.stop();return 0;}
+    _writtenSamples+=samples;
+    _playedSamples=_writtenSamples>TxPendingSamples?_writtenSamples-TxPendingSamples:0;
     return samples;
 #elif defined(RSDECK) || defined(RATPAGER)
     size_t bytes=0;
     if(i2s_write(I2S_NUM_0,_io,640,&bytes,pdMS_TO_TICKS(40))!=ESP_OK || bytes!=640) return 0;
+    _writtenSamples+=samples;
+    _playedSamples=_writtenSamples>TxPendingSamples?_writtenSamples-TxPendingSamples:0;
     return samples;
 #else
     return 0;
 #endif
+}
+bool AudioDevice::drain(bool (*cancelled)(void*),void* context) {
+    if(!_ready || _capture || !_tx) return false;
+    if(cancelled && cancelled(context)) return false;
+#if defined(RSCARDPUTER)
+    // Feed silence through the sole vendor mixer owner, never a competing I2S
+    // writer. Consuming more than the ring plus a mixer block proves the clip
+    // has left DMA and the FIFO even with the last silence block being mixed.
+    static_assert(TxDrainSamples<=sizeof _io/sizeof _io[0]);
+    std::memset(_io,0,sizeof _io);
+    if(!M5.Speaker.playRaw(_io,TxDrainSamples,16000,false,1,0,true)) return false;
+    const uint32_t started=millis();
+    while(M5.Speaker.isPlaying(0)) {
+        if((cancelled && cancelled(context)) || millis()-started>=100) {M5.Speaker.stop();return false;}
+        delay(1);
+    }
+#elif defined(RSDECK) || defined(RATPAGER)
+    // IDF 4.4's write returns after copying into the circular DMA ring. Reuse
+    // every descriptor plus a FIFO allowance before stopping TX. Unlike
+    // i2s_zero_dma_buffer(), this never clears samples that are still queued.
+    // A zero-timeout descriptor write and bounded polling keep Close/lock/Stop
+    // cancellable without another task, buffer, or an arbitrary final sleep.
+    std::memset(_io,0,sizeof _io);
+    size_t remaining=TxDrainBytes;
+    const uint32_t started=millis();
+    while(remaining) {
+        if((cancelled && cancelled(context)) || millis()-started>=100) return false;
+        size_t written=0;
+        const size_t count=std::min(remaining,TxSamples*sizeof(int16_t));
+        if(i2s_write(I2S_NUM_0,_io,count,&written,0)!=ESP_OK ||
+           written>count || written%(2*sizeof(int16_t))) return false;
+        remaining-=written;
+        const auto pending=uint32_t(remaining/(2*sizeof(int16_t)));
+        _playedSamples=_writtenSamples>pending?_writtenSamples-pending:0;
+        if(!written) delay(1);
+    }
+#endif
+    if(cancelled && cancelled(context)) return false;
+    _playedSamples=_writtenSamples;
+    return true;
 }
 void AudioDevice::flush() {
 #if defined(RSCARDPUTER)
@@ -210,7 +273,7 @@ void AudioDevice::flush() {
 #elif defined(RSDECK) || defined(RATPAGER)
     if(_tx) {i2s_stop(I2S_NUM_0);i2s_zero_dma_buffer(I2S_NUM_0);i2s_start(I2S_NUM_0);}
 #endif
-    _rate.reset();
+    _rate.reset();_writtenSamples=_playedSamples=0;
 }
 void AudioDevice::end() {
 #if defined(RSCARDPUTER)
