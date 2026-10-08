@@ -1,13 +1,25 @@
-## v2.2.4
+## v2.3.0
+
+### Added
+
+- Added propagation-node discovery, automatic or fixed manual selection, direct-send fallback, and an always-propagated delivery option.
+- Added propagation inbox retrieval for messages held while the handheld is offline.
+- Added short Codec2 700C voice messages on supported T-Deck, T-Pager, and Cardputer Adv hardware, with recording preview and inline playback controls.
+- Added individual message selection, copying, and deletion through each device's touch, wheel, or keyboard controls.
+- Added a saved limit for voice clips on internal storage, defaulting to two. Older audio is removed while its chat message remains; SD-card storage has no clip-count limit.
 
 ### Fixed and improved
 
-- Improved first-message delivery when a handheld needs to discover the sender before receiving an attachment.
-- Improved discovery over LoRa and other interfaces, reducing the need for manual announces.
-- Replaced peer-list pages with a continuous list and kept selection stable as peers update.
-- Prevented brief status-refresh failures from replacing or duplicating message delivery labels. A separate retry action appears only after persistent failures.
+- Reduced conversation-loading work and reused recently opened chat history.
+- Improved recording, repeated playback, pause/resume, and audio-memory cleanup on constrained devices.
+- Returned to the conversation after sending a voice message and kept unsent clips only for the active conversation.
+- Announced the default device name so peers can display it in discovery and chats.
+- Corrected T-Pager charging-state handling across shutdown and firmware modes.
+- Unified launcher titles as Ratspeak and simplified chat navigation and message controls.
 
 ### Build and compatibility
 
+- Compact voice messages work with the accompanying Ratspeak app update after it receives the handheld's announce. ThinkNode M9 has no supported audio hardware.
+- Hub/channel support and live handheld calls remain unavailable in this release.
 - Handheld firmware remains in beta. Cardputer requires a Cap LoRa-1262 with an antenna for LoRa.
 - Factory ZIP installations erase settings, identity, and internal message history. Back up anything you want to keep before installing.
