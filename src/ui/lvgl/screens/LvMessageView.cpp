@@ -639,6 +639,10 @@ void LvMessageView::updateHistoryControls() {
     if (!_historyNotice || !_service) return;
     auto& window = _service->historyWindow();
     const bool matches = windowMatches();
+    if(matches && !_rrcMode && _ui && _ui->memoUi() && _ui->memoUi()->takeSent(window.peer())) {
+        _messageTools.close();_selectAfterPage=false;
+        window.newest();_scrollToEnd=true;
+    }
     const bool ready = matches && window.visible() && window.statusReady();
     const char* notice = nullptr;
     _noticeAction = 3;

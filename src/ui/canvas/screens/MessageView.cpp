@@ -461,6 +461,10 @@ bool MessageView::pollHistory(bool allowAdmission) {
     const auto publication = _history.revision(), statusPublication = _history.statusRevision();
     const auto state = _history.state();
     const auto error = _history.error();
+    if(_visible && !_rrcMode && _memo && _memo->takeSent(_history.peer())) {
+        _messageTools.close();_selectAfterPage=false;
+        _history.newest();_input.setActive(true);
+    }
     if (allowAdmission && !_rrcMode) {
         if (_visible && _needsRefresh) refreshMessages();
         _history.observeHistoryRevision(_lxmf->historyRevision());

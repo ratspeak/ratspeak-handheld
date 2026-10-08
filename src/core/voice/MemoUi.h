@@ -15,6 +15,11 @@ public:
     void toggleMessage(const uint8_t peer[16],uint32_t counter,bool incoming);
     void retryMessage(const uint8_t peer[16],uint32_t counter,bool incoming);
     bool inlinePlayback() const {return _inline;}
+    // One durable send completion, consumed only by its still-open chat.
+    bool takeSent(const uint8_t peer[16]) {
+        if(!_sent || std::memcmp(peer,_status.peer,16)) return false;
+        _sent=false;return true;
+    }
     uint32_t elapsedFrames() const {return _elapsed;}
     Code error() const {return _error==Code::Ok?_status.reason:_error;}
     void update(const Status&,bool foregroundAllowed);
@@ -59,6 +64,6 @@ private:
     uint8_t _focus=0;
     bool _visible=false,_pending=false,_close=false,_stop=false;
     bool _inline=false,_nextInline=false,_openAfterClose=false;
-    bool _end=false,_endAccepted=false,_openAfterEnd=false;
+    bool _end=false,_endAccepted=false,_openAfterEnd=false,_sent=false;
 };
 }

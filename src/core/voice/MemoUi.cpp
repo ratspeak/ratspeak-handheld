@@ -21,6 +21,7 @@ void Ui::retryMessage(const uint8_t peer[16],uint32_t counter,bool incoming) {
     if(counter && !incoming) requestOpen(peer,counter,incoming,true,Action::Retry);
 }
 void Ui::requestOpen(const uint8_t peer[16],uint32_t counter,bool incoming,bool inlinePlayback,Action afterOpen) {
+    _sent=false;
     if(_end || _close || _pending || active()) {
         memcpy(_nextOpen.peer,peer,16);_nextOpen.counter=counter;_nextOpen.incoming=incoming;
         _nextInline=inlinePlayback;_nextAction=afterOpen;_visible=true;_openAction=Action::Close;
@@ -42,6 +43,8 @@ void Ui::send(Action action) {
     Command c;c.action=action;c.view=_status.view;c.generation=_status.generation;
     c.draftRevision=_status.draftRevision;c.counter=_status.counter;c.incoming=_status.incoming;
     c.volume=_status.volume;c.stopEpoch=voice::VoiceWorker::stopEpoch();memcpy(c.peer,_status.peer,16);
+    c.playOnOpen=action==Action::Open && _openAction==Action::Play;
+    if(c.playOnOpen) {voice::VoiceWorker::keepInputAlive();_openAction=Action::Close;}
     _action=action;_anchor=_status.revision;_pending=true;_error=Code::Ok;
     const auto serial=++_serial;
     if(!_submit(_context,c,serial)) acknowledge(serial,Code::Busy);
@@ -72,7 +75,7 @@ void Ui::update(const Status& value,bool foregroundAllowed) {
     const auto boundGeneration=std::max(_status.generation,_owner.generation);
     if(!value.view && boundGeneration && value.generation>=boundGeneration) {
         voice::VoiceWorker::emergencyStop();_status.generation=0;_status.phase=Phase::Unavailable;
-        _owner={};
+        _owner={};_sent=false;
         _error=Code::Stale;_pending=_close=_stop=_end=_endAccepted=_openAfterEnd=_openAfterClose=false;_openAction=Action::Close;_menu=Menu::Main;_deletion=Deletion::None;
     }
     if(value.view==_status.view && !memcmp(value.peer,_status.peer,16) &&
@@ -97,6 +100,10 @@ void Ui::update(const Status& value,bool foregroundAllowed) {
                 }
             }
         }
+    }
+    if(_visible && !_inline && !_status.fromMessage && _status.counter &&
+       _status.phase==Phase::Sent && _status.reason==Code::Ok && !_pending && !_end && !_openAfterClose) {
+        _sent=true;hide();
     }
     if(_visible && !foregroundAllowed) hide();
     if(_visible && foregroundAllowed && !_close) voice::VoiceWorker::keepInputAlive();
@@ -135,6 +142,7 @@ void Ui::hide() {
     stop(true);
 }
 void Ui::closeConversation() {
+    _sent=false;
     _visible=false;_openAfterEnd=_openAfterClose=false;_openAction=Action::Close;
     if(!_status.view) return;
     if(!_status.generation && !_pending) {
@@ -234,7 +242,7 @@ const char* Ui::text() const {
     if(_menu==Menu::More) return "Voice clip";
     if(_error!=Code::Ok) {auto s=_status;s.reason=_error;return description(s);}
     if(_stop || _close) return "Stopping...";
-    if(_pending && _action!=Action::Volume) return _action==Action::Record || _action==Action::Replace?"Starting...":_action==Action::Send?"Adding to messages...":_action==Action::Retry?"Retrying message...":"Please wait...";
+    if(_pending && _action!=Action::Volume) return _action==Action::Record || _action==Action::Replace?"Starting...":_action==Action::Send?"Sending...":_action==Action::Retry?"Retrying message...":"Please wait...";
     return description(_status);
 }
 const char* Ui::guidance() const {
@@ -249,7 +257,6 @@ const char* Ui::guidance() const {
     if(_status.phase==Phase::Review && !_status.fromMessage) return "Leaving this chat deletes the clip";
     if(_status.phase==Phase::Review && !(_status.capabilities&2)) return "No speaker on this device";
     if(_status.phase==Phase::Idle) return (_status.capabilities&1)?"Up to 15 seconds":"No microphone on this device";
-    if(_status.phase==Phase::Sent) return "Check delivery in the conversation";
     return "";
 }
 }

@@ -14,7 +14,11 @@ struct Command {
     Action action = Action::Close;
     uint8_t volume = 70;
     bool incoming = false;
+    // Explicit foreground intent, carried with Open to avoid a second UI round
+    // trip before playing a stored message. Epoch still cancels a queued start.
+    bool playOnOpen = false;
 };
+static_assert(sizeof(Command) == 40, "Memo command IPC budget changed");
 struct Status {
     uint32_t generation = 0, view = 0, revision = 0, draftRevision = 0, counter = 0;
     uint32_t frames = 0, stackFree = 0, encodeUs = 0, decodeUs = 0;

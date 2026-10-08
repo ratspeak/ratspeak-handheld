@@ -28,6 +28,7 @@ private:
     enum class Work : uint8_t { None, Inspect, Begin, Append, Seal, Cancel, Promote, Clear, Message, Clip, Retry, ClearReplace, Fresh, Expire };
     void phase(Phase, Code = Code::Ok);
     void review(Code = Code::Ok);
+    Code play(uint32_t epoch);
     void submit();
     void settle();
     void audio();
@@ -50,7 +51,7 @@ private:
     uint16_t _resumeFrame = 0;
     uint8_t _configuredVolume = 70;
     bool _accepting = false, _audioOwned = false, _recording = false, _stopping = false, _closed = false;
-    bool _conversation = false, _ending = false, _pausing = false;
+    bool _conversation = false, _ending = false, _pausing = false, _playOnOpen = false;
 };
 static_assert(sizeof(Controller) <= 384, "Memo controller fixed retention budget changed");
 }

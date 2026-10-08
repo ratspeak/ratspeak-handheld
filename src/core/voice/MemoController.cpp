@@ -23,7 +23,7 @@ void Controller::begin(const Deps& deps,const uint8_t local[16],uint8_t volume) 
     _status={};_status.generation=generation;_status.volume=_configuredVolume=std::min(uint8_t(100),volume);
     _status.capabilities=_d.audio?_d.audio->capabilities():0;
     _draft={};_media={};_packet={};_stopping=_recording=false;
-    _conversation=_ending=_pausing=false;_resumeFrame=0;_expiryRetry=0;
+    _conversation=_ending=_pausing=_playOnOpen=false;_resumeFrame=0;_expiryRetry=0;
     phase(Phase::Idle);
 }
 void Controller::phase(Phase value,Code code) {
@@ -46,27 +46,34 @@ sm::Command Controller::binding() const {
 }
 Code Controller::command(const Command& command,sm::Command send) {
     if(!_d.store || !_d.audio || command.action>Action::Pause || command.volume>100) return Code::Invalid;
+    if(command.playOnOpen && (command.action!=Action::Open || !command.counter)) return Code::Invalid;
     if(command.action==Action::Open) {
         if(!_accepting || !command.view || command.view<=_viewFloor || _status.generation==UINT32_MAX) return Code::Stale;
         if(!drained() || busy(_status.phase)) return Code::Busy;
         if(_conversation && memcmp(command.peer,_status.peer,16)) return Code::Stale;
+        if(command.playOnOpen && (command.stopEpoch==UINT32_MAX || command.stopEpoch!=_d.audio->cancellationEpoch())) return Code::Stale;
         _viewFloor=command.view;_status.view=command.view;++_status.generation;
         memcpy(_status.peer,command.peer,16);_status.counter=command.counter;_status.incoming=command.incoming;
         _d.store->protectVoiceRecord(command.counter?key():storage::RecordKey{});
         _status.fromMessage=command.counter!=0;_status.length=0;_status.frames=0;_status.retryable=false;_recordRevision=0;
         _draft={};_media={};_failure=Code::Ok;_closed=false;_stopping=_pausing=false;_resumeFrame=0;
+        _playOnOpen=command.playOnOpen;if(_playOnOpen) _epoch=command.stopEpoch;
         _status.storageStep=_status.storageError=_status.audioError=0;
-        _work=!_conversation?Work::Fresh:_status.fromMessage?Work::Message:Work::Inspect;phase(Phase::Loading);return Code::Ok;
+        // Stored playback cannot revive a temporary recording. Defer its
+        // cleanup until a recorder is opened or this conversation ends.
+        _work=_status.fromMessage?Work::Message:!_conversation?Work::Fresh:Work::Inspect;phase(Phase::Loading);return Code::Ok;
     }
     if(command.view!=_status.view || command.generation!=_status.generation ||
         memcmp(command.peer,_status.peer,16)) return Code::Stale;
     if(command.action==Action::EndConversation) {
+        _playOnOpen=false;
         if(_status.phase==Phase::Closed) return Code::Ok;
         _ending=_closed=_stopping=true;_pausing=false;_expiryRetry=0;
         if(_audioOwned) _d.audio->stop();
         return Code::Ok;
     }
     if(command.action==Action::Stop || command.action==Action::Close) {
+        _playOnOpen=false;
         if(command.action==Action::Close) _closed=true;
         _pausing=false;
         if(_work==Work::ClearReplace) _stopping=true;
@@ -102,14 +109,7 @@ Code Controller::command(const Command& command,sm::Command send) {
         // before a new recording, so cancellation/failure cannot revive the clip.
         _work=command.action==Action::Replace?Work::ClearReplace:Work::Begin;
         phase(command.action==Action::Replace?Phase::Saving:Phase::Starting);return Code::Ok;
-    case Action::Play:
-        if(!(_status.capabilities&2)) return Code::PlaybackUnavailable;
-        if(!_status.length || _status.length>sm::PlaybackBytes || _status.length%sm::FrameBytes ||
-            (_status.fromMessage && (_media.mode!=sm::Mode || _media.state!=1))) return Code::UnsupportedAudio;
-        if(command.stopEpoch==UINT32_MAX || command.stopEpoch!=_d.audio->cancellationEpoch()) return Code::Stale;
-        _epoch=command.stopEpoch;_offset=0;_started=_now;_packet={};_stopping=false;_recording=false;
-        _resumeFrame=_status.phase==Phase::Paused?uint16_t(_status.frames):0;
-        _status.frames=_resumeFrame;_pausing=false;phase(Phase::Playing);return Code::Ok;
+    case Action::Play: return play(command.stopEpoch);
     case Action::Send:
         if(_status.fromMessage || _draft.state!=sm::State::Ready) return Code::Invalid;
         _sendTime=send.timestamp;_policy=send.policy;_work=Work::Promote;phase(Phase::Sending);return Code::Ok;
@@ -122,7 +122,17 @@ Code Controller::command(const Command& command,sm::Command send) {
     default: return Code::Invalid;
     }
 }
+Code Controller::play(uint32_t epoch) {
+    if(!(_status.capabilities&2)) return Code::PlaybackUnavailable;
+    if(!_status.length || _status.length>sm::PlaybackBytes || _status.length%sm::FrameBytes ||
+        (_status.fromMessage && (_media.mode!=sm::Mode || _media.state!=1))) return Code::UnsupportedAudio;
+    if(epoch==UINT32_MAX || epoch!=_d.audio->cancellationEpoch()) return Code::Stale;
+    _epoch=epoch;_offset=0;_started=_now;_packet={};_stopping=false;_recording=false;
+    _resumeFrame=_status.phase==Phase::Paused?uint16_t(_status.frames):0;
+    _status.frames=_resumeFrame;_pausing=false;phase(Phase::Playing);return Code::Ok;
+}
 void Controller::fail(Code code) {
+    _playOnOpen=false;
     if(_failure==Code::Ok) _failure=code;
     _stopping=true;
     if(_audioOwned) _d.audio->stop();
@@ -266,6 +276,12 @@ void Controller::settle() {
         else if(header.audio.mode!=sm::Mode || !header.audio.length || header.audio.length>sm::PlaybackBytes || header.audio.length%sm::FrameBytes)
             review(Code::UnsupportedAudio);
         else review();
+        if(_playOnOpen) {
+            _playOnOpen=false;
+            if(!_closed && !_ending && _status.reason==Code::Ok) {
+                const auto code=play(_epoch);if(code!=Code::Ok) review(code);
+            }
+        }
         break;
     case Work::Clip: break;
     case Work::None: case Work::Retry: case Work::Fresh: case Work::Expire: break;
@@ -348,6 +364,7 @@ void Controller::poll(uint64_t now) {
     if(_closed && drained()) _d.store->protectVoiceRecord({});
 }
 void Controller::stop() {
+    _playOnOpen=false;
     _accepting=false;_closed=true;_stopping=true;_pausing=false;
     _ending=_status.view && _status.phase!=Phase::Closed;_expiryRetry=0;
     if(_audioOwned) {if(_recording) _d.audio->finishMemo();else _d.audio->stop();}

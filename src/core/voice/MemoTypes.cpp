@@ -33,8 +33,8 @@ const char* description(const Status& status) {
     case Phase::Playing: return "Playing";
     case Phase::Pausing: return "Pausing...";
     case Phase::Paused: return "Paused";
-    case Phase::Sending: return status.fromMessage?"Retrying message...":"Adding to messages...";
-    case Phase::Sent: return status.fromMessage?"Retry queued":"Added to messages";
+    case Phase::Sending: return status.fromMessage?"Retrying message...":"Sending...";
+    case Phase::Sent: return status.fromMessage?"Retry queued":"Queued";
     }
     return "Voice message";
 }
