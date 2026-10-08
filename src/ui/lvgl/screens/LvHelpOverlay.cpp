@@ -81,7 +81,7 @@ void LvHelpOverlay::create() {
     addHelpRow(_overlay, "Alt+Back", "Cancel editing (Esc)");
     addHelpRow(_overlay, "Alt+Q..P", "Type numbers 1..0");
     addHelpRow(_overlay, "A / D", "Select frequency digit");
-    addHelpRow(_overlay, "Chat wheel", "Scroll; click selects message");
+    addHelpRow(_overlay, "Chat wheel", "Select message; click opens");
     addHelpRow(_overlay, "Selected", "Click opens; hold for actions");
     addHelpRow(_overlay, "BOOT", "Tap sleep; hold power off");
 #else
@@ -93,7 +93,7 @@ void LvHelpOverlay::create() {
     addHelpRow(_overlay, "Cancel / <", "Tap to cancel or go back");
     addHelpRow(_overlay, "Chat ball", "Scroll; click selects message");
     addHelpRow(_overlay, "Selected", "Click opens; hold for actions");
-    addHelpRow(_overlay, "Chat touch", "Swipe history; tap actions");
+    addHelpRow(_overlay, "Chat touch", "Swipe history; hold message");
 #endif
 
     lv_obj_t* footer = makeLabel(_overlay,
