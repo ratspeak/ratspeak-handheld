@@ -1,4 +1,5 @@
 #include "LvMessagesScreen.h"
+#include "ui/FeatureAvailability.h"
 #include "Theme.h"
 #include "LvTheme.h"
 #include "LvInput.h"
@@ -18,7 +19,7 @@ constexpr int AvatarSize = 32;
 constexpr int TextX = 54;
 constexpr int NavigationHeight = 30;
 constexpr int NavigationSpace = NavigationHeight + 6;
-constexpr int FamilyHeight = 24;
+constexpr int FamilyHeight = handheld::ui::RrcEnabled ? 24 : 0;
 constexpr int RowHeight = (Theme::CONTENT_H - FamilyHeight - NavigationSpace) / 2;
 void peerText(const uint8_t* peer, char (&out)[33]) {
     constexpr char hex[] = "0123456789abcdef";
@@ -105,7 +106,7 @@ void LvMessagesScreen::createUI(lv_obj_t* parent) {
     _screen=parent;
     lv_obj_set_layout(parent,0);lv_obj_clear_flag(parent,LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_pad_all(parent,0,0);lv_obj_set_style_bg_color(parent,lv_color_hex(Theme::BG),0);
-    for (size_t n=0;n<2;++n) {
+    if (handheld::ui::RrcEnabled) for (size_t n=0;n<2;++n) {
         auto* button=_family[n]=lv_btn_create(parent);
         lv_obj_set_pos(button,n*(Theme::CONTENT_W/2),0);lv_obj_set_size(button,Theme::CONTENT_W/2,FamilyHeight);
         lv_obj_add_style(button,LvTheme::styleListBtn(),0);
@@ -162,7 +163,8 @@ void LvMessagesScreen::createUI(lv_obj_t* parent) {
 }
 void LvMessagesScreen::onEnter() {
     _active=true;
-    _rrc.visible(true);
+    if (!handheld::ui::RrcEnabled) _rrc.navigation.direct(true);
+    _rrc.visible(handheld::ui::RrcEnabled);
     _rrc.notice=[this](const char* text) { notice(text); };
     _rrc.openDirect=[this](const char* peer) {if(_onOpen) _onOpen(peer);};
     _rrc.send=[this](const handheld::rrc::Command& command,const uint8_t* body,size_t length) {
@@ -200,9 +202,11 @@ void LvMessagesScreen::destroyUI() {
 }
 void LvMessagesScreen::refreshUI() {
     if (!_screen || !_service) return;
-    pollRrc();
-    lv_label_set_text(lv_obj_get_child(_family[1],0),_rrc.navigation.secondLabel());
-    for (size_t n=0;n<2;++n) lv_obj_set_style_bg_color(_family[n],lv_color_hex((_rrc.navigation.direct()==(n==0))?Theme::PRIMARY_SUBTLE:Theme::BG),0);
+    if (handheld::ui::RrcEnabled) {
+        pollRrc();
+        lv_label_set_text(lv_obj_get_child(_family[1],0),_rrc.navigation.secondLabel());
+        for (size_t n=0;n<2;++n) lv_obj_set_style_bg_color(_family[n],lv_color_hex((_rrc.navigation.direct()==(n==0))?Theme::PRIMARY_SUBTLE:Theme::BG),0);
+    }
     if (!_rrc.navigation.direct()) { renderRrc(); return; }
     auto& window=_service->conversationWindow();
     if (!_active || !window.visible() || window.identityGeneration()!=_service->status().generation) {

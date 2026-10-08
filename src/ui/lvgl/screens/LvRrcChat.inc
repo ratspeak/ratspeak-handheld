@@ -17,6 +17,7 @@ bool LvMessageView::leaveRrcDraft() {
     saveRrcDraft(true);rrcNotice("Saving draft; try again");return false;
 }
 bool LvMessageView::setRrcConversation(const handheld::rrc::Conversation& binding,const char* insert) {
+    if (!handheld::ui::RrcEnabled) return false;
     if (!_service || binding.room[64] || (binding.room[0] && binding.privateNotice())) return false;
     const bool same=_rrcMode && _rrcIdentity==_service->status().generation &&
         !memcmp(binding.hub,_rrcBinding.hub,16) && !memcmp(binding.participant,_rrcBinding.participant,16) &&

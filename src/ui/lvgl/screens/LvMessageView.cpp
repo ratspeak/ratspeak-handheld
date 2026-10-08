@@ -1,4 +1,5 @@
 #include "LvMessageView.h"
+#include "ui/FeatureAvailability.h"
 #include "ui/MessageAudio.h"
 #include "storage/Hex.h"
 #include <new>

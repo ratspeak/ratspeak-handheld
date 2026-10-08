@@ -1,4 +1,5 @@
 #include "MessageView.h"
+#include "ui/FeatureAvailability.h"
 #include "storage/Hex.h"
 #include "StorageWindowAdapter.h"
 #include "ui/RrcCompose.h"

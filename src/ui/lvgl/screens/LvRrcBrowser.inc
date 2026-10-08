@@ -11,6 +11,7 @@ void LvMessagesScreen::clearRrc() {
     _rrcRendered=0;_rrcFormView=0;
 }
 void LvMessagesScreen::switchFamily(bool direct) {
+    if (!handheld::ui::RrcEnabled && !direct) return;
     if (!_active || !_service || _rrc.navigation.direct()==direct) return;
     hideActionMenu();detachRows();clearRrc();
     _rrc.navigation.direct(direct);_rrc.refresh();
@@ -26,7 +27,7 @@ void LvMessagesScreen::switchFamily(bool direct) {
     refreshUI();
 }
 void LvMessagesScreen::pollRrc() {
-    if (!_service) return;
+    if (!handheld::ui::RrcEnabled || !_service) return;
     _rrc.observe(_service->status().rrc,_service->status().generation);
     if (!_rrc.needsRows() || int32_t(millis()-_rrcRetryAt)<0) return;
     const auto view=_rrc.beginRows(), identity=_service->status().generation, session=_service->status().rrc.generation;

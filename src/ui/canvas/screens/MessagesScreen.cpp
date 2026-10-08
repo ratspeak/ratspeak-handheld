@@ -1,4 +1,5 @@
 #include "MessagesScreen.h"
+#include "ui/FeatureAvailability.h"
 #include "StorageWindowAdapter.h"
 #include "Theme.h"
 #include "PageNavigation.h"
@@ -13,13 +14,14 @@ constexpr int NavigationHeight = 18;
 }
 
 void MessagesScreen::switchFamily() {
+    if (!handheld::ui::RrcEnabled) return;
     exitContextMenu(); _rrc.navigation.direct(!_rrc.navigation.direct());
     _rrc.refresh();
     if (_rrc.navigation.direct()) _conversations.resume(1);
     else _conversations.close();
 }
 void MessagesScreen::pollRrc() {
-    if (!_backend) return;
+    if (!handheld::ui::RrcEnabled || !_backend) return;
     _rrc.observe(_backend->rrcStatus(),1);
     if (!_rrc.needsRows()) return;
     using Page = handheld::ui::RrcNavigation::Page;
@@ -153,7 +155,8 @@ bool MessagesScreen::handleRrcKey(const KeyEvent& event) {
 
 void MessagesScreen::onEnter() {
     _showingContext = false; _visible = true; _pageFocus = -1;
-    _rrc.visible(true);
+    if (!handheld::ui::RrcEnabled) _rrc.navigation.direct(true);
+    _rrc.visible(handheld::ui::RrcEnabled);
     _rrc.openDirect=[this](const char* peer) {if(_openCb) _openCb(peer);};
     _rrc.notice = [this](const char* text) { _deleteNotice = text; _deleteNoticeSince = millis(); };
     _rrc.send = [this](const handheld::rrc::Command& value, const uint8_t* body, size_t length) {
@@ -369,7 +372,7 @@ void MessagesScreen::render(M5Canvas& canvas) {
         unavailable || _conversations.state() == Conversations::State::Retrying ? "Read failed; R to retry" :
         _conversations.statusRefreshDelayed() ? "Status refresh delayed (R)" :
         nullptr;
-    const auto heading = notice ? std::string(notice) : std::string("[Direct]  |  ") + _rrc.navigation.secondLabel() + "   Tab";
+    const auto heading = notice ? std::string(notice) : handheld::ui::RrcEnabled ? std::string("[Direct]  |  ") + _rrc.navigation.secondLabel() + "   Tab" : std::string("Chats");
     canvas.drawString(heading.c_str(), 8, y + 2);
     canvas.drawFastHLine(0, y + headerH, Theme::CONTENT_W, Theme::DIVIDER);
     y += headerH + 2;

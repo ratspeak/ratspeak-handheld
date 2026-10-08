@@ -17,6 +17,7 @@ bool MessageView::leaveRrcDraft() {
     saveRrcDraft(true);rrcNotice("Saving draft; try again");return false;
 }
 bool MessageView::setRrcConversation(const handheld::rrc::Conversation& binding,const char* insert) {
+    if (!handheld::ui::RrcEnabled) return false;
     if (!_backend || binding.room[64] || (binding.room[0] && binding.privateNotice())) return false;
     handheld::storage::rrc::Context context;
     if (!_store || !_backend->rrcContext(binding.hub,binding.room,binding.privateNotice()?binding.participant:nullptr,context)) return false;
