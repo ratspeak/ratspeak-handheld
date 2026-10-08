@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 
 from release_catalog import BOARDS, check_rnode_partition_producers
-from release_identity import check_local
+from release_identity import SOURCE_VARIABLES, check_local
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,6 +18,19 @@ IGNORED_PARTS = {".git", ".pio", ".venv", "build", "dist", "target"}
 
 def fail(message: str) -> None:
     raise SystemExit(f"source-release contract failed: {message}")
+
+
+def check_source_checkouts(workflow: str) -> None:
+    for job in ("protocol-quality", "prepare-release"):
+        section = workflow.split(f"\n  {job}:", 1)[1]
+        section = re.split(r"\n  [a-z][a-z-]*:\n", section, maxsplit=1)[0]
+        steps = [re.split(r"\n      - ", part, maxsplit=1)[0]
+                 for part in section.split("uses: actions/checkout@")[1:]]
+        for repo, variable in SOURCE_VARIABLES.items():
+            required = (f"repository: ratspeak/{repo}\n",
+                        f"ref: ${{{{ env.{variable} }}}}", f"path: source/{repo}\n")
+            if not any(all(field in step for field in required) for step in steps):
+                fail(f"{job} must check out exact {repo} source")
 
 
 def main() -> int:
@@ -88,6 +101,7 @@ def main() -> int:
             fail(f"workflow action is not commit-pinned: {action}")
     package = workflow.split("\n  package:", 1)[1].split("\n  prepare-release:", 1)[0]
     preparation = workflow.split("\n  prepare-release:", 1)[1]
+    check_source_checkouts(workflow)
     catalog_job = workflow.split("\n  release-config:", 1)[1].split("\n  package:", 1)[0]
     if "tools/release_catalog.py matrix" not in catalog_job or "tools/release_catalog.py check" not in catalog_job:
         fail("release board matrix must come from the validated catalog")
