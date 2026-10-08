@@ -1,6 +1,9 @@
 #include "MemoTypes.h"
 namespace handheld::memo {
 const char* description(const Status& status) {
+    // Stored messages and unsent previews both play a sealed clip. Failed
+    // capture has no sealed length after the controller retires its work.
+    const bool playback=status.fromMessage || status.length;
     switch(status.reason) {
     case Code::Busy: return "Audio busy";
     case Code::Stale: return "Reopen this voice message";
@@ -11,11 +14,11 @@ const char* description(const Status& status) {
     case Code::UnsupportedAudio: return "Unsupported audio";
     case Code::AudioUnavailable: return "Audio unavailable";
     case Code::StorageUnavailable: return "Storage unavailable";
-    case Code::Interrupted: return status.fromMessage?"Playback interrupted":"Recording interrupted";
+    case Code::Interrupted: return playback?"Playback interrupted":"Recording interrupted";
     case Code::NoMemory: return "Not enough memory";
     case Code::TooShort: return "No audio recorded";
     case Code::DeviceBusy: return "Audio processing too slow";
-    case Code::InputLost: return status.fromMessage?"Playback stopped":"Recording stopped";
+    case Code::InputLost: return playback?"Playback stopped":"Recording stopped";
     case Code::CaptureOverflow: return "Recording buffer full";
     case Code::Recovered: break;
     case Code::Ok: break;

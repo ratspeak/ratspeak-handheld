@@ -1,10 +1,12 @@
 #include "VoicePanel.h"
 #include "protocol/ProtocolBackend.h"
+#include "reticulum/AnnounceManager.h"
 #include "storage/Hex.h"
+#include "util/DisplayText.h"
 #include "Theme.h"
 using namespace handheld::memo;
-void VoicePanel::begin(ProtocolBackend* backend) {
-    _backend=backend;
+void VoicePanel::begin(ProtocolBackend* backend,AnnounceManager* announces) {
+    _backend=backend;_announces=announces;
     _model.begin(this,[](void* context,const Command& c,uint32_t serial) {
         auto& self=*static_cast<VoicePanel*>(context);
         self._model.acknowledge(serial,self._backend?self._backend->memoCommand(c):Code::AudioUnavailable);
@@ -22,7 +24,20 @@ void VoicePanel::render(M5Canvas& canvas) {
     canvas.fillRect(0,0,240,135,Theme::BG);Theme::useSmallFont(canvas);
     canvas.setTextColor(Theme::ACCENT);canvas.drawString("VOICE MESSAGE",6,5);
     char peer[33];handheld::storage::encodeHex(_model.peer(),16,peer);
-    canvas.setTextColor(Theme::TEXT_SECONDARY);canvas.drawString(peer,6,19);
+    auto name=_announces?_announces->lookupName(peer):std::string();
+    if(name.empty()) name=peer;
+    if(canvas.textWidth(name.c_str())>228) {
+        // Truncate whole UTF-8 scalars to the actual font width, with no retained
+        // name copy or extra name cache. The existing lookup owns its bounds.
+        const int dots=canvas.textWidth("..");
+        while(!name.empty() && canvas.textWidth(name.c_str())+dots>228) {
+            size_t at=name.size()-1;
+            while(at && handheld::display::continuation(uint8_t(name[at]))) --at;
+            name.resize(at);
+        }
+        name+="..";
+    }
+    canvas.setTextColor(Theme::TEXT_SECONDARY);canvas.drawString(name.c_str(),6,19);
     canvas.setTextColor(s.phase==Phase::Recording?Theme::ERROR:Theme::TEXT_PRIMARY);
     canvas.drawString(_model.text(),6,36);
     const auto ms=(s.phase==Phase::Recording || s.phase==Phase::Playing || s.phase==Phase::Stopping)?s.frames*40:uint32_t(s.length)*10;

@@ -1410,7 +1410,8 @@ void LvSettingsScreen::rebuildItemList() {
 
     for (int i = _catRangeStart; i < _catRangeEnd; i++) {
         const auto& item = _items[i];
-        const bool fullValue = strcmp(item.label, "Manual node") == 0;
+        const bool fullValue = strcmp(item.label, "Manual node") == 0 ||
+            strcmp(item.label, "Storage limit") == 0 || strcmp(item.label, "At limit") == 0;
         const bool deliveryPolicy = strcmp(item.label, "Delivery") == 0;
         bool selected = (i == _selectedIdx);
         bool editable = isEditable(i);

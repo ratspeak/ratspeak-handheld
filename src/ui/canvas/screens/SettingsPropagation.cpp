@@ -1,5 +1,6 @@
 #include "SettingsScreen.h"
 #include "Theme.h"
+#include "ui/PropagationNodeText.h"
 #include <algorithm>
 
 using namespace handheld::propagation;
@@ -53,8 +54,9 @@ void SettingsScreen::showPropagationNodes() {
     for (size_t i = 0; i < _propCount; ++i) {
         char label[64], address[33]; Settings pin; pin.hasManual = true;
         memcpy(pin.manual, _propNodes[i].address, 16); pin.manualHex(address);
-        snprintf(label, sizeof label, "%s%s: %s", _propNodes[i].interface==UINT8_MAX ? "Unknown route" : _propNodes[i].interface ? "WiFi/TCP" : "LoRa",
-                 _propNodes[i].usable ? "" : " unavailable", _propNodes[i].name[0] ? _propNodes[i].name : "Node");
+        const auto& settings = _candidate.settings().propagation;
+        handheld::ui::propagationNodeTitle(_propNodes[i], settings.enabled && settings.selection == Selection::Auto,
+            label, sizeof label);
         _list.addItem(label); _list.addItem(address);
     }
     if (!_propCount) _list.addItem("No nodes discovered");

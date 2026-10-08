@@ -249,11 +249,11 @@ const char* Ui::guidance() const {
     if(_end) return "";
     if(_menu==Menu::Replace || _deletion==Deletion::RecordAgain) return "Then record a new clip";
     if(_menu==Menu::Discard || _deletion==Deletion::Close) return "Return to the conversation";
-    if(_status.phase==Phase::Recording || _status.phase==Phase::Starting) return "Tap Stop when you are done";
+    if(_status.phase==Phase::Recording || _status.phase==Phase::Starting) return "Select Stop when done";
     if(_status.reason==Code::Recovered) return "Previous recording wasn't saved";
     if(_status.reason==Code::NoMemory) return "Close other activity and retry";
     if(_status.reason==Code::DeviceBusy || _status.reason==Code::CaptureOverflow) return "Try again when the device is idle";
-    if(_status.reason==Code::InputLost) return "Keep this screen open to record";
+    if(_status.reason==Code::InputLost) return _status.fromMessage || _status.length?"Select Play to retry":"Keep this screen open to record";
     if(_status.phase==Phase::Review && !_status.fromMessage) return "Leaving this chat deletes the clip";
     if(_status.phase==Phase::Review && !(_status.capabilities&2)) return "No speaker on this device";
     if(_status.phase==Phase::Idle) return (_status.capabilities&1)?"Up to 15 seconds":"No microphone on this device";

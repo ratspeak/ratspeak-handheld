@@ -2,9 +2,10 @@
 #include "Screen.h"
 #include "voice/MemoUi.h"
 class ProtocolBackend;
+class AnnounceManager;
 class VoicePanel : public Screen {
 public:
-    void begin(ProtocolBackend*);
+    void begin(ProtocolBackend*,AnnounceManager* = nullptr);
     void poll(bool foregroundAllowed);
     void start(const char* peerHex);
     void startMessage(const char* peerHex,uint32_t counter,bool incoming);
@@ -20,5 +21,6 @@ public:
     const char* title() const override {return "Voice message";}
 private:
     ProtocolBackend* _backend=nullptr;
+    AnnounceManager* _announces=nullptr;
     handheld::memo::Ui _model;
 };

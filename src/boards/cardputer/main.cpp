@@ -803,7 +803,7 @@ void setup() {
     messageView.setMessageStore(&messageStore);
     messageView.setLXMFManager(&lxmf);
     messageView.setBackend(backend);
-    voicePanel.begin(backend);ui.setVoicePanel(&voicePanel);
+    voicePanel.begin(backend,announceManager);ui.setVoicePanel(&voicePanel);
     messageView.setMemoUi(&voicePanel.model());
     messageView.setVoiceCallback([](const char* peer,uint32_t counter,bool incoming) {voicePanel.startMessage(peer,counter,incoming);});
     messageView.setVoiceCloseCallback([] {voicePanel.closeConversation();});

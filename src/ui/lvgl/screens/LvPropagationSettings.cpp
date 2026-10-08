@@ -3,6 +3,7 @@
 #include "LvTheme.h"
 #include "Theme.h"
 #include "fonts/fonts.h"
+#include "ui/PropagationNodeText.h"
 #include <algorithm>
 
 using namespace handheld::propagation;
@@ -200,8 +201,9 @@ void LvSettingsScreen::rebuildPropagationDialog() {
         for (size_t i = 0; i < _propCount; ++i) {
             const auto& node = _propNodes[i]; Settings hash; hash.hasManual = true; memcpy(hash.manual, node.address, 16);
             char address[33], title[80]; hash.manualHex(address);
-            snprintf(title, sizeof title, "%s%s: %s", node.interface==UINT8_MAX ? "Unknown route" : node.interface ? "WiFi/TCP" : "LoRa",
-                     node.usable ? "" : " unavailable", node.name[0] ? node.name : "Node");
+            const auto* settings = _cfg ? &_cfg->settings().propagation : nullptr;
+            handheld::ui::propagationNodeTitle(node, settings && settings->enabled && settings->selection == Selection::Auto,
+                title, sizeof title);
             row(title, address, int(i + 2));
         }
     }
