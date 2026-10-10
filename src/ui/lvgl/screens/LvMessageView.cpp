@@ -21,11 +21,7 @@ constexpr int kHeaderH = 36;
 constexpr int kInputH = 31;
 constexpr int kComposerButtonW = 44;
 constexpr int kBubbleMaxW = Theme::CONTENT_W * 3 / 4;
-#if !HAS_TOUCH
-constexpr const char* kComposerPlaceholder = "Message... or Enter to select";
-#else
 constexpr const char* kComposerPlaceholder = "Message...";
-#endif
 
 bool isPendingStatus(LXMFStatus status) {
     return handheld::messaging::pendingStatus(uint8_t(status));
@@ -188,8 +184,76 @@ void LvMessageView::updateComposerState() {
     if (_textarea) {
         lv_obj_set_style_border_color(_textarea, lv_color_hex(hasText ? Theme::PRIMARY_MUTED : Theme::BORDER), 0);
     }
+#if HAS_SCROLLWHEEL
+    if (_composerAction && (!composerActionAvailable(_composerAction) || !_service ||
+        _composerActionIdentity != _service->status().generation)) _composerAction = 0;
+    const bool sendFocus = _composerAction == 2;
+    lv_obj_set_style_border_width(_btnSend, sendFocus ? 2 : 1, 0);
+    if (sendFocus) lv_obj_set_style_border_color(_btnSend, lv_color_hex(Theme::ACCENT), 0);
+    if (_btnVoice) {
+        const bool voiceFocus = _composerAction == 1;
+        lv_obj_set_style_border_width(_btnVoice, voiceFocus ? 2 : 1, 0);
+        lv_obj_set_style_border_color(_btnVoice, lv_color_hex(voiceFocus ? Theme::ACCENT : Theme::BORDER), 0);
+        lv_obj_set_style_bg_color(_btnVoice, lv_color_hex(voiceFocus ? Theme::PRIMARY_SUBTLE : Theme::BG_ELEVATED), 0);
+    }
+#endif
     refreshComposerPlaceholder();
 }
+
+#if HAS_SCROLLWHEEL
+bool LvMessageView::composerActionAvailable(uint8_t action) const {
+    if (action == 1) return _btnVoice && !_rrcMode && _service && (_service->status().memo.capabilities & 1);
+    return action == 2 && _btnSend && !_inputText.empty() && !_sendPending &&
+        (!_rrcMode || (_rrcLoaded && rrcWritable()));
+}
+
+void LvMessageView::setComposerAction(uint8_t action) {
+    _composerAction = composerActionAvailable(action) ? action : 0;
+    if (_composerAction && _service) {
+        _selectAfterPage = false;
+        _service->historyWindow().focusSpan(HistoryWindow::VisibleSpans);
+        updateHistoryFocus();
+    }
+    _composerActionIdentity = _service ? _service->status().generation : 0;
+    updateComposerState();
+}
+
+bool LvMessageView::handleComposerNavigation(const KeyEvent& event) {
+    // This belongs to the screen's existing semantic input owner, not a second
+    // LVGL encoder group. History and modal menus retain their own navigation.
+    if (hasReadFocus() || _selectAfterPage) return false;
+    if (_composerAction && (!_service || _composerActionIdentity != _service->status().generation ||
+        !composerActionAvailable(_composerAction))) {
+        setComposerAction(0);
+        return true; // Do not reinterpret a stale activation as sending text.
+    }
+    if (event.up || event.down) {
+        if (!_composerAction && event.up) return false;
+        if (event.repeat) return true;
+        int next = int(_composerAction) + (event.up ? -1 : 1);
+        while (next > 0 && next <= 2 && !composerActionAvailable(uint8_t(next))) next += event.up ? -1 : 1;
+        if (next >= 0 && next <= 2) setComposerAction(uint8_t(next));
+        return true; // Stop at the footer's end; never wrap to a different action.
+    }
+    if (!_composerAction) return false;
+    const bool deleting = event.del || event.character == 0x08;
+    if (deleting || event.character == 0x1b) {
+        if (!event.repeat) { setComposerAction(0); _dismissedDelete = deleting; }
+        return true;
+    }
+    if (event.enter || event.character == '\n' || event.character == '\r') {
+        if (!event.repeat) {
+            const auto action = _composerAction;
+            setComposerAction(0);
+            if (action == 1) { if (_ui) _ui->openVoice(_peerHex.c_str()); }
+            else sendCurrentMessage(false);
+        }
+        return true;
+    }
+    if (event.tab || (event.character >= 0x20 && event.character < 0x7f)) setComposerAction(0);
+    return false; // Typing continues through the ordinary composer path.
+}
+#endif
 
 void LvMessageView::composerEdited() {
     if (_nextDraftRevision != UINT64_MAX) ++_nextDraftRevision;
@@ -221,7 +285,11 @@ void LvMessageView::updateComposerText() {
     }
 
     std::string display = _inputText;
+#if HAS_SCROLLWHEEL
+    if (!_composerAction) display += "_";
+#else
     display += "_";
+#endif
     lv_textarea_set_text(_textarea, display.c_str());
     lv_textarea_set_cursor_pos(_textarea, LV_TEXTAREA_CURSOR_LAST);
 }
@@ -278,12 +346,6 @@ void LvMessageView::createUI(lv_obj_t* parent) {
         self->goBack();
     }, LV_EVENT_CLICKED, this);
 
-    if(!_rrcMode && _service && (_service->status().memo.capabilities&1)) {
-        lv_obj_set_width(_lblHeader,Theme::CONTENT_W-92);lv_obj_set_width(_lblHeaderMeta,Theme::CONTENT_W-92);
-        auto* voice=lv_btn_create(_header);lv_obj_add_style(voice,LvTheme::styleBtn(),0);lv_obj_set_size(voice,58,28);lv_obj_align(voice,LV_ALIGN_RIGHT_MID,-3,0);
-        auto* label=lv_label_create(voice);lv_label_set_text(label,"Voice");lv_obj_set_style_text_font(label,&lv_font_rsdeck_12,0);lv_obj_center(label);
-        lv_obj_add_event_cb(voice,[](lv_event_t* e) {auto& self=*static_cast<LvMessageView*>(lv_event_get_user_data(e));if(self._ui)self._ui->openVoice(self._peerHex.c_str());},LV_EVENT_CLICKED,this);
-    }
     // Message scroll area (middle, grows to fill)
     _msgScroll = lv_obj_create(parent);
     lv_obj_clear_flag(_msgScroll, LV_OBJ_FLAG_GESTURE_BUBBLE);
@@ -416,6 +478,33 @@ void LvMessageView::createUI(lv_obj_t* parent) {
         self->showSendModeMenu();
     }, LV_EVENT_LONG_PRESSED, this);
 
+    if (!_rrcMode && _service && (_service->status().memo.capabilities & 1)) {
+#if HAS_SCROLLWHEEL
+        _btnVoice = lv_btn_create(_inputRow);
+        lv_obj_set_size(_btnVoice, 58, 23);
+        lv_obj_align(_btnVoice, LV_ALIGN_RIGHT_MID, -kComposerButtonW-4, 0);
+        lv_obj_set_width(_textarea, Theme::CONTENT_W-kComposerButtonW-12-62);
+#else
+        lv_obj_set_width(_lblHeader, Theme::CONTENT_W-92);
+        lv_obj_set_width(_lblHeaderMeta, Theme::CONTENT_W-92);
+        _btnVoice = lv_btn_create(_header);
+        lv_obj_set_size(_btnVoice, 58, 28);
+        lv_obj_align(_btnVoice, LV_ALIGN_RIGHT_MID, -3, 0);
+#endif
+        lv_obj_add_style(_btnVoice, LvTheme::styleBtn(), 0);
+        lv_obj_set_style_pad_all(_btnVoice, 0, 0);
+        auto* label = lv_label_create(_btnVoice);
+        lv_label_set_text(label, "Voice");
+        lv_obj_set_style_text_font(label, &lv_font_rsdeck_12, 0);
+        lv_obj_set_style_text_color(label, lv_color_hex(Theme::TEXT_PRIMARY), 0);
+        lv_obj_center(label);
+        lv_obj_add_event_cb(_btnVoice, [](lv_event_t* e) {
+            auto& self = *static_cast<LvMessageView*>(lv_event_get_user_data(e));
+            self.dismissSelection();
+            if (self._ui) self._ui->openVoice(self._peerHex.c_str());
+        }, LV_EVENT_CLICKED, this);
+    }
+
     updateHeader();
     updateComposerState();
 }
@@ -424,6 +513,7 @@ bool LvMessageView::setPeerHex(const std::string& hex) {
     if (_rrcMode && !leaveRrcDraft()) return false;
     const bool wasRrc=_rrcMode;_rrcMode=false;++_rrcView;
     if (_peerHex == hex && !wasRrc) return true;
+    dismissSelection();
     _messageTools.close();hideSendModeMenu();
     _selectAfterPage=false;
     if(_ui) _ui->closeVoiceConversation();
@@ -547,13 +637,19 @@ bool LvMessageView::hasReadFocus() const {
 }
 
 bool LvMessageView::dismissSelection() {
-    if (!_service) return false;
+#if HAS_SCROLLWHEEL
+    const bool composerSelected = _composerAction != 0;
+    if (composerSelected) setComposerAction(0);
+#else
+    constexpr bool composerSelected = false;
+#endif
+    if (!_service) return composerSelected;
     auto& window=_service->historyWindow();
     const bool selected=_selectAfterPage || window.focusedSpan()<HistoryWindow::VisibleSpans;
     _selectAfterPage=false;
     window.focusSpan(HistoryWindow::VisibleSpans);
     updateHistoryFocus();
-    return selected;
+    return selected || composerSelected;
 }
 
 void LvMessageView::selectVisibleMessage() {
@@ -708,12 +804,16 @@ void LvMessageView::destroyUI() {
     if (_service) _service->historyWindow().acknowledgePublication(_service->historyWindow().revision());
     _header = _lblHeader = _lblHeaderMeta = _msgScroll = nullptr;
     _historyNotice = _historyNoticeLabel = _emptyLabel = nullptr;
-    _inputRow = _textarea = _btnSend = nullptr;
+    _inputRow = _textarea = _btnSend = _btnVoice = nullptr;
+#if HAS_SCROLLWHEEL
+    _composerAction = 0;
+#endif
     for (size_t i = 0; i < 3; ++i) { _sendRows[i] = nullptr; _sendLabels[i] = nullptr; }
     LvScreen::destroyUI();
 }
 
 void LvMessageView::onEnter() {
+    dismissSelection();
     _selectAfterPage=false;_dismissedDelete=false;
     _entered = true;
     if (_rrcMode) {
@@ -736,6 +836,7 @@ void LvMessageView::onEnter() {
 }
 
 void LvMessageView::onExit() {
+    dismissSelection();
     _selectAfterPage=false;
     _messageTools.close();
     if(_ui) _ui->closeVoiceConversation();
@@ -781,6 +882,10 @@ void LvMessageView::refreshUI() {
         }
     }
     updateHeader(); updateHistoryControls(); updateHistoryFocus();
+#if HAS_SCROLLWHEEL
+    if (_composerAction && (!composerActionAvailable(_composerAction) ||
+        _composerActionIdentity != _service->status().generation)) setComposerAction(0);
+#endif
     if (matches && window.visible() && window.statusReady() &&
         (window.mode() == HistoryWindow::Mode::Chat || (_rrcMode && window.mode() == HistoryWindow::Mode::Full))) {
         // New incoming tuples can request one further write while the current
@@ -1192,6 +1297,9 @@ bool LvMessageView::handleKey(const KeyEvent& event) {
         return true;
     }
 
+#if HAS_SCROLLWHEEL
+    if (handleComposerNavigation(event)) return true;
+#endif
     if (event.character == 0x1B) {
         if(!event.repeat) goBack();
         return true;
@@ -1271,6 +1379,9 @@ bool LvMessageView::handleKey(const KeyEvent& event) {
 }
 
 bool LvMessageView::handleLongPress() {
+#if HAS_SCROLLWHEEL
+    if (_composerAction) return true; // A hold must not activate a footer action.
+#endif
     if(_messageTools.visible()) return true;
     if(_rrcTools.visible()) return true;
     if(boundWindow() && _service->historyWindow().mode()==HistoryWindow::Mode::Full) {

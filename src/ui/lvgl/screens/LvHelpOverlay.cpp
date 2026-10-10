@@ -82,6 +82,7 @@ void LvHelpOverlay::create() {
     addHelpRow(_overlay, "Alt+Q..P", "Type numbers 1..0");
     addHelpRow(_overlay, "A / D", "Select frequency digit");
     addHelpRow(_overlay, "Chat wheel", "Select message; click opens");
+    addHelpRow(_overlay, "Below draft", "Wheel to Voice or Send");
     addHelpRow(_overlay, "Selected", "Click opens; hold for actions");
     addHelpRow(_overlay, "BOOT", "Tap sleep; hold power off");
 #else

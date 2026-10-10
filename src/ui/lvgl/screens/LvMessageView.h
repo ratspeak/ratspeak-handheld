@@ -1,5 +1,6 @@
 #pragma once
 
+#include "config/BoardConfig.h"
 #include "UIManager.h"
 #include "runtime/ServiceClient.h"
 #include "reticulum/LXMFMessage.h"
@@ -97,6 +98,13 @@ private:
     void updateHeader();
     void markVisibleConversationRead();
     void updateComposerState();
+#if HAS_SCROLLWHEEL
+    bool composerActionAvailable(uint8_t action) const;
+    void setComposerAction(uint8_t action);
+    bool handleComposerNavigation(const KeyEvent& event);
+    uint8_t _composerAction = 0; // 0: composing, 1: Voice, 2: Send.
+    uint32_t _composerActionIdentity = 0;
+#endif
     void refreshComposerPlaceholder();
     void updateComposerText();
     void composerEdited();
@@ -145,6 +153,7 @@ private:
     lv_obj_t* _inputRow = nullptr;
     lv_obj_t* _textarea = nullptr;
     lv_obj_t* _btnSend = nullptr;
+    lv_obj_t* _btnVoice = nullptr;
     lv_obj_t* _sendOverlay = nullptr;
     lv_obj_t* _sendRows[8] = {};
     lv_obj_t* _sendLabels[8] = {};
