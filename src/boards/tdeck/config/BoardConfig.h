@@ -68,10 +68,10 @@
 #define LORA_USE_DCDC_REGULATOR true    // T-Deck Plus integrated SX1262 works in DC-DC regulator mode
 #define LORA_OCP_TUNED          0x38    // Existing T-Deck PA tuning
 #define LORA_DEFAULT_FREQ       915000000
-#define LORA_DEFAULT_BW         250000   // Long Fast preset
-#define LORA_DEFAULT_SF         11
+#define LORA_DEFAULT_BW         250000   // Medium Fast preset
+#define LORA_DEFAULT_SF         9
 #define LORA_DEFAULT_CR         5
-#define LORA_DEFAULT_TX_POWER   22       // Long Fast preset
+#define LORA_DEFAULT_TX_POWER   17       // Medium Fast preset
 #define LORA_DEFAULT_PREAMBLE   18
 
 // --- Shared SPI Bus (display + LoRa + SD) ---

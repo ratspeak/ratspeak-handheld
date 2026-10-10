@@ -85,11 +85,11 @@
 #define LORA_USE_DCDC_REGULATOR false  // M5 Cap LoRa-1262 examples use LDO-only regulator mode
 #define LORA_OCP_TUNED          0x28   // RNode Cardputer Adv board tuning
 #define LORA_DEFAULT_FREQ       915000000
-#define LORA_DEFAULT_BW         250000   // Long Fast preset (matches rsDeck)
-#define LORA_DEFAULT_SF         11
+#define LORA_DEFAULT_BW         250000   // Medium Fast preset
+#define LORA_DEFAULT_SF         9
 #define LORA_DEFAULT_CR         5
 #define LORA_MAX_TX_POWER       22       // Cap LoRa-1262 documented maximum
-#define LORA_DEFAULT_TX_POWER   22       // Long Fast preset
+#define LORA_DEFAULT_TX_POWER   17       // Medium Fast preset
 #define LORA_DEFAULT_PREAMBLE   18
 
 // Cap LoRa-1262 RF antenna switch enable (PI4IOE5V6408 on Cardputer I2C).
