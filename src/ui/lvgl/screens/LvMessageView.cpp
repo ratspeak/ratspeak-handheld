@@ -179,8 +179,10 @@ void LvMessageView::updateComposerState() {
     if (!_btnSend) return;
     bool hasText = !_inputText.empty();
     if (_rrcMode && (!_rrcLoaded || !rrcWritable())) hasText=false;
-    lv_obj_set_style_border_color(_btnSend, lv_color_hex(hasText ? Theme::PRIMARY : Theme::BORDER), 0);
-    lv_obj_set_style_bg_color(_btnSend, lv_color_hex(hasText ? Theme::PRIMARY_SUBTLE : Theme::BG_ELEVATED), 0);
+    const bool sendReady = hasText && !_sendPending;
+    lv_obj_set_style_border_color(_btnSend, lv_color_hex(sendReady ? Theme::PRIMARY : Theme::BORDER), 0);
+    lv_obj_set_style_bg_color(_btnSend, lv_color_hex(sendReady ? Theme::PRIMARY_SUBTLE : Theme::BG_ELEVATED), 0);
+    lv_obj_set_style_text_color(lv_obj_get_child(_btnSend, 0), lv_color_hex(sendReady ? Theme::PRIMARY : Theme::TEXT_MUTED), 0);
     if (_textarea) {
         lv_obj_set_style_border_color(_textarea, lv_color_hex(hasText ? Theme::PRIMARY_MUTED : Theme::BORDER), 0);
     }
@@ -203,8 +205,9 @@ void LvMessageView::updateComposerState() {
 #if HAS_SCROLLWHEEL
 bool LvMessageView::composerActionAvailable(uint8_t action) const {
     if (action == 1) return _btnVoice && !_rrcMode && _service && (_service->status().memo.capabilities & 1);
-    return action == 2 && _btnSend && !_inputText.empty() && !_sendPending &&
-        (!_rrcMode || (_rrcLoaded && rrcWritable()));
+    // Visible footer controls keep their place even when inactive. The shared
+    // send handler guards empty/pending/read-only drafts at activation time.
+    return action == 2 && _btnSend;
 }
 
 void LvMessageView::setComposerAction(uint8_t action) {
@@ -1237,6 +1240,7 @@ void LvMessageView::sendCurrentMessage(bool viaLink) {
             }
         });
     if (!id) _sendPending = false;
+    if (_screen) updateComposerState();
     if (id && _ui) _ui->lvStatusBar().showToast("Saving message...", 1000);
 }
 
