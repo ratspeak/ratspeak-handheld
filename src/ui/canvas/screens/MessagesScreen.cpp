@@ -400,7 +400,7 @@ void MessagesScreen::render(M5Canvas& canvas) {
 }
 
 bool MessagesScreen::pageEnabled(int action) const {
-    return action >= 0 && action < 4 && !_conversations.loading() &&
+    return action >= 0 && action < 4 && !_conversations.pageLoading() &&
         (action < 2 ? _conversations.canPrevious() : _conversations.canNext());
 }
 

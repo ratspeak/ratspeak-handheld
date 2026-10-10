@@ -368,9 +368,12 @@ void LvMessagesScreen::updateCaptions() {
     if (update) lv_obj_clear_flag(_update,LV_OBJ_FLAG_HIDDEN);
     else lv_obj_add_flag(_update,LV_OBJ_FLAG_HIDDEN);
     for (size_t i=0;i<4;++i) {
-        const bool enabled=window && _active && !window->loading() && (i<2?window->canPrevious():window->canNext());
+        const bool enabled=window && _active && !window->pageLoading() && (i<2?window->canPrevious():window->canNext());
+        const bool changed=bool(lv_obj_has_state(_navigation[i],LV_STATE_DISABLED))==enabled;
         if (enabled) lv_obj_clear_state(_navigation[i],LV_STATE_DISABLED);
         else lv_obj_add_state(_navigation[i],LV_STATE_DISABLED);
+        // The arrow is custom-drawn from state, not an LVGL style property.
+        if(changed) lv_obj_invalidate(_navigation[i]);
     }
     // Recovery shares the navigation row only when needed. The two families
     // always keep equal full-width targets and both conversation previews fit.

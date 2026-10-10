@@ -17,6 +17,7 @@ template<size_t N> void ConversationWindow<N>::open(uint32_t identity, Order ord
     if (!identity || !storage::validConversationOrder(order) || !changeView()) return;
     auto& c = _control.value;
     c.identity = identity; c.order = order; c.open = true; c.state = State::Loading;
+    c.navigationPending = true;
     c.intent = Intent::First; c.followFirst = true; c.updated = false; c.scrollOffset = 0;
     std::memset(c.selected, 0, 16); c.selectedValid = false;
     if (!c.awaiting) c.phase = Phase::Idle;
@@ -29,6 +30,7 @@ template<size_t N> void ConversationWindow<N>::resume(uint32_t identity, Order o
     if (!changeView()) return;
     auto& c = _control.value;
     c.identity = identity; c.order = order; c.open = true;
+    c.navigationPending = false;
     // The live bank already belongs to this identity/order. Re-entering an
     // unchanged list needs no filesystem read; hidden mutations are revisioned.
     bool stale = info.sourceRevision != c.observedRevision || c.updated || !freshnessAvailable();
@@ -52,6 +54,10 @@ template<size_t N> bool ConversationWindow<N>::visible() const {
 template<size_t N> bool ConversationWindow<N>::loading() const {
     const auto& c = _control.value;
     return c.open && (c.awaiting || c.phase != Phase::Idle || c.intent != Intent::None);
+}
+template<size_t N> bool ConversationWindow<N>::pageLoading() const {
+    const auto& c = _control.value;
+    return c.open && (!visible() || c.navigationPending);
 }
 template<size_t N> size_t ConversationWindow<N>::count() const { return visible() ? live().info.value.count : 0; }
 template<size_t N> uint32_t ConversationWindow<N>::total() const { return visible() ? live().info.value.total : 0; }
@@ -85,6 +91,7 @@ template<size_t N> bool ConversationWindow<N>::navigate(Intent intent) {
     auto& c = _control.value;
     if (!c.open || (intent != Intent::First && !visible()) || !changeView()) return false;
     c.intent = intent; c.state = State::Loading; c.scrollOffset = 0;
+    c.navigationPending = true;
     c.followFirst = intent == Intent::First;
     if (c.followFirst) c.updated = false;
     std::memset(c.selected, 0, 16); c.selectedValid = false;
@@ -321,6 +328,7 @@ template<size_t N> void ConversationWindow<N>::publish() {
     auto& c = _control.value;
     if (c.publication == UINT32_MAX) { c.state = State::Exhausted; c.error = storage::Error::RevisionExhausted; return; }
     c.active ^= 1; ++c.publication; c.held = true; c.phase = Phase::Idle; c.publish = false;
+    c.navigationPending = false;
     c.state = State::Ready; c.statusDirty = true; c.statusReady = false; c.retryAt = 0;
     c.followFirst = !live().info.value.moreBefore;
     c.updated = live().info.value.sourceRevision != c.observedRevision;

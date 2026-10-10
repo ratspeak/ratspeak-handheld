@@ -72,6 +72,8 @@ public:
     storage::Error error() const { return _control.value.error; }
     bool visible() const;
     bool loading() const;
+    // Background refreshes do not invalidate the published page boundaries.
+    bool pageLoading() const;
     bool canPrevious() const;
     bool canNext() const;
     size_t count() const;
@@ -102,6 +104,7 @@ private:
         bool awaiting = false, copied = false, publish = false, held = false;
         bool followFirst = true, updated = false, open = false, selectedValid = false;
         bool statusReady = false, statusDirty = false, statusFailed = false;
+        bool navigationPending = false;
     };
     static_assert(sizeof(Control) <= 128, "Conversation controls exceed the adopted reserve");
     union ControlBank {
