@@ -83,6 +83,10 @@ void Ui::update(const Status& value,bool foregroundAllowed) {
         if(!_pending || (_action!=Action::Close && _action!=Action::Stop && value.revision>_anchor &&
             (_action!=Action::Volume || value.volume==_status.volume))) {
             // A confirmation belongs to the clip the user saw, not a newer one.
+            if(value.phase==Phase::Sent && value.reason==Code::Ok && value.counter &&
+               !_inline && !value.fromMessage && _status.length) {
+                _sentCounter=value.counter;_sentLength=_status.length;
+            }
             if(value.draftRevision!=_status.draftRevision) _menu=Menu::Main;
             if(value.phase==Phase::Playing || value.phase==Phase::Pausing || value.phase==Phase::Paused) _elapsed=value.frames;
             else if((_status.phase==Phase::Playing || _status.phase==Phase::Pausing) && value.phase==Phase::Review && value.reason==Code::Ok)

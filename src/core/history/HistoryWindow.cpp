@@ -1,4 +1,5 @@
 #include "HistoryWindow.h"
+#include "storage/MemoDraft.h"
 #include "reticulum/LXMFMessage.h"
 #include "util/DisplayText.h"
 #include "reticulum/StatusFacts.h"
@@ -34,6 +35,7 @@ void HistoryWindow::open(const uint8_t peer[16], uint32_t identity) {
     _pages[c.active].value.info.identity = 0;
     memcpy(c.peer, peer, 16); c.identity = identity;
     c.mode = Mode::Chat; c.state = State::Loading; c.intent = Intent::Newest;
+    c.queuedAudioCounter=0;c.queuedAudioDuration=0;
     c.newBelow = false; c.followNewest = true; c.scrollOffset = 0;
     c.focus = VisibleSpans; c.selectEdge = 0;
     if (!c.awaiting) c.phase = Phase::Idle;
@@ -59,6 +61,7 @@ void HistoryWindow::close() {
     changeView();
     auto& c = control();
     c.mode = Mode::Closed; c.state = State::Closed; c.intent = Intent::None;
+    c.queuedAudioCounter=0;c.queuedAudioDuration=0;
     c.focus = VisibleSpans; c.selectEdge = 0;
     _pages[c.active].value.info.statusRefresh = {};
     if (!c.awaiting) c.phase = Phase::Idle;
@@ -71,6 +74,17 @@ bool HistoryWindow::visible() const {
 bool HistoryWindow::loading() const {
     const auto& c = control();
     return c.mode != Mode::Closed && (c.awaiting || c.phase != Phase::Idle || c.intent != Intent::None);
+}
+void HistoryWindow::queuedAudio(uint32_t counter,uint16_t bytes) {
+    using namespace storage::memo;
+    if(control().mode!=Mode::Chat || !counter || !bytes || bytes%FrameBytes || bytes>RecordBytes) return;
+    if(!newest()) return;
+    control().queuedAudioCounter=counter;
+    control().queuedAudioDuration=uint8_t((bytes/FrameBytes*FrameMs+999)/1000);
+}
+uint8_t HistoryWindow::queuedAudioSeconds() const {
+    return control().mode==Mode::Chat && control().followNewest && control().queuedAudioCounter ?
+        control().queuedAudioDuration:0;
 }
 size_t HistoryWindow::spanCount() const { return visible() ? livePage().info.spans : 0; }
 const HistoryWindow::Span* HistoryWindow::span(size_t index) const {
@@ -397,6 +411,9 @@ void HistoryWindow::finishStatuses(uint32_t now) {
         c.statusFailed = true;
     }
     c.phase = Phase::Idle; c.statusReady = true; c.statusDirty = c.statusFailed;
+    for(size_t i=0;i<spanCount();++i) if(!span(i)->incoming() && span(i)->counter==c.queuedAudioCounter) {
+        c.queuedAudioCounter=0;c.queuedAudioDuration=0;break;
+    }
     _pages[c.active].value.info.statusRefresh.finish(c.statusFailed, now);
     c.retryAt = c.statusFailed ? now + 1000 : 0;
     if (c.statusPublication == UINT32_MAX) { c.state = State::Exhausted; c.error = Error::Exhausted; }

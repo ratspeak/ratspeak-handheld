@@ -129,7 +129,11 @@ bool DeviceService::readyForCommand() {
     if (!_storageOwnerBound || _backend.pollRadioBeforeBlockingWork()) return true;
     const auto* request = _mailbox.nextRequest();
     if (!request) return false;
-    if (request->operation == Operation::VoiceCommand || request->operation == Operation::PropagationNodes || request->operation == Operation::PropagationSync ||
+    // These commands only inspect owner memory or submit asynchronous audio
+    // work. Deferring them behind radio TX stalls every later FIFO history read.
+    if (request->operation == Operation::VoiceCommand || request->operation == Operation::MemoCommand ||
+        request->operation == Operation::PeerName || request->operation == Operation::Nodes ||
+        request->operation == Operation::PropagationNodes || request->operation == Operation::PropagationSync ||
         (request->operation >= Operation::RrcHubs && request->operation <= Operation::RrcContext && !rrcCatalog(request->operation))) return true;
     if (!_messages.deferredIO()) return false;
     switch (request->operation) {

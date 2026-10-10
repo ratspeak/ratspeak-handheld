@@ -473,7 +473,7 @@ void LvMessageView::clearMessages() {
     _statusLabels.fill(nullptr); _textLabels.fill(nullptr);
     _audioPressIndex=_messagePressIndex=HistoryWindow::VisibleSpans;
     _bubbleBoxes.fill(nullptr); _readButtons.fill(nullptr);_audioErrors.fill(nullptr);
-    _emptyLabel = nullptr; _touchScrolling = false;
+    _emptyLabel = _queuedAudio = nullptr; _touchScrolling = false;
     _rowCount = 0; _lastHistoryRevision = 0; _lastStatusRevision = 0;
     _boundMode = HistoryWindow::Mode::Closed; _boundIdentity = 0;
     _binding = false;
@@ -640,9 +640,10 @@ void LvMessageView::updateHistoryControls() {
     if (!_historyNotice || !_service) return;
     auto& window = _service->historyWindow();
     const bool matches = windowMatches();
-    if(matches && !_rrcMode && _ui && _ui->memoUi() && _ui->memoUi()->takeSent(window.peer())) {
+    uint32_t sentCounter=0;uint16_t sentLength=0;
+    if(matches && !_rrcMode && _ui && _ui->memoUi() && _ui->memoUi()->takeSent(window.peer(),&sentCounter,&sentLength)) {
         _messageTools.close();_selectAfterPage=false;
-        window.newest();_scrollToEnd=true;
+        window.queuedAudio(sentCounter,sentLength);_scrollToEnd=true;
     }
     const bool ready = matches && window.visible() && window.statusReady();
     const char* notice = nullptr;
@@ -661,7 +662,31 @@ void LvMessageView::updateHistoryControls() {
         lv_obj_clear_flag(_historyNotice, LV_OBJ_FLAG_HIDDEN);
     } else lv_obj_add_flag(_historyNotice, LV_OBJ_FLAG_HIDDEN);
 
-    if (!_rowCount) {
+    const auto queued=matches && !_rrcMode?window.queuedAudioSeconds():0;
+    if(queued && !_queuedAudio) {
+        lv_obj_set_layout(_msgScroll,LV_LAYOUT_FLEX);lv_obj_set_flex_flow(_msgScroll,LV_FLEX_FLOW_COLUMN);
+        _queuedAudio=lv_obj_create(_msgScroll);lv_obj_set_width(_queuedAudio,Theme::CONTENT_W-12);
+        lv_obj_set_height(_queuedAudio,48);makeTransparent(_queuedAudio);
+        auto* box=lv_obj_create(_queuedAudio);lv_obj_set_size(box,168,48);
+        lv_obj_align(box,LV_ALIGN_TOP_RIGHT,0,0);lv_obj_clear_flag(box,LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_style_bg_color(box,lv_color_hex(Theme::MSG_OUT_BG),0);
+        lv_obj_set_style_bg_opa(box,LV_OPA_COVER,0);lv_obj_set_style_border_width(box,1,0);
+        lv_obj_set_style_border_color(box,lv_color_hex(Theme::BORDER),0);
+        lv_obj_set_style_pad_all(box,7,0);lv_obj_set_style_radius(box,6,0);
+        auto* title=lv_label_create(box);lv_label_set_text(title,"Voice message");
+        lv_obj_set_style_text_font(title,&lv_font_rsdeck_12,0);lv_obj_set_style_text_color(title,lv_color_hex(Theme::ACCENT),0);
+        auto* detail=lv_label_create(box);lv_label_set_text(detail,"");
+        lv_obj_set_y(detail,18);lv_obj_set_style_text_font(detail,&lv_font_rsdeck_10,0);
+        lv_obj_set_style_text_color(detail,lv_color_hex(Theme::TEXT_SECONDARY),0);
+        lv_obj_update_layout(_msgScroll);lv_obj_scroll_to_y(_msgScroll,LV_COORD_MAX,LV_ANIM_OFF);
+    } else if(!queued && _queuedAudio) {lv_obj_del(_queuedAudio);_queuedAudio=nullptr;}
+    if(queued && _queuedAudio) {
+        auto* detail=lv_obj_get_child(lv_obj_get_child(_queuedAudio,0),1);
+        char text[40];snprintf(text,sizeof text,"0:%02u · Queued",unsigned(queued));
+        if(strcmp(lv_label_get_text(detail),text)) lv_label_set_text(detail,text);
+    }
+    if(queued && _emptyLabel) {lv_obj_del(_emptyLabel);_emptyLabel=nullptr;}
+    if (!_rowCount && !queued) {
         if (!_emptyLabel) {
             _emptyLabel = lv_label_create(_msgScroll);
             lv_obj_add_flag(_emptyLabel, LV_OBJ_FLAG_FLOATING);
@@ -738,7 +763,7 @@ void LvMessageView::refreshUI() {
     auto& window = _service->historyWindow();
     const bool matches = windowMatches();
     if (!matches || !window.visible()) {
-        clearMessages();
+        if(!matches || _rowCount || _lastHistoryRevision) clearMessages();
         // This publication was abandoned by a peer/identity/mode change. No
         // label remains; release its bank even if its old status query is held.
         window.acknowledgePublication(window.revision());

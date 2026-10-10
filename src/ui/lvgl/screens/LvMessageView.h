@@ -138,6 +138,7 @@ private:
     lv_obj_t* _historyNotice = nullptr;
     lv_obj_t* _historyNoticeLabel = nullptr;
     lv_obj_t* _emptyLabel = nullptr;
+    lv_obj_t* _queuedAudio = nullptr;
     bool _touchScrolling = false;
     int32_t _touchScrollStart = 0, _touchScrollPeak = 0;
     unsigned _noticeAction = 3;

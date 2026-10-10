@@ -378,13 +378,15 @@ void RustResourceEngine::acceptAssembled() {
 }
 
 void RustResourceEngine::loop() {
-    unsigned long now = millis();
     // A dead Link cannot carry terminal ICL. Close the exact local transfer
     // instead of retrying an impossible cancellation admission forever.
     if (_out.active && (!_d.lxmf || _d.lxmf->resourceSendBinding(_out.ticket, _out.iface, _out.linkId) != _out.linkBinding))
         closeOutbound(Outcome::NetworkFailure);
     if (_out.active) {
         servePendingParts();
+        // Serving a queued part advances lastActivityMs. Sample after that work:
+        // an earlier `now` would wrap the unsigned age and fail a live transfer.
+        const unsigned long now = millis();
         const uint32_t idleLimit = _out.reqReceived
             ? waitMs(_out.iface, 8, SENDER_IDLE_TIMEOUT_MS)
             : waitMs(_out.iface, 2, ADV_RETRY_MS) * (MAX_ADV_RETRIES + 1);
@@ -413,6 +415,7 @@ void RustResourceEngine::loop() {
         if (!_d.lxmf || !_d.lxmf->incoming().resourceLive(_in.receipt)) { closeInbound(false); return; }
         if (_in.cancelPending) { closeInbound(true); return; }
         if (_in.requestPending) sendRequest();
+        const unsigned long now = millis();
         if (now - _in.startMs >
             waitMs(_in.iface, 2 * _in.numParts + 8,
                    RECEIVER_BASE_TIMEOUT_MS + RECEIVER_PER_PART_TIMEOUT_MS * _in.numParts)) {

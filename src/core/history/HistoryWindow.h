@@ -74,6 +74,10 @@ public:
     bool older();
     bool newer();
     bool newest();
+    // A durable memo promotion can precede its asynchronous history read. Keep
+    // only its key/duration until the normal published row replaces this hint.
+    void queuedAudio(uint32_t counter,uint16_t bytes);
+    uint8_t queuedAudioSeconds() const;
     bool moveSelection(int direction);
     bool openFull(size_t span);
     bool backToChat();
@@ -157,12 +161,19 @@ private:
         uint8_t active = 0, buildIndex = 0, spanCount = 0;
         uint8_t focus = VisibleSpans;
         uint16_t usedText = 0;
-        bool awaiting = false, copied = false, publish = false, publicationHeld = false;
-        bool newBelow = false, followNewest = true, previousSlice = false;
+        // Owner-thread flags share bytes so the queued key/duration fit the
+        // existing 128-byte control bank; these are not cross-thread atomics.
+        bool awaiting:1, copied:1, publish:1, publicationHeld:1;
+        bool newBelow:1, followNewest:1, previousSlice:1;
+        bool statusDirty:1, statusFailed:1, statusReady:1;
         uint32_t observedStatusRevision = 0, sampledStatusRevision = 0, statusPublication = 0;
-        bool statusDirty = false, statusFailed = false, statusReady = false;
-        int8_t selectEdge = 0; // Uses the existing control padding byte.
+        int8_t selectEdge = 0;
+        uint8_t queuedAudioDuration = 0;
         uint32_t observedHistoryRevision = 0;
+        uint32_t queuedAudioCounter = 0;
+        Control() : awaiting(false), copied(false), publish(false), publicationHeld(false),
+            newBelow(false), followNewest(true), previousSlice(false),
+            statusDirty(false), statusFailed(false), statusReady(false) {}
     };
     static_assert(sizeof(Control) <= 128, "History control exceeds its row-arena allocation");
     union ControlBank {

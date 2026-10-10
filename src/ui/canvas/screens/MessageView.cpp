@@ -109,6 +109,11 @@ int visitChatLines(const History& history, bool rrc, const handheld::memo::Ui* m
         }
         if (history.mode() == History::Mode::Chat && row.more()) emit(index, rrc?"Actions: Tab, then Enter":"Read full: Tab, then Enter", Theme::ACCENT);
     }
+    if(!rrc && history.queuedAudioSeconds()) {
+        emit(SIZE_MAX,"Voice message",Theme::ACCENT);
+        char text[40];snprintf(text,sizeof text,"0:%02u - Queued",unsigned(history.queuedAudioSeconds()));
+        emit(SIZE_MAX,text,Theme::TEXT_SECONDARY);
+    }
     return line;
 }
 
@@ -285,7 +290,7 @@ void MessageView::render(M5Canvas& canvas) {
         canvas.setTextColor(color); canvas.drawString(text, 2, y);
     });
     viewedEnd();
-    if (!_history.spanCount()) {
+    if (!_history.spanCount() && !_history.queuedAudioSeconds()) {
         canvas.setTextColor(Theme::TEXT_SECONDARY);
         const char* text = _history.state() == History::State::Retrying ? "Read failed; retrying..." :
                            _history.loading() ? "Loading messages..." : "No messages yet";
@@ -462,9 +467,10 @@ bool MessageView::pollHistory(bool allowAdmission) {
     const auto publication = _history.revision(), statusPublication = _history.statusRevision();
     const auto state = _history.state();
     const auto error = _history.error();
-    if(_visible && !_rrcMode && _memo && _memo->takeSent(_history.peer())) {
+    uint32_t sentCounter=0;uint16_t sentLength=0;
+    if(_visible && !_rrcMode && _memo && _memo->takeSent(_history.peer(),&sentCounter,&sentLength)) {
         _messageTools.close();_selectAfterPage=false;
-        _history.newest();_input.setActive(true);
+        _history.queuedAudio(sentCounter,sentLength);_input.setActive(true);
     }
     if (allowAdmission && !_rrcMode) {
         if (_visible && _needsRefresh) refreshMessages();

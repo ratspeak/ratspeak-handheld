@@ -16,8 +16,10 @@ public:
     void retryMessage(const uint8_t peer[16],uint32_t counter,bool incoming);
     bool inlinePlayback() const {return _inline;}
     // One durable send completion, consumed only by its still-open chat.
-    bool takeSent(const uint8_t peer[16]) {
+    bool takeSent(const uint8_t peer[16],uint32_t* counter=nullptr,uint16_t* length=nullptr) {
         if(!_sent || std::memcmp(peer,_status.peer,16)) return false;
+        if(counter) *counter=_sentCounter;
+        if(length) *length=_sentLength;
         _sent=false;return true;
     }
     uint32_t elapsedFrames() const {return _elapsed;}
@@ -57,6 +59,8 @@ private:
     Status _owner;
     Command _nextOpen;
     uint32_t _serial=0,_anchor=0,_deleteRevision=0,_elapsed=0;
+    uint32_t _sentCounter=0;
+    uint16_t _sentLength=0;
     Code _error=Code::Ok;
     Action _action=Action::Close,_openAction=Action::Close,_nextAction=Action::Close;
     Menu _menu=Menu::Main;
