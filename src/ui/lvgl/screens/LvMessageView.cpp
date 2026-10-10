@@ -672,11 +672,25 @@ void LvMessageView::selectVisibleMessage() {
 }
 
 void LvMessageView::revealSelection() {
+    if (!_msgScroll || !boundWindow()) return;
     updateHistoryFocus();
     const auto focus=_service->historyWindow().focusedSpan();
     if (focus<_rowCount && _bubbleBoxes[focus]) {
-        auto* target=_readButtons[focus] ? _readButtons[focus] : _bubbleBoxes[focus];
-        lv_obj_scroll_to_view(target,LV_ANIM_OFF);
+        // Focus changes border thickness and therefore bubble height. Keep the
+        // fixed-height rows in sync before measuring the selected message.
+        lv_obj_update_layout(_msgScroll);
+        for (size_t i=0;i<_rowCount;++i) if (_bubbleBoxes[i])
+            lv_obj_set_height(lv_obj_get_parent(_bubbleBoxes[i]),lv_obj_get_height(_bubbleBoxes[i]));
+        lv_obj_update_layout(_msgScroll);
+        // LVGL's nonrecursive reveal only scrolls the immediate parent. The
+        // row is a direct child of the viewport; its nested bubble and Play
+        // button both have non-scrolling parents.
+        auto* row=lv_obj_get_parent(_bubbleBoxes[focus]);
+        lv_area_t viewport,item;
+        lv_obj_get_content_coords(_msgScroll,&viewport);lv_obj_get_coords(row,&item);
+        if (lv_area_get_height(&item)>lv_area_get_height(&viewport))
+            lv_obj_scroll_to_y(_msgScroll,lv_obj_get_scroll_y(_msgScroll)+item.y1-viewport.y1,LV_ANIM_OFF);
+        else lv_obj_scroll_to_view(row,LV_ANIM_OFF);
         saveScroll();
     }
 }
