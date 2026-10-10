@@ -51,7 +51,7 @@
     "lite_commits": {
       "rsReticulumLite": "8ef389c48ef9424728b4aeaa215e44ad218301f6",
       "rsLXMFLite": "bf9bda768b9268f6476667c30d5c7dd1b4f33734",
-      "rsLXST": "208560655fe1988013a61428057fe197b08e49fd"
+      "rsLXST": "855d44c93041f37c0f8a16a9926db81bd8297bb3"
     },
     "source_notices": {
       "src/boards/tdeck/audio/es7210/es7210.cpp": {
@@ -195,7 +195,7 @@
     "collector_sha256": "21a633fd2c799e8d5ccae7684863c6a32489bfa8a2a3c17a2fed16e8622c0b60"
   },
   "bundle": "THIRD-PARTY.txt",
-  "bundle_sha256": "a6de3b4b7e5995510a7f426749ee7b64e04fd44a576f115fcac5ef38e8e9154f",
+  "bundle_sha256": "ba6b0ad510ab847fe4f8ddc560351a924d6140605118fb41cd6bffd92418f5d0",
   "components": [
     {
       "name": "aes",
@@ -9755,8 +9755,8 @@
     },
     {
       "name": "rsLXST",
-      "version": "208560655fe1988013a61428057fe197b08e49fd",
-      "source": "https://github.com/ratspeak/rsLXST/tree/208560655fe1988013a61428057fe197b08e49fd",
+      "version": "855d44c93041f37c0f8a16a9926db81bd8297bb3",
+      "source": "https://github.com/ratspeak/rsLXST/tree/855d44c93041f37c0f8a16a9926db81bd8297bb3",
       "boards": [
         "tdeck",
         "tpager",
@@ -9769,7 +9769,7 @@
       "notices": [
         {
           "path": "LICENSE",
-          "source": "https://github.com/ratspeak/rsLXST/blob/208560655fe1988013a61428057fe197b08e49fd/LICENSE",
+          "source": "https://github.com/ratspeak/rsLXST/blob/855d44c93041f37c0f8a16a9926db81bd8297bb3/LICENSE",
           "length": 34523,
           "sha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
           "offset": 865595
@@ -9778,8 +9778,8 @@
     },
     {
       "name": "rsLXST native Codec2",
-      "version": "208560655fe1988013a61428057fe197b08e49fd",
-      "source": "https://github.com/ratspeak/rsLXST/tree/208560655fe1988013a61428057fe197b08e49fd/crates/lxst-codec2",
+      "version": "855d44c93041f37c0f8a16a9926db81bd8297bb3",
+      "source": "https://github.com/ratspeak/rsLXST/tree/855d44c93041f37c0f8a16a9926db81bd8297bb3/crates/lxst-codec2",
       "boards": [
         "tdeck",
         "tpager",
@@ -9792,35 +9792,35 @@
       "notices": [
         {
           "path": "crates/lxst-codec2/NOTICE",
-          "source": "https://github.com/ratspeak/rsLXST/blob/208560655fe1988013a61428057fe197b08e49fd/crates/lxst-codec2/NOTICE",
+          "source": "https://github.com/ratspeak/rsLXST/blob/855d44c93041f37c0f8a16a9926db81bd8297bb3/crates/lxst-codec2/NOTICE",
           "length": 2182,
           "sha256": "ff1ada84455bc83cd13a4313624a47661f367758784447842604f7c4b595a53c",
           "offset": 900790
         },
         {
           "path": "crates/lxst-codec2/licenses/LGPL-2.1.txt",
-          "source": "https://github.com/ratspeak/rsLXST/blob/208560655fe1988013a61428057fe197b08e49fd/crates/lxst-codec2/licenses/LGPL-2.1.txt",
+          "source": "https://github.com/ratspeak/rsLXST/blob/855d44c93041f37c0f8a16a9926db81bd8297bb3/crates/lxst-codec2/licenses/LGPL-2.1.txt",
           "length": 26462,
           "sha256": "9ebb6f82b7380a62ac74c5f0322c88e6744dedf2ebe1f54d6f088282b39844bf",
           "offset": 903023
         },
         {
           "path": "crates/lxst-codec2/licenses/KISS-FFT-BSD-3-Clause.txt",
-          "source": "https://github.com/ratspeak/rsLXST/blob/208560655fe1988013a61428057fe197b08e49fd/crates/lxst-codec2/licenses/KISS-FFT-BSD-3-Clause.txt",
+          "source": "https://github.com/ratspeak/rsLXST/blob/855d44c93041f37c0f8a16a9926db81bd8297bb3/crates/lxst-codec2/licenses/KISS-FFT-BSD-3-Clause.txt",
           "length": 1476,
           "sha256": "49eea0111dfb7038dc18f74034cc517690395ebac8f7768f999133b16e4bf064",
           "offset": 929549
         },
         {
           "path": "crates/lxst-codec2/licenses/upstream-Cargo.toml",
-          "source": "https://github.com/ratspeak/rsLXST/blob/208560655fe1988013a61428057fe197b08e49fd/crates/lxst-codec2/licenses/upstream-Cargo.toml",
+          "source": "https://github.com/ratspeak/rsLXST/blob/855d44c93041f37c0f8a16a9926db81bd8297bb3/crates/lxst-codec2/licenses/upstream-Cargo.toml",
           "length": 623,
           "sha256": "939e2818dcb2945f52eceb71b37b512bf1796da53a05e0a69276d5a2e55f9eed",
           "offset": 931083
         },
         {
           "path": "crates/lxst-codec2/licenses/upstream-README.md",
-          "source": "https://github.com/ratspeak/rsLXST/blob/208560655fe1988013a61428057fe197b08e49fd/crates/lxst-codec2/licenses/upstream-README.md",
+          "source": "https://github.com/ratspeak/rsLXST/blob/855d44c93041f37c0f8a16a9926db81bd8297bb3/crates/lxst-codec2/licenses/upstream-README.md",
           "length": 1909,
           "sha256": "76fee2b7d3455903f4246e7412ac230a856f58b098861c4c4c9dbdecd371f94a",
           "offset": 931763

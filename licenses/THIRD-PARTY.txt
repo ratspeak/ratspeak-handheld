@@ -18150,8 +18150,8 @@ For more information on this, and how to apply and follow the GNU AGPL, see
 
 
 ========================================================================
-rsLXST 208560655fe1988013a61428057fe197b08e49fd
-https://github.com/ratspeak/rsLXST/tree/208560655fe1988013a61428057fe197b08e49fd
+rsLXST 855d44c93041f37c0f8a16a9926db81bd8297bb3
+https://github.com/ratspeak/rsLXST/tree/855d44c93041f37c0f8a16a9926db81bd8297bb3
 Boards: tdeck, tpager, cardputer, m9
 Modes: standalone
 
@@ -18159,8 +18159,8 @@ Modes: standalone
 The same license text is reproduced above under rsLXMFLite / LICENSE.
 
 ========================================================================
-rsLXST native Codec2 208560655fe1988013a61428057fe197b08e49fd
-https://github.com/ratspeak/rsLXST/tree/208560655fe1988013a61428057fe197b08e49fd/crates/lxst-codec2
+rsLXST native Codec2 855d44c93041f37c0f8a16a9926db81bd8297bb3
+https://github.com/ratspeak/rsLXST/tree/855d44c93041f37c0f8a16a9926db81bd8297bb3/crates/lxst-codec2
 Boards: tdeck, tpager, cardputer, m9
 Modes: standalone
 
