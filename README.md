@@ -64,7 +64,30 @@ must be written to the correct slot for your installed layout. See the
 for backups and updates, and the [handheld guide](https://docs.ratspeak.org/docs/hardware/handheld-guide)
 for controls and setup.
 
-## Propagation (source builds)
+## Voice messages
+
+T-Deck, T-Pager, and Cardputer Adv can record and play voice messages up to
+15 seconds long. Open **Voice message** in a conversation, record your clip,
+then preview and send it. Sending returns to the conversation with inline
+playback and delivery status. ThinkNode M9 has no supported audio hardware.
+
+On Pager, move the wheel down from the composer to reach Voice and Send, then
+click to select. Cardputer also opens the recorder with **Ctrl+V**.
+
+Unsent clips are removed when you close the conversation. **Settings → Voice**
+controls playback volume and **Max voice messages** (1–50, default 2) for
+internal storage. Oldest audio is removed first; the message stays in chat.
+SD-card audio is limited by available storage instead of the clip count.
+
+Announce from the handheld before recording to it in the Ratspeak app so the
+app can choose a compatible compact recording. Existing Opus clips cannot be
+played on these handhelds. Live handheld calls and Hub/channel access are not
+available in this release.
+
+New or reset radio settings use **Medium Fast**. Existing saved presets are
+retained; match the radio settings on devices that communicate directly.
+
+## Propagation
 
 In **Settings → Propagation**, turn propagation ON to use an LXMF propagation
 node for store-and-forward messaging. It is OFF by default.
@@ -89,8 +112,7 @@ them.
 Handheld memory and work limits apply. Stamp costs above 20 are refused, and a
 stamp job stops after 30 seconds. An inbox reply that exceeds the supported
 Resource size or uses compression reports **REPLY UNSUPPORTED** and leaves
-messages on the node. These source changes have not yet been published in a
-firmware release; physical-device stamp performance is still being qualified.
+messages on the node.
 
 ## Build From Source
 
