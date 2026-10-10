@@ -322,25 +322,28 @@ void LvMessagesScreen::updateStatuses() {
     const auto& window=_service->conversationWindow();
     for (size_t i=0;i<_rowCount;++i) {
         const auto* value=window.row(i);if (!value) continue;
+        // The status fields describe the last outgoing record, which may be
+        // older than this preview. Never attach them to a newer received message.
+        const bool outgoing=(value->flags&Row::HasOutgoing) && !(value->flags&Row::LastIncoming);
         char text[128]={};const char* detail=nullptr;
         if (value->flags&Row::Unavailable) detail="Read failed; tap Retry";
-        else if (value->flags&Row::StatusUnavailable) detail=nullptr;
+        else if (!outgoing || (value->flags&Row::StatusUnavailable)) detail=nullptr;
         else detail=messageStatusDetail(static_cast<LXMFStatus>(value->status),value->flags&Row::StatusPending,
             value->error,value->flags&Row::TxSuppressed);
-        const char* state=(value->flags&Row::HasOutgoing)?statusText(value->status):"";
+        const char* state=outgoing?statusText(value->status):"";
         if (detail) snprintf(text,sizeof(text),"%s%s%s",state,*state?" · ":"",detail);
         else if (value->unreadCount) snprintf(text,sizeof(text),"%u new%s%s",unsigned(value->unreadCount),*state?" · ":"",state);
         else snprintf(text,sizeof(text),"%s",state);
         lv_label_set_text(_rows[i].status,text);
         const auto color=(value->flags&Row::Unavailable)?Theme::WARNING_CLR:
-            value->status==static_cast<uint8_t>(LXMFStatus::FAILED)?Theme::ERROR_CLR:
-            value->status==static_cast<uint8_t>(LXMFStatus::DELIVERED)?Theme::SUCCESS:Theme::TEXT_MUTED;
+            outgoing && value->status==static_cast<uint8_t>(LXMFStatus::FAILED)?Theme::ERROR_CLR:
+            outgoing && value->status==static_cast<uint8_t>(LXMFStatus::DELIVERED)?Theme::SUCCESS:Theme::TEXT_MUTED;
         lv_obj_set_style_text_color(_rows[i].status,lv_color_hex(color),0);
         char peer[33];peerText(value->peer,peer);
         const auto* node=_am?_am->findNodeByHex(peer):nullptr;
         const auto rail=(value->flags&Row::Unavailable)?Theme::WARNING_CLR:
-            value->status==static_cast<uint8_t>(LXMFStatus::FAILED)?Theme::ERROR_CLR:
-            value->pendingCount?Theme::WARNING_CLR:value->unreadCount?Theme::PRIMARY:
+            outgoing && value->status==static_cast<uint8_t>(LXMFStatus::FAILED)?Theme::ERROR_CLR:
+            outgoing && value->pendingCount?Theme::WARNING_CLR:value->unreadCount?Theme::PRIMARY:
             node&&node->saved?Theme::TEXT_SECONDARY:node?Theme::TEXT_MUTED:Theme::BORDER;
         lv_obj_set_style_bg_color(lv_obj_get_child(_rows[i].row,0),lv_color_hex(rail),0);
     }
