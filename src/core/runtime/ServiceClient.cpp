@@ -39,6 +39,7 @@ bool NodeView::saveNode(const std::string& hex) { return _client.action(Operatio
 bool NodeView::unsaveNode(const std::string& hex) { return deleteContactByHex(hex); }
 bool NodeView::deleteContactByHex(const std::string& hex) { return _client.action(Operation::DeleteContact, hex) != 0; }
 bool NodeView::setContactName(const std::string& hex, const std::string& name) { return _client.action(Operation::RenameContact, hex, name) != 0; }
+bool NodeView::setContactFavorite(const std::string& hex, bool favorite) { return _client.action(Operation::FavoriteContact, hex, "", favorite ? 1 : 0) != 0; }
 bool NodeView::addManualContact(const std::string& hex, const std::string& name) { return _client.action(Operation::SaveContact, hex, name) != 0; }
 
 uint32_t ServiceClient::submit(Request request, const std::string& body, size_t capacity, ValueCompletion callback) {
@@ -261,6 +262,7 @@ void ServiceClient::requestNodes() {
             DiscoveredNode node; node.hash.assignHex(row["hash"] | ""); node.name = row["name"] | "";
             node.identityHex = row["identity"] | ""; node.rssi = row["rssi"]; node.snr = row["snr"];
             node.hops = row["hops"]; node.lastSeen = row["seen"]; node.saved = row["saved"];
+            node.nomadFavorite = row["favorite"] | false;
             _nodeStaging.push_back(std::move(node));
         }
         _nodeCursorRevision = result.revision;
@@ -308,6 +310,7 @@ void ServiceClient::requestHistory() {
 }
 
 #include "RrcClient.inc"
+#include "NomadClient.inc"
 
 void ServiceClient::watchConversations() { _conversationWindow.resume(_status.generation); }
 void ServiceClient::closeConversations() { _conversationWindow.close(); }

@@ -37,6 +37,14 @@ rns-lite-core = { path = "../../rsReticulumLite" }
 lxmf-lite-core = { path = "../../rsLXMFLite" }
 sha2 = { version = "0.10", default-features = false }
 zeroize = { version = "1", default-features = false }
+# Link-frame decrypt only (see link.rs's lenient_link_decrypt): real-world Reticulum peers
+# (e.g. a microReticulum-based repeater) don't all produce byte-exact PKCS7 padding, and
+# rns-lite-core deliberately stays byte-exact with the trusted ../rsReticulum reference, so
+# this interop leniency lives here, in ratspeak-handheld's own crate, instead of patching the
+# shared dependency.
+aes = { version = "0.8", default-features = false }
+cbc = { version = "0.1", default-features = false, features = ["block-padding"] }
+hmac = { version = "0.12", default-features = false }
 
 [lints.rust]
 unsafe_op_in_unsafe_fn = "warn"

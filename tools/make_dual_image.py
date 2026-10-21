@@ -55,33 +55,29 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(prefix="handheld-merge-", dir=args.output.parent) as directory:
         temporary = Path(directory) / "merged.bin"
-        cmd = [
-            sys.executable,
-            "-m",
-            "esptool",
-            "--chip",
-            "esp32s3",
-            "merge-bin",
-            "--flash-mode",
-            "dio",
-            "--flash-size",
-            board.flash_size,
-            "--output",
-            str(temporary),
-            "0x0000",
-            str(args.bootloader),
-            "0x8000",
-            str(args.partitions),
-            "0xe000",
-            str(args.boot_app0),
-            hex(partitions["launcher"].offset),
-            str(args.launcher),
-            hex(partitions["standalone"].offset),
-            str(args.standalone),
-            hex(partitions["rnode"].offset),
-            str(args.rnode),
+        positional = [
+            "0x0000", str(args.bootloader),
+            "0x8000", str(args.partitions),
+            "0xe000", str(args.boot_app0),
+            hex(partitions["launcher"].offset), str(args.launcher),
+            hex(partitions["standalone"].offset), str(args.standalone),
+            hex(partitions["rnode"].offset), str(args.rnode),
         ]
-        subprocess.run(cmd, check=True)
+        # esptool's merge subcommand/flag spelling has shifted release to release --
+        # merge_bin/--flash_mode (older, underscore) vs merge-bin/--flash-mode (newer,
+        # hyphenated). PlatformIO's own tool-esptoolpy resolution has drifted under the
+        # same declared version range before (confirmed on 2026-10-19), so this project
+        # can't assume which style a fresh install actually has -- try the older
+        # spelling first (seen working on every version encountered so far), fall back
+        # to the newer one.
+        legacy = [sys.executable, "-m", "esptool", "--chip", "esp32s3", "merge_bin",
+                  "--flash_mode", "dio", "--flash_size", board.flash_size,
+                  "--output", str(temporary), *positional]
+        modern = [sys.executable, "-m", "esptool", "--chip", "esp32s3", "merge-bin",
+                  "--flash-mode", "dio", "--flash-size", board.flash_size,
+                  "--output", str(temporary), *positional]
+        if subprocess.run(legacy).returncode != 0:
+            subprocess.run(modern, check=True)
         verify_factory(temporary.read_bytes(), args.device, "full", version, revision, dirty)
         temporary.replace(args.output)
     print(f"dual firmware image written to {args.output}")

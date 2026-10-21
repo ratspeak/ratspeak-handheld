@@ -21,9 +21,15 @@ unsigned long nodeAgeMs(const DiscoveredNode& node, unsigned long now) {
 }
 
 std::string displayNameFor(const DiscoveredNode& node) {
-    if (!node.name.empty()) return node.name;
+    // "@", not a star -- same reasoning as LvNodesScreen's Peers list:
+    // nomadFavorite only means "this peer has a bookmarked NomadNet page",
+    // and a star here (no Nomad-browsing context on screen) would misread
+    // as a general favorite-contact marker. Same stand-in already used
+    // for "address/web" on the Nomad Browser's own address-bar toggle.
+    const char* prefix = node.nomadFavorite ? "@ " : "";
+    if (!node.name.empty()) return prefix + node.name;
     std::string hex = node.hash.toHex();
-    return hex.substr(0, 12);
+    return prefix + hex.substr(0, 12);
 }
 
 std::string identityLineFor(const DiscoveredNode& node) {
@@ -231,11 +237,21 @@ void LvContactsScreen::rebuildList() {
 
         lv_obj_add_event_cb(row, [](lv_event_t* e) {
             auto* self = (LvContactsScreen*)lv_event_get_user_data(e);
+            if (self->_confirmDelete) return;  // Click-on-release after a touch long-press; already handled.
             int idx = (int)(intptr_t)lv_obj_get_user_data(lv_event_get_target(e));
             if (idx >= 0 && idx < (int)self->_contactHexes.size() && self->_onSelect) {
                 self->_onSelect(self->_contactHexes[idx]);
             }
         }, LV_EVENT_CLICKED, this);
+
+        // Rows keep LVGL's default click-focus, so handleLongPress()'s
+        // existing lv_group_get_focused()-based lookup already resolves to
+        // the touched row correctly — no press-time pinning needed here
+        // (unlike LvNodesScreen, which disables click-focus on its rows).
+        lv_obj_add_event_cb(row, [](lv_event_t* e) {
+            auto* self = (LvContactsScreen*)lv_event_get_user_data(e);
+            self->handleLongPress();
+        }, LV_EVENT_LONG_PRESSED, this);
 
         lv_group_add_obj(LvInput::group(), row);
         lv_obj_add_event_cb(row, [](lv_event_t* e) {

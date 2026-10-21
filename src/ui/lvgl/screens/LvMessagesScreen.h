@@ -3,6 +3,7 @@
 #include "UIManager.h"
 #include "runtime/ServiceClient.h"
 #include "ui/RrcBrowser.h"
+#include "config/BoardConfig.h"
 #include <functional>
 #include <string>
 
@@ -23,6 +24,7 @@ public:
     void onExit() override;
     bool handleKey(const KeyEvent&) override;
     bool handleLongPress() override;
+    bool wantsVirtualKeyboard() const override { return _rrc.form(); }
     const char* title() const override { return "Messages"; }
 
 private:
@@ -37,6 +39,11 @@ private:
     lv_obj_t *_rrcPanel = nullptr, *_rrcText = nullptr, *_rrcRemember = nullptr;
     lv_obj_t* _rrcRows[14]{};
     uint32_t _rrcRendered = 0, _rrcFormView = 0, _rrcRetryAt = 0;
+    // A bigger per-board page size (matching Contacts/Nodes' scrollable
+    // feel) would need templating ServiceClient itself — conversationWindow()
+    // returns a concrete ConversationList& (ConversationWindow<2>), a fixed
+    // member of that one shared class, not a per-screen local type. Out of
+    // scope for a D1L-only UI fix; kept as every other board already has it.
     using Window = handheld::history::ConversationList;
     using Row = Window::Row;
     struct RowWidgets { lv_obj_t *row = nullptr, *name = nullptr, *preview = nullptr, *status = nullptr; };

@@ -48,8 +48,8 @@ use rns_lite_core::identity::{
     SIGNED_DATA_MAX, compose_random_hash, name_hash,
 };
 use rns_lite_core::link::{
-    self as rns_link, LINK_KEY_LENGTH, LINK_MDU, LINK_PROOF_LEN, LINK_REQUEST_LEN, LinkError,
-    LinkKeys, LinkProofView, LinkRequestView, SignallingData,
+    self as rns_link, LINK_KEY_LENGTH, LINK_MDU, LINK_PADDED_MAX, LINK_PROOF_LEN,
+    LINK_REQUEST_LEN, LinkError, LinkKeys, LinkProofView, LinkRequestView, SignallingData,
 };
 use rns_lite_core::proof::{self as rns_proof, ProofError, SeenMessages100};
 use rns_lite_core::ratchet::{
@@ -420,6 +420,8 @@ mod link;
 pub use link::*;
 mod resource;
 pub use resource::*;
+mod nomad;
+pub use nomad::*;
 
 #[cfg(test)]
 fn test_persist_commit_ratchet(

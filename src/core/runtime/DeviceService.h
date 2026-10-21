@@ -7,6 +7,7 @@
 #include "config/UserConfig.h"
 #include "radio/RadioSettings.h"
 #include "protocol/ProtocolBackend.h"
+#include "protocol/NomadBrowseClient.h"
 #include "reticulum/AnnounceManager.h"
 #include "reticulum/IdentityManager.h"
 #include <functional>
@@ -62,6 +63,8 @@ private:
     void finishHistory(const storage::Result&);
     void executeRrc(uint8_t slot);
     void pollRrcCommands();
+    void executeNomad(uint8_t slot);
+    void pollNomadBrowse();
     bool readRrcContext(uint8_t slot, storage::rrc::Context&) const;
     storage::Submission submitRrcRead(uint8_t slot);
     Result projectRrcRead(const storage::Result&);
@@ -109,6 +112,9 @@ private:
     PendingSend _sends[ServiceMailbox::NormalSlots];
     storage::Ticket _storageWrites[ServiceMailbox::NormalSlots];
     uint16_t _rrcCommands = 0; // Existing mailbox slots retain their own immutable command.
+    // One Nomad browse in flight at a time (RustLinkManager's single request slot
+    // enforces this anyway); a plain slot index, not a bitmask like _rrcCommands.
+    uint8_t _nomadSlot = ServiceMailbox::NoSlot;
     bool _outgoingPaused = false;
 };
 

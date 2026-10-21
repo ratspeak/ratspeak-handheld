@@ -78,6 +78,12 @@ void LvTabBar::setActiveTab(int tab) {
     if (_tabCb) _tabCb(tab);
 }
 
+void LvTabBar::setActiveTabDisplay(int tab) {
+    if (tab < 0 || tab >= TAB_COUNT) return;
+    _activeTab = tab;
+    refreshTabs();
+}
+
 void LvTabBar::cycleTab(int direction) {
     int next = (_activeTab + direction + TAB_COUNT) % TAB_COUNT;
     setActiveTab(next);

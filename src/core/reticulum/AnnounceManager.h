@@ -23,6 +23,17 @@ struct DiscoveredNode {
     uint8_t hops = 0;
     unsigned long lastSeen = 0;
     bool saved = false;
+    // D1L Nomad Browser "favorite a node" shortcut -- see
+    // AnnounceManager::setContactFavorite(). Implies saved (favoriting an
+    // unsaved node saves it too, same as naming one already does).
+    bool nomadFavorite = false;
+    // Fixed array, not rs::Bytes: refreshed on every announce from an already-saved
+    // peer (AnnounceManager::receivedAnnounceEvent), so it must never allocate. Same
+    // identity key across all of a peer's aspects (lxmf.delivery, nomadnetwork.node,
+    // ...) -- lets a saved LXMF contact's nomadnetwork.node destination be derived
+    // directly (rs_handheld_rns_nomad_node_hash) without ever seeing that aspect's
+    // own announce.
+    uint8_t publicKey[64] = {};
 };
 
 class AnnounceManager {
@@ -35,6 +46,7 @@ public:
     // rate-limit policy from raw event fields. KeyMap continuity is enforced by
     // ProtocolRuntime before this is called.
     void receivedAnnounceEvent(const uint8_t destHash[16], const uint8_t identityHash[16],
+                               const uint8_t publicKey[64],
                                const uint8_t* appData, size_t appLen, int rssi, float snr,
                                uint8_t hops);
 
@@ -48,6 +60,7 @@ public:
     // Hash-addressed contact ops: safe across node-table compaction (UI must not hold indices)
     bool deleteContactByHex(const std::string& hexHash);
     bool setContactName(const std::string& hexHash, const std::string& name);
+    bool setContactFavorite(const std::string& hexHash, bool favorite);
     void loop();  // Call from main loop — handles deferred saves
 
     // Name cache: persists hash→name mappings so names survive reboots

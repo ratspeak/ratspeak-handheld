@@ -25,6 +25,24 @@ public:
     void onExit() override;
     bool handleKey(const KeyEvent& event) override;
     bool handleLongPress() override;
+    // composerActive() alone is true by default (whenever no other overlay
+    // is open) — it answers "is the composer the active surface", not "is
+    // the user actually typing in it". Gate on textarea focus too, so the
+    // keyboard appears on tapping the field, not immediately on entering
+    // any chat — see the _textarea focus/defocus handler in createUI().
+    bool wantsVirtualKeyboard() const override { return composerActive() && _textareaFocused; }
+    // See UIManager.h's doc comment -- the keyboard's own Close button never
+    // fires the textarea's LV_EVENT_DEFOCUSED, so without this, closing it
+    // that way left _textareaFocused stuck true: wantsVirtualKeyboard() kept
+    // reporting true, refreshUI()'s screen-height reservation never reverted
+    // (the message history stayed shrunk), and the keyboard itself wouldn't
+    // re-show either (LvVirtualKeyboard's own dismissed-by-user latch,
+    // waiting for a false->true edge on "wanted" that could now never come).
+    void onVirtualKeyboardDismissed() override {
+        _textareaFocused = false;
+        refreshComposerPlaceholder();
+        if (_textarea) lv_obj_clear_state(_textarea, LV_STATE_FOCUSED);
+    }
 
     bool setPeerHex(const std::string& hex);
     bool prepareMaintenance() { _rrcSendRequested=false;return leaveRrcDraft(); }
@@ -84,6 +102,13 @@ private:
     void clearMessages();
     bool windowMatches() const;
     bool boundWindow() const;
+    // Mirrors handleKey()'s fallthrough condition for reaching the
+    // printable-character-append branch — i.e. none of the message-tools
+    // menu, RRC-tools menu, full-history reader, or send-mode overlay is
+    // currently intercepting input. Used only for wantsVirtualKeyboard();
+    // handleKey() itself is left untouched to avoid regressing its existing,
+    // carefully-ordered checks.
+    bool composerActive() const;
     void historyAction(unsigned action);
     void readFull(size_t index);
     void goBack();
@@ -151,6 +176,13 @@ private:
     lv_obj_t* _queuedAudio = nullptr;
     bool _touchScrolling = false;
     int32_t _touchScrollStart = 0, _touchScrollPeak = 0;
+    // Reserves room for the on-screen keyboard (HAS_TOUCH only) — see
+    // refreshUI(). Without this the keyboard, drawn on lv_layer_top()
+    // outside this screen's own flex layout entirely, simply overlaps the
+    // bottom of _msgScroll/_inputRow instead of the history shrinking to
+    // make room above it.
+    bool _kbSpaceReserved = false;
+    bool _textareaFocused = false;
     unsigned _noticeAction = 3;
     lv_obj_t* _inputRow = nullptr;
     lv_obj_t* _textarea = nullptr;

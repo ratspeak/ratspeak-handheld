@@ -7,7 +7,7 @@
 namespace RadioBandwidth {
 struct Value { uint32_t hz; uint8_t code; const char* label; };
 inline constexpr Value values[] = {
-#if !defined(RSM9)
+#if !defined(RSM9) && !defined(RSRADIO_LR11X0)
     {7800, 0x00, "7.8k"}, {10400, 0x08, "10.4k"}, {15600, 0x01, "15.6k"}, {20800, 0x09, "20.8k"},
     {31250, 0x02, "31.25k"}, {41700, 0x0a, "41.7k"},
 #endif

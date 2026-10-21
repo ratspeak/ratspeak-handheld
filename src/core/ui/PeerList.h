@@ -82,6 +82,7 @@ public:
         incoming.erase(std::remove_if(incoming.begin(), incoming.end(), [](const Incoming& e) { return e.retained; }), incoming.end());
         std::sort(incoming.begin(), incoming.end(), [&](const Incoming& a, const Incoming& b) {
             const auto& x = nodes[a.index]; const auto& y = nodes[b.index];
+            if (x.nomadFavorite != y.nomadFavorite) return x.nomadFavorite;
             if (x.saved != y.saved) return x.saved;
             if (x.lastSeen != y.lastSeen) return x.lastSeen > y.lastSeen;
             return a.id < b.id;

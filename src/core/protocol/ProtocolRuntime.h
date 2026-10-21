@@ -13,6 +13,7 @@
 #include "protocol/PropagationNodes.h"
 #include "protocol/RrcRuntimeEngine.h"
 #include "protocol/RustVoiceEngine.h"
+#include "protocol/NomadBrowseClient.h"
 #include "voice/VoiceWorker.h"
 #include "voice/MemoController.h"
 #include "ratspeak_protocol.h"
@@ -111,6 +112,23 @@ public:
     size_t rrcDirectory(handheld::rrc::DirectoryView* out, size_t capacity, size_t offset = 0) const override { return _rrc.directory(out, capacity, offset); }
     handheld::rrc::Code rrcCommand(const handheld::rrc::Command& command, const uint8_t* text, size_t length) override { return _rrc.command(command, text, length); }
     bool rrcContext(const uint8_t hub[16], const char* room, const uint8_t* participant, handheld::storage::rrc::Context& out) const override { return _rrc.context(hub, room, participant, out); }
+
+    // NomadNet raw-page browse (D1L Peers-menu feature, board-gated UI only, see
+    // TODO.md's "Nomad browser from Peers menu"). One at a time; publicKey is an
+    // already-saved peer's own key (their nomadnetwork.node destination is DERIVED from
+    // it, never learned from a live announce of that aspect).
+    bool nomadBrowseStart(const uint8_t publicKey[64], const char* path, uint32_t requestId,
+                           const uint8_t* fieldData = nullptr, size_t fieldDataLen = 0,
+                           bool identify = false) override {
+        return _nomadBrowse.start(publicKey, path, requestId, fieldData, fieldDataLen, identify);
+    }
+    void nomadBrowseCancel() override { _nomadBrowse.cancel(); }
+    uint8_t nomadBrowseStatus() const override { return uint8_t(_nomadBrowse.status()); }
+    uint32_t nomadBrowseRequestId() const override { return _nomadBrowse.requestId(); }
+    uint8_t nomadBrowseAttempt() const override { return _nomadBrowse.attempt(); }
+    String nomadBrowseDestHashHex() const override;
+    size_t nomadBrowsePageText(char* out, size_t capacity) const override { return _nomadBrowse.pageText(out, capacity); }
+    const char* nomadBrowseFailureReason() const override { return _nomadBrowse.failureReason(); }
 
     handheld::outgoing::Submission lxmfSubmit(const uint8_t dest[16],
         const uint8_t* title, size_t titleLength, const uint8_t* content,
@@ -237,6 +255,7 @@ private:
     RustKeyMap _keymap;
     RustRatchetStore _ratchets;
     RustLinkManager _links;
+    handheld::NomadBrowseClient _nomadBrowse;
     RustResourceEngine _resources;
     RustLxmfEngine _lxmf;
     handheld::rrc::RuntimeEngine _rrc;

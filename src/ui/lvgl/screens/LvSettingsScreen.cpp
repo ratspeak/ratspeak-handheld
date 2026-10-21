@@ -413,12 +413,19 @@ void LvSettingsScreen::buildItems() {
         regionItem.type = SettingType::ENUM_CHOICE;
         regionItem.getter = [&s]() {
             int region = constrain(s.radioRegion, 0, REGION_COUNT - 1);
-            return s.loraFrequency == REGION_FREQ[region] ? region : (int)REGION_COUNT;
+            const bool matches = s.loraFrequency == REGION_FREQ[region] &&
+                s.loraBW == REGION_BW[region] && s.loraSF == REGION_SF[region] &&
+                s.loraCR == REGION_CR[region] && s.loraTxPower == REGION_TX_POWER[region];
+            return matches ? region : (int)REGION_COUNT;
         };
         regionItem.setter = [&s](int v) {
             if (v < 0 || v >= REGION_COUNT) return; // Keep the displayed Custom value.
             s.radioRegion = v;
             s.loraFrequency = REGION_FREQ[v];
+            s.loraBW = REGION_BW[v];
+            s.loraSF = REGION_SF[v];
+            s.loraCR = REGION_CR[v];
+            s.loraTxPower = REGION_TX_POWER[v];
         };
         regionItem.minVal = 0; regionItem.maxVal = REGION_COUNT - 1; regionItem.step = 1;
         regionItem.enumLabels = {REGION_LABELS[0], REGION_LABELS[1], REGION_LABELS[2], REGION_LABELS[3], "Custom"};
@@ -1629,15 +1636,34 @@ void LvSettingsScreen::rebuildItemList() {
             lv_obj_add_event_cb(row, [](lv_event_t* e) {
                 auto* self = (LvSettingsScreen*)lv_event_get_user_data(e);
                 int idx = (int)(intptr_t)lv_obj_get_user_data(lv_event_get_target(e));
-                if (self->_editing || self->_textEditing || self->_freqEditing) {
-                    self->_editing = false;
-                    self->_textEditing = false;
-                    self->_freqEditing = false;
-                    self->_numericTyping = false;
-                }
-                self->_selectedIdx = idx;
                 KeyEvent tap = {};
-                tap.enter = true;
+                if (self->_editing && idx == self->_selectedIdx) {
+                    // Already editing this row (ENUM_CHOICE/INTEGER): there's
+                    // no keyboard/encoder to send left/right, so a second tap
+                    // on the same row maps tap position to the same action —
+                    // left third decreases, right third increases, middle
+                    // confirms (same as Enter). Without this a repeat tap
+                    // just closed and reopened edit mode, never changing the
+                    // value — confirmed on real hardware (D1L region preset).
+                    lv_point_t p{};
+                    lv_indev_get_point(lv_indev_get_act(), &p);
+                    lv_area_t coords;
+                    lv_obj_get_coords(lv_event_get_target(e), &coords);
+                    const int width = coords.x2 - coords.x1;
+                    const int rel = p.x - coords.x1;
+                    if (width > 0 && rel < width / 3) tap.left = true;
+                    else if (width > 0 && rel > width * 2 / 3) tap.right = true;
+                    else tap.enter = true;
+                } else {
+                    if (self->_editing || self->_textEditing || self->_freqEditing) {
+                        self->_editing = false;
+                        self->_textEditing = false;
+                        self->_freqEditing = false;
+                        self->_numericTyping = false;
+                    }
+                    self->_selectedIdx = idx;
+                    tap.enter = true;
+                }
                 self->handleKey(tap);
             }, LV_EVENT_CLICKED, this);
         }

@@ -14,9 +14,9 @@ namespace handheld {
 enum class Operation : uint8_t {
     Nodes, PeerName, ConversationPage, ConversationDetail, HistoryPage, ReadRecord, HistoryStatus, Settings, Identities, Scan, PropagationNodes,
     RrcHubs, RrcRooms, RrcChannels, RrcPeople, RrcDirectory, RrcContext, RrcHistoryPage, RrcHistoryRecord, RrcHistoryStatus, RrcDraft, RrcDetail, RrcSavedRooms, RrcInbox, RrcRoom,
-    Send, MarkRead, DeleteConversation, SaveContact, DeleteContact, RenameContact,
+    Send, MarkRead, DeleteConversation, SaveContact, DeleteContact, RenameContact, FavoriteContact,
     ApplySettings, Announce, CreateIdentity, ImportIdentity, Diagnostics,
-    PropagationSync, RrcCommand, VoiceCommand, MemoCommand, HomeReady, DeleteRecord, Restart, PowerOff, SwitchIdentity, FormatSD, WipeSD, FactoryReset,
+    PropagationSync, RrcCommand, VoiceCommand, MemoCommand, NomadBrowse, CancelNomadBrowse, HomeReady, DeleteRecord, Restart, PowerOff, SwitchIdentity, FormatSD, WipeSD, FactoryReset,
     EnableSDAndRestart, ClearOldDataAndRestart
 };
 enum class Admission : uint8_t { Admitted, Busy, NotReady, Invalid };
@@ -86,6 +86,16 @@ struct Status {
     uint32_t configRevision = 1;
     uint32_t identityRevision = 1;
     uint32_t incomingRevision = 0;
+    // NomadNet raw-page browse (D1L Peers-menu feature): nomadRevision tags the mailbox
+    // request id of the LAST browse that settled (Done/Failed), independent of
+    // generation/revision used elsewhere -- a poller compares it to its own request's id.
+    uint32_t nomadRevision = 0;
+    uint8_t nomadStatus = 0; // mirrors handheld::NomadBrowseClient::Status; meaningful only when nomadRevision matches
+    uint8_t nomadAttempt = 0; // 1-based; >1 means a prior attempt for this request timed out and was retried
+    // Real nomadnetwork.node destination being browsed, hex-encoded -- NOT the saved
+    // contact's lxmf.delivery hash (those are different aspect hashes for the same peer).
+    // Meaningful only when nomadRevision matches, same as nomadStatus/nomadAttempt.
+    char nomadDestHex[33] = {};
     uint32_t lastAnnounce = 0;
     uint32_t heartbeat = 0;
     uint32_t serviceMaxMs = 0;

@@ -201,6 +201,32 @@ bool RustLinkManager::linkEstablishing(const uint8_t dest[16]) const {
     return false;
 }
 
+bool RustLinkManager::ensureNomadLink(const uint8_t dest[16], const uint8_t pubkey[64],
+                                      const rs_handheld_route_t& route) {
+    return ensureOwnedLink(dest, pubkey, route, Owner::Nomad);
+}
+
+void RustLinkManager::closeNomadLinkIfIdentified(const uint8_t dest[16]) {
+    Link* l = findByDest(dest, Owner::Nomad);
+    if (l && l->identified) {
+        Serial.println("[RUST-LINK] closing already-identified Nomad link (ID toggled off) "
+                       "so the next request gets a fresh, unidentified one");
+        closeLink(*l);
+    }
+}
+
+bool RustLinkManager::nomadLinkActive(const uint8_t dest[16]) const {
+    for (const auto& l : _links)
+        if (l.owner == Owner::Nomad && l.state == State::Active && memcmp(l.peerDest, dest, 16) == 0) return true;
+    return false;
+}
+
+bool RustLinkManager::nomadLinkEstablishing(const uint8_t dest[16]) const {
+    for (const auto& l : _links)
+        if (l.owner == Owner::Nomad && l.initiator && l.state == State::InitRequested && !memcmp(l.peerDest, dest, 16)) return true;
+    return false;
+}
+
 bool RustLinkManager::linkOnRoute(const uint8_t dest[16], const rs_handheld_route_t& route) const {
     if (route.kind != RS_HANDHELD_ROUTE_DIRECT) return false;
     for (const auto& link : _links)
@@ -570,7 +596,8 @@ void RustLinkManager::onLinkData(Link& l, const rs_handheld_local_frame_t& f) {
             rs_handheld_rns_link_verify_identification(l.linkId, plaintext, length, publicKey) == RS_HANDHELD_OK) credit();
         return;
     }
-    if (l.owner == Owner::Delivery && f.context == RustWire::CTX_RESPONSE && l.initiator) {
+    if ((l.owner == Owner::Delivery || l.owner == Owner::Nomad) &&
+        f.context == RustWire::CTX_RESPONSE && l.initiator) {
         uint8_t pt[RS_HANDHELD_LINK_MDU]; size_t length = 0;
         if (rs_handheld_rns_link_decrypt(l.sessionKey, f.payload, f.payload_len,
                 pt, sizeof pt, &length) == RS_HANDHELD_OK &&
@@ -588,7 +615,7 @@ void RustLinkManager::onLinkData(Link& l, const rs_handheld_local_frame_t& f) {
         }
         return;
     }
-    if (f.context == RustWire::CTX_NONE) {
+    if (l.owner == Owner::Delivery && f.context == RustWire::CTX_NONE) {
         // Link-delivered LXMF (DIRECT): decrypt -> full packed message -> LXMF engine.
         uint8_t pt[RS_HANDHELD_LINK_MDU + 32];
         size_t ptLen = 0;
@@ -686,8 +713,10 @@ bool RustLinkManager::identify(Link& link) {
     if (link.state != State::Active || !link.initiator || !_d.pump) return false;
     if (link.identified) return true;
     uint8_t plaintext[128], raw[500]; size_t length = 0;
+    // The Link&-overload here is required, not cosmetic: the dest-based overload defaults
+    // to Owner::Delivery and would silently fail to find a Nomad- (or Rrc/Voice-)owned link.
     if (rs_handheld_rns_link_identify(_d.ctx, link.linkId, plaintext) != RS_HANDHELD_OK ||
-        !buildLinkPacket(link.peerDest, RustWire::CTX_LINKIDENTIFY, plaintext, sizeof plaintext,
+        !buildLinkPacket(link, RustWire::CTX_LINKIDENTIFY, plaintext, sizeof plaintext,
                          raw, sizeof raw, length)) return false;
     const auto generation = _generations[&link - _links];
     handheld::TxLease lease;
@@ -721,6 +750,61 @@ bool RustLinkManager::startGet(const uint8_t dest[16], uint8_t operation, const 
     _request.interfaceGeneration = _d.pump->interfaceGeneration(link->iface);
     memcpy(_request.id, hash, 16); // packet requests use the transmitted packet hash
     if (!identify(*link) || _request.sequence != sequence) {
+        if (_request.sequence == sequence) _request = {};
+        return false;
+    }
+    lease.setReceipt({sequence, RequestReceiptSlot});
+    const auto offer = _d.pump->offerReceipt(raw, rawLength, lease);
+    const bool admitted = offer == handheld::TxOffer::Started || offer == handheld::TxOffer::Queued;
+    if (!admitted && _request.sequence == sequence) _request = {};
+    return admitted;
+}
+
+bool RustLinkManager::startNomadRequest(const uint8_t dest[16], const uint8_t* path, uint8_t pathLen,
+                                        RequestSink& sink, uint32_t timeoutMs,
+                                        const uint8_t* fieldData, size_t fieldDataLen,
+                                        bool identifyOnRequest) {
+    if (_request.sink || _requestSequence == UINT32_MAX || !timeoutMs || !_d.pump || !path || !pathLen) return false;
+    if (fieldDataLen > RS_HANDHELD_NOMAD_FIELD_DATA_MAX) return false;
+    Link* link = findByDest(dest, Owner::Nomad);
+    if (!link || link->state != State::Active || !link->initiator) return false;
+    // header(28) + max(1, data_len) per rs_handheld_rns_nomad_request_build's own sizing
+    // note -- generous headroom for the field-data case on top of the plain-fetch one.
+    uint8_t plaintext[64 + RS_HANDHELD_NOMAD_FIELD_DATA_MAX], raw[700], hash[32];
+    size_t length = 0, rawLength = 0;
+    const uint64_t now = _d.clock ? _d.clock->nowMs() : uint64_t(millis());
+    const auto epoch = RustClock::epochSecs();
+    // Build request -> frame it -> hash it -> identify() alongside it (only when
+    // identifyOnRequest asks for it -- unlike startGet's LXMF form above, which
+    // always identifies, Nomad browsing's identity is opt-in, see this function's
+    // doc comment). fieldData is already-msgpack-encoded (a fixmap of name->value
+    // strings) by the caller -- see NomadBrowseClient.
+    if (rs_handheld_rns_nomad_request_build(epoch ? double(epoch) : double(now) / 1000.0,
+        path, pathLen, fieldData, fieldDataLen, plaintext, sizeof plaintext, &length) != RS_HANDHELD_OK ||
+        !buildLinkPacket(*link, RustWire::CTX_REQUEST, plaintext, length, raw, sizeof raw, rawLength) ||
+        rs_handheld_rns_packet_hash(raw, rawLength, 0, hash) != RS_HANDHELD_OK) return false;
+    handheld::TxLease lease;
+    if (!_d.pump->captureLeaseAt(link->iface, raw, rawLength, now, timeoutMs, lease)) return false;
+    const auto sequence = ++_requestSequence;
+    _request = {};
+    _request.sink = &sink; _request.sequence = sequence;
+    _request.bornMs = now; _request.waitMs = timeoutMs;
+    _request.slot = uint8_t(link - _links); _request.iface = link->iface;
+    _request.linkGeneration = _generations[_request.slot];
+    _request.interfaceGeneration = _d.pump->interfaceGeneration(link->iface);
+    memcpy(_request.id, hash, 16); // packet requests use the transmitted packet hash
+    // Diagnostic only, no behavior change -- the ID toggle's effect wasn't observable
+    // on real hardware otherwise (see TODO.md): whether this call even asked to
+    // identify, whether the Link already thought it was identified (reused from an
+    // earlier, possibly unidentified request to the same peer -- ensureOwnedLink()
+    // reuses an Active link rather than re-establishing one per page), and whether
+    // identify() actually queued a frame this time.
+    const bool wasIdentified = link->identified;
+    const bool identifyOk = !identifyOnRequest || identify(*link);
+    Serial.printf("[RUST-LINK] nomad request: identifyOnRequest=%d link.identified(before)=%d "
+                  "identify()queued=%d\n", identifyOnRequest, wasIdentified,
+                  identifyOnRequest && identifyOk && !wasIdentified);
+    if (!identifyOk || _request.sequence != sequence) {
         if (_request.sequence == sequence) _request = {};
         return false;
     }

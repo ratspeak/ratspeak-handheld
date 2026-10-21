@@ -28,12 +28,13 @@ rsLXMFLite, with device support built around the same messaging services.
 | Device | Support |
 | --- | --- |
 | LilyGO T-Deck Plus | Standalone and RNode |
-| LilyGO T-Pager (SX1262) | Standalone and RNode |
+| LilyGO T-Pager (SX1262 or LR1121) | Standalone and RNode |
 | M5Stack Cardputer Adv | Standalone and RNode; Cap LoRa-1262 required for LoRa |
 | Elecrow ThinkNode M9 | Standalone; RNode coming soon |
+| Seeed SenseCAP Indicator D1L | Standalone; build from source only, not yet on the web flasher |
 
-An SD card is optional for normal messaging. Downloads are available for all
-four devices.
+An SD card is optional for normal messaging. Downloads are available for the
+first four devices; D1L is build-from-source for now (see below).
 
 This is beta firmware. If something isn't working, open an issue with your
 device, firmware version, and the steps to reproduce it.
@@ -69,7 +70,8 @@ for controls and setup.
 T-Deck, T-Pager, and Cardputer Adv can record and play voice messages up to
 15 seconds long. Open **Voice message** in a conversation, record your clip,
 then preview and send it. Sending returns to the conversation with inline
-playback and delivery status. ThinkNode M9 has no supported audio hardware.
+playback and delivery status. ThinkNode M9 and SenseCAP Indicator D1L have
+no supported audio hardware.
 
 On Pager, move the wheel down from the composer to reach Voice and Send, then
 click to select. Cardputer also opens the recorder with **Ctrl+V**.
@@ -129,11 +131,16 @@ make doctor DEVICE=tdeck
 make package DEVICE=tdeck
 ```
 
-Use `DEVICE=tpager`, `DEVICE=cardputer` or `DEVICE=m9` for the other devices. Packages
-are written to `dist/`. Normal builds use the included Rust libraries; a Rust
-toolchain is not required.
+Use `DEVICE=tpager`, `DEVICE=cardputer`, `DEVICE=m9` or `DEVICE=sensecap_d1l`
+for the other devices. Packages are written to `dist/`. Normal builds use the
+included Rust libraries; a Rust toolchain is not required.
 
-M9 builds Standalone only and does not require Arduino CLI.
+M9 and D1L build Standalone only and do not require Arduino CLI.
+
+T-Pager with the LR1121 radio module (instead of the stock SX1262) builds
+through the same `DEVICE=tpager` pipeline, with `STANDALONE_ENV=tpager_lr1121`
+added to select that PlatformIO environment, e.g.
+`make build DEVICE=tpager STANDALONE_ENV=tpager_lr1121`.
 
 ## License
 

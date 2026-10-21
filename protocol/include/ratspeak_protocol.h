@@ -209,6 +209,38 @@ rs_handheld_status_t rs_handheld_lxmf_response_view(const uint8_t *data, size_t 
 rs_handheld_status_t rs_handheld_lxmf_delivery_cost(const uint8_t *data, size_t length,
                                                 uint8_t *known, uint8_t *cost);
 
+/* ---- NomadNet: node discovery and page requests ----
+ * NomadNet is a sibling Reticulum application to LXMF (a BBS-style page server, aspect
+ * "nomadnetwork.node"), not an LXMF concept. Its destination hash is a pure function of
+ * (aspect name, peer identity public key) -- derivable from an already-known contact's
+ * public key alone, no private key and no live nomadnetwork.node announce required. */
+
+/* Derive the nomadnetwork.node destination hash reachable from a peer's known public key. */
+rs_handheld_status_t rs_handheld_rns_nomad_node_hash(const uint8_t public_key[64], uint8_t out[16]);
+
+/* Bounded page/path length ever requested (NomadNet paths are short, e.g. "/page/index.mu").
+ * MUST equal RS_HANDHELD_NOMAD_PATH_MAX in src/nomad.rs (pinned there by a compile-time assert). */
+#define RS_HANDHELD_NOMAD_PATH_MAX 128u
+
+/* Bounded size of the already-msgpack-encoded form field data passed as `data`/`data_len`
+ * to rs_handheld_rns_nomad_request_build() below. A real NomadNet form is a handful of
+ * short fields (checkboxes, small text inputs); this is generous headroom for that, not a
+ * guess at an upper bound for arbitrary msgpack payloads. C++-side only (RustLinkManager/
+ * NomadBrowseClient) -- the Rust builder itself has no fixed ceiling on `data_len` beyond
+ * `out_cap`. */
+#define RS_HANDHELD_NOMAD_FIELD_DATA_MAX 256u
+
+/* Build a Reticulum Link request() plaintext: msgpack [timestamp, truncated_hash(path), data] --
+ * the real wire format a NomadNet node expects under context REQUEST (0x09), matching
+ * RNS.Link.request(path, data). NOT the same framing as rs_handheld_lxmf_get_request above --
+ * a different sibling application with its own bespoke operation/transient-id shape.
+ * `data` is caller-supplied, ALREADY msgpack-encoded bytes (e.g. an encoded field-value map for
+ * a form submission); pass data_len 0 (data may be NULL) for no form data (encodes msgpack Nil).
+ * Size `out` generously: header is 28 bytes plus max(1, data_len). */
+rs_handheld_status_t rs_handheld_rns_nomad_request_build(double timestamp,
+    const uint8_t *path, size_t path_len, const uint8_t *data, size_t data_len,
+    uint8_t *out, size_t out_cap, size_t *out_len);
+
 /* Build a signed lxmf.delivery announce_data for the active identity into `out` (capacity
  * out_cap); *out_len receives the byte length, out_dest_hash[16] the announce destination.
  * The announce random_hash is composed here as rng_seed(5) || announce_order_be(5). The latter
@@ -1031,8 +1063,11 @@ rs_handheld_status_t rs_handheld_rns_link_encrypt(const uint8_t key[64], const u
                                         size_t *out_len);
 
 /* Decrypt one link frame with the session key[64]. Writes the plaintext to out[out_cap] and *out_len.
- * Every malformed/forged frame returns RS_HANDHELD_ERR_CRYPTO (no padding/HMAC oracle). RS_HANDHELD_ERR_CAPACITY
- * if out is too small. */
+ * Every malformed/forged frame returns RS_HANDHELD_ERR_CRYPTO (no padding/HMAC oracle; HMAC is verified
+ * before anything else runs). RS_HANDHELD_ERR_CAPACITY if out is too small. PKCS7 padding-byte CONTENT is
+ * deliberately not re-validated past the HMAC check -- confirmed on real hardware that not every
+ * Reticulum peer (e.g. a microReticulum-based repeater) produces byte-exact padding, and the HMAC
+ * already authenticates the full frame, so this costs no real security. */
 rs_handheld_status_t rs_handheld_rns_link_decrypt(const uint8_t key[64], const uint8_t *data, size_t data_len,
                                         uint8_t *out, size_t out_cap, size_t *out_len);
 

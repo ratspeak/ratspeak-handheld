@@ -31,15 +31,32 @@ def merge_bin(source, target, env):
     output = os.path.join(build_dir, board.post_build_image)
 
     python = env.subst("$PYTHONEXE")
-    result = env.Execute(
-        f"{shlex.quote(python)} -m esptool --chip esp32s3 merge-bin "
-        f"--flash-mode dio {flash_freq}--flash-size {board.flash_size} "
-        f"-o {shlex.quote(output)} "
+    positional = (
         f"0x0000 {shlex.quote(os.path.join(build_dir, 'bootloader.bin'))} "
         f"0x8000 {shlex.quote(os.path.join(build_dir, 'partitions.bin'))} "
         f"0xe000 {shlex.quote(boot_app0)} "
         f"{hex(slot.offset)} {shlex.quote(str(firmware))}"
     )
+    # esptool's merge subcommand/flag spelling has shifted release to release --
+    # merge_bin/--flash_mode/--output (older, underscore, long --output only) vs
+    # merge-bin/--flash-mode/-o (newer, hyphenated, short -o too). PlatformIO's own
+    # tool-esptoolpy resolution has drifted under the same declared version range
+    # before (confirmed on 2026-10-19), so this project can't assume which style a
+    # fresh install actually has -- try the older spelling first (seen working on
+    # every version encountered so far), fall back to the newer one.
+    legacy = (
+        f"--chip esp32s3 merge_bin "
+        f"--flash_mode dio {flash_freq.replace('--flash-freq', '--flash_freq')}--flash_size {board.flash_size} "
+        f"--output {shlex.quote(output)} {positional}"
+    )
+    modern = (
+        f"--chip esp32s3 merge-bin "
+        f"--flash-mode dio {flash_freq}--flash-size {board.flash_size} "
+        f"-o {shlex.quote(output)} {positional}"
+    )
+    result = env.Execute(f"{shlex.quote(python)} -m esptool {legacy}")
+    if result:
+        result = env.Execute(f"{shlex.quote(python)} -m esptool {modern}")
     if result:
         return result
     print(f"\n** Merged firmware written to: {output}")

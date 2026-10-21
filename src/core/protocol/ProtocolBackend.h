@@ -72,6 +72,24 @@ public:
     virtual handheld::rrc::Code rrcCommand(const handheld::rrc::Command&, const uint8_t*, size_t) { return handheld::rrc::Code::Offline; }
     virtual bool rrcContext(const uint8_t[16], const char*, const uint8_t*, handheld::storage::rrc::Context&) const { return false; }
 
+    // NomadNet raw-page browse (D1L Peers-menu feature). Default no-op: the "rust"
+    // backend is the only implementer today; a future backend without this capability
+    // simply reports Idle/unsupported rather than needing to implement it.
+    // fieldData/fieldDataLen: OPTIONAL, already-msgpack-encoded form field data (NULL/0
+    // for a plain page fetch); identify: off by default -- see NomadBrowseClient::
+    // start()'s doc comment for both.
+    virtual bool nomadBrowseStart(const uint8_t[64], const char*, uint32_t,
+                                   const uint8_t* = nullptr, size_t = 0, bool = false) { return false; }
+    virtual void nomadBrowseCancel() {}
+    virtual uint8_t nomadBrowseStatus() const { return 0; } // 0 == NomadBrowseClient::Status::Idle
+    virtual uint32_t nomadBrowseRequestId() const { return 0; }
+    virtual uint8_t nomadBrowseAttempt() const { return 0; }
+    // The real nomadnetwork.node destination hash being browsed (see
+    // NomadBrowseClient::destHash()), hex-encoded. Empty string if no browse has run yet.
+    virtual String nomadBrowseDestHashHex() const { return String(); }
+    virtual size_t nomadBrowsePageText(char*, size_t) const { return 0; }
+    virtual const char* nomadBrowseFailureReason() const { return nullptr; }
+
     // Admission copies spans and reserves a terminal persistence result. Only a
     // Ready/Committed result means saved; each accepted ticket must be acknowledged.
     virtual handheld::outgoing::Submission lxmfSubmit(const uint8_t dest[16],

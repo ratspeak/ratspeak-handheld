@@ -66,7 +66,7 @@ void DeviceDiagnostics::printDiagnostics() {
                           loraIf->airtimeUtilization() * 100.0f);
         }
         Serial.printf("IQ invert: %s\n", radio.getInvertIQ() ? "ON" : "off");
-#if defined(RSM9)
+#if defined(RSM9) || defined(RSRADIO_LR11X0) || defined(RSSENSECAPD1L)
         radio.printDiagnostics();
 #else
         Serial.printf("SyncWord regs: 0x%02X%02X\n",
@@ -577,7 +577,7 @@ void DeviceDiagnostics::pollResults() {
     if (remoteUi && remoteUi->result(readyData, readyLength)) {
         bool connected = true;
         size_t available = diagnostics::RemoteUiReplyDelivery::TxCapacity;
-#if (defined(RSDECK) && ARDUINO_USB_CDC_ON_BOOT && ARDUINO_USB_MODE) || defined(RSM9)
+#if (defined(RSDECK) && ARDUINO_USB_CDC_ON_BOOT && ARDUINO_USB_MODE) || defined(RSM9) || defined(RSSENSECAPD1L)
         // Admit whole replies to the bounded HWCDC/UART transmit queue.
         // On HWCDC this also lets IN_EMPTY establish the connection and
         // avoids its offline FIFO path silently discarding the reply.

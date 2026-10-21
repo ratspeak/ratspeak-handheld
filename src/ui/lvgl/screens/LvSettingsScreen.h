@@ -67,6 +67,7 @@ public:
     void refreshUI() override;
     bool handleKey(const KeyEvent& event) override;
     bool handleLongPress() override;
+    bool wantsVirtualKeyboard() const override { return _textEditing; }
 
     void setUserConfig(UserConfig* cfg) {
         _cfg = cfg;

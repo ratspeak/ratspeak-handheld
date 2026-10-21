@@ -25,7 +25,7 @@
 #if HAS_GPS
 #include "hal/GPSManager.h"
 #endif
-#include "radio/SX1262.h"
+#include "radio/BoardRadio.h"
 #include "input/InputManager.h"
 #include "input/HotkeyManager.h"
 #include "UIManager.h"
@@ -89,10 +89,14 @@ SET_LOOP_TASK_STACK_SIZE(16384);
 // Do NOT use SPI2_HOST (IDF constant = 1) — Arduino treats index 1 as HSPI/SPI3!
 SPIClass sharedSPI(FSPI);
 
-SX1262 radio(&sharedSPI,
+#if defined(RATPAGER_LR1121)
+BoardRadio radio(&sharedSPI);
+#else
+BoardRadio radio(&sharedSPI,
     LORA_CS, SPI_SCK, SPI_MOSI, SPI_MISO,
     LORA_RST, LORA_IRQ, LORA_BUSY, LORA_RXEN,
     LORA_HAS_TCXO, LORA_DIO2_AS_RF_SWITCH);
+#endif
 
 Display display;
 #if HAS_TOUCH
@@ -486,7 +490,7 @@ void setup() {
     pinMode(SD_CS, OUTPUT);   digitalWrite(SD_CS, HIGH);
 
     // Mount flash before radio bring-up so persisted RF settings are used from
-    // the first SX1262 init, instead of always booting at the US default first.
+    // the first radio init, instead of always booting at the US default first.
     Serial.println("[BOOT] Mounting flash for early config...");
     if (flash.begin()) {
         flashMounted = true;
@@ -506,11 +510,19 @@ void setup() {
         radio.begin(userConfig.settings().loraFrequency)) {
         radioOnline = true;
         applyRadioSettingsToHardware(userConfig.settings(), "RADIO");
+#if defined(RATPAGER_LR1121)
+        Serial.printf("[RADIO] LR1121 online at %lu Hz\n",
+                      (unsigned long)userConfig.settings().loraFrequency);
+    } else {
+        Serial.println("[RADIO] LR1121 not detected!");
+    }
+#else
         Serial.printf("[RADIO] SX1262 online at %lu Hz\n",
                       (unsigned long)userConfig.settings().loraFrequency);
     } else {
         Serial.println("[RADIO] SX1262 not detected!");
     }
+#endif
 
     // SD card init (shared SPI, right after radio)
     bool sdInitializationFailed = false;
@@ -527,12 +539,15 @@ void setup() {
     }
 
     // Verify radio SPI still works after SD init
+    // (SX1262-only register probe; LR1121 has no equivalent raw read exposed yet)
+#if !defined(RATPAGER_LR1121)
     if (radioOnline) {
         uint8_t sw_msb = radio.readRegister(0x0740);
         uint8_t sw_lsb = radio.readRegister(0x0741);
         Serial.printf("[BOOT] Radio SPI pre-display: syncword=0x%02X%02X %s\n",
             sw_msb, sw_lsb, (sw_msb == 0xFF && sw_lsb == 0xFF) ? "DEAD!" : "OK");
     }
+#endif
 
     // Step 5: Display HAL — LovyanGFX + ST7796U
     // LovyanGFX's Bus_SPI::init() calls spi_bus_initialize() which will
@@ -557,12 +572,14 @@ void setup() {
     Serial.println("[BOOT] LVGL initialized");
 
     // Verify radio SPI survives display init
+#if !defined(RATPAGER_LR1121)
     if (radioOnline) {
         uint8_t sw_msb = radio.readRegister(0x0740);
         uint8_t sw_lsb = radio.readRegister(0x0741);
         Serial.printf("[BOOT] Radio SPI post-display: syncword=0x%02X%02X %s\n",
             sw_msb, sw_lsb, (sw_msb == 0xFF && sw_lsb == 0xFF) ? "DEAD!" : "OK");
     }
+#endif
 
     // Step 6: UI manager (initializes both legacy and LVGL UI layers)
     ui.begin();

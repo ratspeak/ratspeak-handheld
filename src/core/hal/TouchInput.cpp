@@ -3,6 +3,60 @@
 
 TouchInput* TouchInput::_instance = nullptr;
 
+#if defined(RSSENSECAPD1L)
+bool TouchInput::begin() {
+    _instance = this;
+    _i2cAddress = TOUCH_I2C_ADDR;
+    Wire.beginTransmission(_i2cAddress);
+    if (Wire.endTransmission() != 0) {
+        Serial.printf("[TOUCH] FT6336 not found at 0x%02X\n", _i2cAddress);
+        return false;
+    }
+    Serial.printf("[TOUCH] FT6336 found at 0x%02X\n", _i2cAddress);
+    return true;
+}
+
+void TouchInput::update() { readFT6336(); }
+
+// FocalTech FT5x06-family register map (standard across the whole family,
+// including the FT6336U) — not a port of LovyanGFX's native Touch_FT5x06
+// driver, which permanently breaks this board's shared I2C bus (confirmed
+// in meshcore-dev's own port of this exact hardware: its low-level
+// Wire teardown/restore cycle never recovers, taking the IO expander down
+// with it, not just touch itself). Plain register reads over the ordinary
+// Wire object only.
+bool TouchInput::readFT6336() {
+    Wire.beginTransmission(_i2cAddress);
+    Wire.write(0x02);  // TD_STATUS: touch point count
+    if (Wire.endTransmission() != 0) { _touched = false; return false; }
+    Wire.requestFrom(_i2cAddress, (uint8_t)1);
+    if (!Wire.available()) { _touched = false; return false; }
+    const uint8_t touchCount = Wire.read() & 0x0F;
+    if (touchCount == 0) { _touched = false; return false; }
+
+    Wire.beginTransmission(_i2cAddress);
+    Wire.write(0x03);  // TOUCH1_XH..TOUCH1_YL (4 bytes)
+    if (Wire.endTransmission() != 0) { _touched = false; return false; }
+    Wire.requestFrom(_i2cAddress, (uint8_t)4);
+    if (Wire.available() < 4) { _touched = false; return false; }
+    const uint8_t xh = Wire.read(), xl = Wire.read(), yh = Wire.read(), yl = Wire.read();
+    int16_t rawX = ((xh & 0x0F) << 8) | xl;
+    int16_t rawY = ((yh & 0x0F) << 8) | yl;
+
+    // Confirmed via real on-device coordinate measurements in meshcore-dev's
+    // port of this exact board — the touch chip's native frame is rotated
+    // 180 degrees relative to the display's logical drawing frame; both
+    // axes need inverting. Not re-derived theory; measured fact.
+    _x = DISPLAY_WIDTH - 1 - rawX;
+    _y = DISPLAY_HEIGHT - 1 - rawY;
+    if (_x < 0) _x = 0; else if (_x >= DISPLAY_WIDTH) _x = DISPLAY_WIDTH - 1;
+    if (_y < 0) _y = 0; else if (_y >= DISPLAY_HEIGHT) _y = DISPLAY_HEIGHT - 1;
+    _touched = true;
+    return true;
+}
+
+#else
+
 bool TouchInput::begin() {
     _instance = this;
 
@@ -105,6 +159,8 @@ bool TouchInput::readGT911() {
 
     return true;
 }
+
+#endif  // RSSENSECAPD1L
 
 #else
 bool TouchInput::begin() { return false; }

@@ -1,5 +1,5 @@
 #include "config/BoardConfig.h"
-#if defined(RSDECK) || defined(RSM9)
+#if defined(RSDECK) || defined(RSM9) || defined(RSSENSECAPD1L)
 #include "runtime/LvglApplication.h"
 #include "LvMemory.h"
 #include "runtime/FactoryResetRecovery.h"
@@ -30,6 +30,9 @@
 #endif
 #include "hal/Keyboard.h"
 #include "hal/Power.h"
+#if defined(RSSENSECAPD1L)
+#include "hal/IOExpander.h"
+#endif
 #if defined(RSM9)
 #include "hal/GnssPower.h"
 #endif
@@ -46,6 +49,9 @@
 #include "screens/LvBootScreen.h"
 #include "screens/LvHomeScreen.h"
 #include "screens/LvNodesScreen.h"
+#if defined(RSSENSECAPD1L)
+#include "screens/LvNomadBrowserScreen.h"
+#endif
 #include "screens/LvMessagesScreen.h"
 #include "LvVoicePanel.h"
 #include "voice/VoiceInput.h"
@@ -54,6 +60,7 @@
 #include "screens/LvSettingsScreen.h"
 #include "screens/LvHelpOverlay.h"
 #include "screens/LvQrOverlay.h"
+#include "LvVirtualKeyboard.h"
 #include "screens/LvNameInputScreen.h"
 #include "screens/LvTimezoneScreen.h"
 #include "screens/LvDataCleanScreen.h"
@@ -102,6 +109,9 @@ SPIClass sharedSPI(FSPI);
 
 #if defined(RSM9)
 BoardRadio radio(&sharedSPI);
+#elif defined(RSSENSECAPD1L)
+IOExpander expander;
+BoardRadio radio(&sharedSPI, &expander);
 #else
 BoardRadio radio(&sharedSPI,
     LORA_CS, SPI_SCK, SPI_MOSI, SPI_MISO,
@@ -151,6 +161,9 @@ GPSManager gps;
 LvBootScreen lvBootScreen;
 LvHomeScreen lvHomeScreen;
 LvNodesScreen lvNodesScreen;
+#if defined(RSSENSECAPD1L)
+LvNomadBrowserScreen lvNomadBrowserScreen;
+#endif
 LvMessagesScreen lvMessagesScreen;
 LvVoicePanel lvVoicePanel;
 LvContactsScreen lvContactsScreen;
@@ -158,12 +171,27 @@ LvMessageView lvMessageView;
 LvSettingsScreen lvSettingsScreen;
 LvHelpOverlay lvHelpOverlay;
 LvQrOverlay lvQrOverlay;
+LvVirtualKeyboard lvVirtualKeyboard;
 LvNameInputScreen lvNameInputScreen;
 LvTimezoneScreen lvTimezoneScreen;
 LvDataCleanScreen lvDataCleanScreen;
 
 // Tab-screen mapping (4 tabs) — LVGL versions
 LvScreen* lvTabScreens[LvTabBar::TAB_COUNT] = {};
+
+// Every path that switches to a tab's screen (the tab bar's own callback,
+// plus keyboard/trackball tab-cycling below) goes through here, not a bare
+// ::ui.setScreen(lvTabScreens[tab]) -- the Nomad tab needs to land on its
+// favorites "home" state, not whatever peer was last browsed (openFor()
+// leaves _peerHex set after you back out of a browse; entering via the tab
+// bar is not the same as entering via Peers' per-contact action, which
+// calls openFor() itself before switching screens).
+void enterTab(int tab) {
+#if defined(RSSENSECAPD1L)
+    if (tab == LvTabBar::TAB_NOMAD) lvNomadBrowserScreen.openHome();
+#endif
+    if (lvTabScreens[tab]) ::ui.setScreen(lvTabScreens[tab]);
+}
 
 // --- State ---
 bool radioOnline = false;
@@ -421,7 +449,7 @@ void handheld::lvgl_application::setup() {
     Power::enablePeripherals();
 
     // Step 2: Serial
-#if (ARDUINO_USB_CDC_ON_BOOT && ARDUINO_USB_MODE) || defined(RSM9)
+#if (ARDUINO_USB_CDC_ON_BOOT && ARDUINO_USB_MODE) || defined(RSM9) || defined(RSSENSECAPD1L)
     // Fit an entire semantic reply plus ordinary logs before any writer starts.
     // HWCDC's default 256-byte queue forces large replies through its lossy
     // disconnected fallback or blocking drain path.
@@ -433,7 +461,7 @@ void handheld::lvgl_application::setup() {
 #endif
 #endif
     Serial.begin(SERIAL_BAUD);
-#if (ARDUINO_USB_CDC_ON_BOOT && ARDUINO_USB_MODE) || defined(RSM9)
+#if (ARDUINO_USB_CDC_ON_BOOT && ARDUINO_USB_MODE) || defined(RSM9) || defined(RSSENSECAPD1L)
     if (!remoteUiTxReady) {
         remoteUi.close();
         Serial.println("[SERIAL] Serial UI unavailable: TX queue allocation failed");
@@ -489,10 +517,17 @@ void handheld::lvgl_application::setup() {
     Wire.setTimeOut(20);
 
     // Step 3.5: Initialize shared SPI bus
+#if defined(RSSENSECAPD1L)
+    // D1L claims the shared SPI peripheral later, after the display's
+    // bit-banged init sequence is done with these same physical pins (see
+    // the Step 4 block below) — not here. No LORA_CS/SD_CS to deassert
+    // either: CS is expander-routed, and there's no SD hardware.
+#else
     sharedSPI.begin(SPI_SCK, SPI_MISO, SPI_MOSI);
     // Deassert all slave CS pins to prevent bus contention
     pinMode(LORA_CS, OUTPUT); digitalWrite(LORA_CS, HIGH);
     pinMode(SD_CS, OUTPUT);   digitalWrite(SD_CS, HIGH);
+#endif
     bootTraceStage("i2c-spi");
 
     // Mount flash before radio bring-up so persisted RF settings are used from
@@ -508,6 +543,52 @@ void handheld::lvgl_application::setup() {
     Theme::setScheme(userConfig.settings().themeLight ? Theme::Scheme::LIGHT : Theme::Scheme::DARK);
     bootTraceStage("early-flash-config");
 
+#if defined(RSSENSECAPD1L)
+    // Step 4 (D1L): Display MUST init BEFORE radio claims the shared real
+    // SPI pins (41/47/48) — the opposite order from every other board here.
+    // Confirmed-necessary: the display's bit-banged init commands share
+    // those physical pins with the radio's SPI peripheral; claiming them
+    // first only works by electrical coincidence and fails specifically
+    // across a real power cycle (the hardest-won bug in this board's
+    // bring-up — see TODO.md). Also no SD on this board.
+    bool sdInitializationFailed = false;
+    if (!expander.begin(Wire, IO_EXPANDER_ADDR)) {
+        Serial.println("[BOOT] FATAL: IO expander not found on I2C bus");
+        while (true) delay(1000);
+    }
+    bootTraceStage("io-expander-init");
+
+    ::display.setExpander(&expander);
+    if (!::display.begin()) {
+        Serial.println("[BOOT] Display initialization failed; restart to retry");
+        while (true) delay(1000);
+    }
+    Serial.println("[BOOT] Display initialized (LovyanGFX RGB/DPI)");
+    bootTraceStage("display-init");
+
+    if (!::display.beginLVGL()) {
+        ::display.gfx().fillScreen(TFT_BLACK);
+        ::display.gfx().setTextColor(TFT_RED, TFT_BLACK);
+        ::display.gfx().drawString("LVGL/PSRAM failed", 24, 106);
+        ::display.setBrightness(160);
+        while (true) delay(1000);
+    }
+    Serial.println("[BOOT] LVGL initialized");
+    bootTraceStage("lvgl-init");
+
+    Serial.println("[BOOT] Initializing radio...");
+    sharedSPI.begin(SPI_SCK, SPI_MISO, SPI_MOSI);
+    if (flash.resetState() == FlashStore::ResetState::Clear &&
+        radio.begin(userConfig.settings().loraFrequency)) {
+        radioOnline = true;
+        applyRadioSettingsToHardware(userConfig.settings(), "RADIO");
+        Serial.printf("[RADIO] LoRa online at %lu Hz\n",
+                      (unsigned long)userConfig.settings().loraFrequency);
+    } else {
+        Serial.println("[RADIO] LoRa unavailable");
+    }
+    bootTraceStage("radio-init");
+#else
     // Step 4: Radio + SD init BEFORE display
     // Radio and SD must init while SPIClass exclusively owns SPI2_HOST.
     // LovyanGFX's init() later joins the bus via spi_bus_add_device().
@@ -528,6 +609,7 @@ void handheld::lvgl_application::setup() {
     bool sdInitializationFailed = false;
     digitalWrite(LORA_CS, HIGH);
     delay(10);
+#if HAS_SD
     if (sdStore.begin(&sharedSPI, SD_CS)) {
         if (flash.resetState() == FlashStore::ResetState::Clear) {
             sdHadExistingData = sdStore.hasExistingData();
@@ -537,6 +619,7 @@ void handheld::lvgl_application::setup() {
     } else {
         Serial.println("[SD] Not detected");
     }
+#endif
     bootTraceStage("sd-probe");
 
 #if !defined(RSM9)
@@ -582,6 +665,7 @@ void handheld::lvgl_application::setup() {
             sw_msb, sw_lsb, (sw_msb == 0xFF && sw_lsb == 0xFF) ? "DEAD!" : "OK");
     }
 #endif
+#endif  // defined(RSSENSECAPD1L)
 
     // Step 6: UI manager (initializes both legacy and LVGL UI layers)
     ::ui.begin();
@@ -614,6 +698,9 @@ void handheld::lvgl_application::setup() {
     trackball.begin();
     inputManager.begin(&keyboard, &trackball, &touch);
     LvInput::init(&keyboard, &trackball, &touch);
+#elif HAS_TOUCH
+    inputManager.begin(&keyboard, &touch);
+    LvInput::init(&keyboard, &touch);
 #else
     inputManager.begin(&keyboard);
     LvInput::init(&keyboard);
@@ -626,7 +713,7 @@ void handheld::lvgl_application::setup() {
 
     // A reset intent is checked before early config load. Display and input
     // are now ready; recover explicitly before any config/identity import.
-    handheld::factoryResetRecovery(flash, sdStore, keyboard, ::display.gfx(), []() { ESP.restart(); });
+    handheld::factoryResetRecovery(flash, sdStore, keyboard, ::display.gfx(), []() { ESP.restart(); }, &touch);
 
     // Refuse a known SD initialization failure before dependent imports/writes.
     if (sdInitializationFailed) {
@@ -646,8 +733,7 @@ void handheld::lvgl_application::setup() {
     hotkeys.registerHotkey('r', "RSSI Monitor", onHotkeyRssiMonitor);
     hotkeys.setTabCycleCallback([](int dir) {
         ::ui.lvTabBar().cycleTab(dir);
-        int tab = ::ui.lvTabBar().getActiveTab();
-        if (lvTabScreens[tab]) ::ui.setScreen(lvTabScreens[tab]);
+        enterTab(::ui.lvTabBar().getActiveTab());
     });
     lvBootScreen.setProgress(0.58f, "Hotkeys registered");
     // (LVGL boot renders via lv_timer_handler in setProgress)
@@ -719,7 +805,7 @@ void handheld::lvgl_application::setup() {
     // An SD recovery on first boot may supply the palette; re-sync it.
     {
         Theme::Scheme want = userConfig.settings().themeLight ? Theme::Scheme::LIGHT : Theme::Scheme::DARK;
-        if (want != Theme::scheme()) { Theme::setScheme(want); ::ui.applyTheme(); }
+        if (want != Theme::scheme()) { Theme::setScheme(want); ::ui.applyTheme(); lvVirtualKeyboard.applyTheme(); }
     }
 #if HAS_TRACKBALL
     inputManager.setTrackballSpeed(userConfig.settings().trackballSpeed);
@@ -982,6 +1068,9 @@ void handheld::lvgl_application::setup() {
     ::ui.setVoicePanel(&lvVoicePanel);
     lvContactsScreen.setService(&serviceClient);
     lvNodesScreen.setService(&serviceClient);
+#if defined(RSSENSECAPD1L)
+    lvNomadBrowserScreen.setService(&serviceClient);
+#endif
     lvHomeScreen.setService(&serviceClient);
     // Wire up LVGL screen dependencies
     lvHomeScreen.setBackend(&serviceClient.protocol);
@@ -1087,6 +1176,9 @@ void handheld::lvgl_application::setup() {
         ::ui.lvTabBar().setActiveTab(LvTabBar::TAB_MSGS);
         ::ui.setScreen(&lvMessageView);
     });
+#if defined(RSSENSECAPD1L)
+    lvNodesScreen.setNomadBrowserScreen(&lvNomadBrowserScreen);
+#endif
 
     lvMessagesScreen.setAnnounceManager(&serviceClient.nodes);
     lvMessagesScreen.setBackend(&serviceClient.protocol);
@@ -1129,21 +1221,26 @@ void handheld::lvgl_application::setup() {
     lvSettingsScreen.setShowQrCallback(showQr);
     lvSettingsScreen.setShowHelpCallback(onHotkeyHelp);
     lvContactsScreen.setShowQrCallback(showQr);
+    lvHomeScreen.setShowQrCallback(showQr);
 
     // LVGL help overlay
     lvHelpOverlay.create();
     lvQrOverlay.create();
+#if HAS_TOUCH
+    lvVirtualKeyboard.create();
+#endif
 
     // Tab bar callbacks — LVGL
     lvTabScreens[LvTabBar::TAB_HOME]     = &lvHomeScreen;
     lvTabScreens[LvTabBar::TAB_CONTACTS] = &lvContactsScreen;
     lvTabScreens[LvTabBar::TAB_MSGS]     = &lvMessagesScreen;
     lvTabScreens[LvTabBar::TAB_NODES]    = &lvNodesScreen;
+#if defined(RSSENSECAPD1L)
+    lvTabScreens[LvTabBar::TAB_NOMAD]    = &lvNomadBrowserScreen;
+#endif
     lvTabScreens[LvTabBar::TAB_SETTINGS] = &lvSettingsScreen;
 
-    ::ui.lvTabBar().setTabCallback([](int tab) {
-        if (lvTabScreens[tab]) ::ui.setScreen(lvTabScreens[tab]);
-    });
+    ::ui.lvTabBar().setTabCallback([](int tab) { enterTab(tab); });
     bootTraceStage("screen-wiring");
 
     // Data clean screen (first boot only — when SD has old data)
@@ -1246,7 +1343,7 @@ void handheld::lvgl_application::setup() {
 static void applyUiSettings() {
     const auto& s = serviceClient.config.settings();
     const auto scheme = s.themeLight ? Theme::Scheme::LIGHT : Theme::Scheme::DARK;
-    if (scheme != Theme::scheme()) { Theme::setScheme(scheme); ::ui.applyTheme(); }
+    if (scheme != Theme::scheme()) { Theme::setScheme(scheme); ::ui.applyTheme(); lvVirtualKeyboard.applyTheme(); }
     powerMgr.setBrightness(s.brightness);
     powerMgr.setDimTimeout(s.screenDimTimeout);
     powerMgr.setOffTimeout(s.screenOffTimeout);
@@ -1300,19 +1397,19 @@ static void dispatchKey(const KeyEvent& evt) {
                     bool tabRight = (evt.character == '/') || evt.right;
                     if (tabLeft) {
                         ::ui.lvTabBar().cycleTab(-1);
-                        int tab = ::ui.lvTabBar().getActiveTab();
-                        if (lvTabScreens[tab]) ::ui.setScreen(lvTabScreens[tab]);
+                        enterTab(::ui.lvTabBar().getActiveTab());
                     }
                     if (tabRight) {
                         ::ui.lvTabBar().cycleTab(1);
-                        int tab = ::ui.lvTabBar().getActiveTab();
-                        if (lvTabScreens[tab]) ::ui.setScreen(lvTabScreens[tab]);
+                        enterTab(::ui.lvTabBar().getActiveTab());
                     }
                 }
             }
         }
     }
 }
+
+void handheld::lvgl_application::injectKeyEvent(const KeyEvent& evt) { dispatchKey(evt); }
 
 // Both input sources use the screen's existing hold action. QR keeps ownership;
 // an unconsumed hold blanks the screen, as the trackball hold always has.
@@ -1499,6 +1596,17 @@ void handheld::lvgl_application::loop() {
         dispatchKey(evt);
     }
 
+#if HAS_TOUCH
+    // On-screen keyboard: shown whenever the active screen has a text-entry
+    // sub-state open. Cheap per-tick poll — robust against screens toggling
+    // that state without a full screen transition (no onEnter/onExit).
+    {
+        LvScreen* screen = ::ui.getScreen();
+        lvVirtualKeyboard.setActive(screen && screen->wantsVirtualKeyboard());
+        if (lvVirtualKeyboard.takeDismissed() && screen) screen->onVirtualKeyboardDismissed();
+    }
+#endif
+
     handheld::diagnostics::RemoteUiRequest remoteRequest;
     bool remotePending = remoteUi.take(remoteRequest);
     bool remoteInput = false, remoteWokeOnly = false;
@@ -1541,7 +1649,33 @@ void handheld::lvgl_application::loop() {
     }
 
     lvVoicePanel.poll(powerMgr.isScreenOn() && serviceClient.available() && serviceClient.status().state==handheld::ServiceState::Running && !lvHelpOverlay.isVisible() && !lvQrOverlay.isVisible());
-    if(lvVoicePanel.active() && powerMgr.isScreenOn()) powerMgr.activity();
+    // DIAGNOSTIC (temporary): the block below unconditionally resets the idle timer
+    // every tick the memo UI reports "busy" -- if a memo phase ever gets stuck
+    // (never reaching Idle/Review/Sent/Closed), this is what would keep the screen
+    // permanently on, or force DIMMED -> ACTIVE with no real key/touch input. Logs
+    // once when it forces a wake from DIM, then every 5s while it keeps holding the
+    // screen on, so a stuck phase shows up with its duration. Remove once the
+    // display-stays-on report is confirmed or ruled out.
+    static uint32_t diagVoicePanelSince = 0;
+    static uint32_t diagVoicePanelLastLog = 0;
+    if (lvVoicePanel.active() && powerMgr.isScreenOn()) {
+        const uint32_t now = millis();
+        if (diagVoicePanelSince == 0) {
+            const bool wasDimmed = powerMgr.isDimmed();
+            diagVoicePanelSince = now;
+            diagVoicePanelLastLog = now;
+            Serial.printf("[POWER-DIAG] voicePanel.active() holding screen on, phase=%s%s\n",
+                          handheld::memo::description(lvVoicePanel.model().status()),
+                          wasDimmed ? " (forcing wake from DIM)" : "");
+        } else if (now - diagVoicePanelLastLog >= 5000) {
+            diagVoicePanelLastLog = now;
+            Serial.printf("[POWER-DIAG] voicePanel.active() still holding screen on after %lums, phase=%s\n",
+                          (unsigned long)(now - diagVoicePanelSince), handheld::memo::description(lvVoicePanel.model().status()));
+        }
+        powerMgr.activity();
+    } else {
+        diagVoicePanelSince = 0;
+    }
     audio.loop();
     powerMgr.loop();
     if (millis() - lastStatusUpdate >= 100) {

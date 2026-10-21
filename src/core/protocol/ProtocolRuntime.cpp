@@ -55,6 +55,10 @@ void secureZero(uint8_t* buf, size_t len) {
 
 }  // namespace
 
+String ProtocolRuntime::nomadBrowseDestHashHex() const {
+    return toHex(_nomadBrowse.destHash(), 16);
+}
+
 ProtocolRuntime::~ProtocolRuntime() {
     handheld::assertDeviceOwner(); end(); }
 
@@ -129,6 +133,10 @@ bool ProtocolRuntime::startEngines(FlashStore* flash, SDStore* sd, MessageStore*
     rs_handheld_voice_destination(_publicKey,_voiceHash);
     ld.ourVoiceHash = _voiceHash;
     _links.begin(ld);
+
+    handheld::NomadBrowseClient::Deps nd;
+    nd.ctx = _ctx; nd.clock = &_clock; nd.pump = &_pump; nd.links = &_links;
+    _nomadBrowse.begin(nd);
 
     RustResourceEngine::Deps rd;
     rd.links = &_links;
@@ -421,6 +429,7 @@ void ProtocolRuntime::loop() {
         pollPropagation();
         _lxmf.loop();
         _links.loop();
+        _nomadBrowse.loop();
         _rrc.loop();
         _voice.loop(handheld::voice::VoiceWorker::stopEpoch());
         _memos.poll(_clock.nowMs());
@@ -497,8 +506,8 @@ void ProtocolRuntime::onAnnounceEvent(const rs_handheld_announce_event_t& ev, ui
             rssi = _pump.lastLoraRssi();
             snr = _pump.lastLoraSnr();
         }
-        _announceMgr->receivedAnnounceEvent(ev.destination_hash, ev.identity_hash, ev.app_data,
-                                            ev.app_data_len, rssi, snr, hops);
+        _announceMgr->receivedAnnounceEvent(ev.destination_hash, ev.identity_hash, ev.public_key,
+                                            ev.app_data, ev.app_data_len, rssi, snr, hops);
     }
 }
 

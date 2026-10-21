@@ -28,6 +28,7 @@ public:
     bool unsaveNode(const std::string& hex);
     bool deleteContactByHex(const std::string& hex);
     bool setContactName(const std::string& hex, const std::string& name);
+    bool setContactFavorite(const std::string& hex, bool favorite);
     bool addManualContact(const std::string& hex, const std::string& name);
 private:
     friend class ServiceClient;
@@ -75,6 +76,18 @@ public:
     using RecordCompletion=std::function<void(const Result&,const storage::StoredRecordHeader&,const uint8_t*,size_t)>;
     uint32_t copyRecord(const storage::RecordKey&,RecordCompletion);
     uint32_t requestPeerName(const std::string& peer, TextCompletion completion);
+    // NomadNet raw-page browse (D1L Peers-menu feature): peer is the same saved-contact
+    // hex hash as requestPeerName. path is e.g. "/page/index.mu" (empty also means the
+    // index page -- see NomadService.inc); link navigation reuses this with whatever
+    // path a tapped Micron link names. completion receives the fetched page's raw
+    // decoded text (not yet Micron-rendered -- see ratspeak-handheld TODO.md).
+    // fieldData/fieldDataLen: OPTIONAL, already-msgpack-encoded form field data (a
+    // fixmap of name->value strings) for a form submission -- NULL/0 for a plain
+    // page fetch (every pre-existing call site). identify: off by default -- see
+    // NomadBrowseClient::start()'s doc comment. See NomadClient.inc's body layout.
+    uint32_t requestNomadBrowse(const std::string& peer, const std::string& path, TextCompletion completion,
+                                const uint8_t* fieldData = nullptr, size_t fieldDataLen = 0,
+                                bool identify = false);
     using PropagationCompletion = std::function<void(const Result&, const propagation::NodeView*, size_t)>;
     uint32_t requestPropagationNodes(PropagationCompletion);
     template<class Row> using RrcCompletion = std::function<void(const Result&, const Row*, size_t)>;

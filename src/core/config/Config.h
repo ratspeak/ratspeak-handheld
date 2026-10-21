@@ -101,11 +101,33 @@ enum RadioRegion : uint8_t {
 };
 
 static constexpr uint32_t REGION_FREQ[REGION_COUNT] = {
-    915000000, 868000000, 915000000, 923000000
+    915000000, 869463000, 915000000, 923000000
+};
+
+// Europe overrides the board's default link settings to match the most
+// common real-world EU868 combination among Reticulum/RNode users (per
+// reticulum.site/lora's observed-settings data: 869.463 MHz / 125 kHz /
+// SF8 / CR 4/5) — not a regulatory requirement, but the de facto community
+// default, chosen for interop. 22 dBm is the real ceiling on both the
+// SX1262 and LR1121 radios (no external PA on either module); the LR1121
+// path rejects an out-of-range request instead of clamping to it like the
+// SX1262 driver does, so this must be a value both radios actually support.
+// Other regions keep the board's own defaults, unchanged.
+static constexpr uint32_t REGION_BW[REGION_COUNT] = {
+    LORA_DEFAULT_BW, 125000, LORA_DEFAULT_BW, LORA_DEFAULT_BW
+};
+static constexpr uint8_t REGION_SF[REGION_COUNT] = {
+    LORA_DEFAULT_SF, 8, LORA_DEFAULT_SF, LORA_DEFAULT_SF
+};
+static constexpr uint8_t REGION_CR[REGION_COUNT] = {
+    LORA_DEFAULT_CR, 5, LORA_DEFAULT_CR, LORA_DEFAULT_CR
+};
+static constexpr int8_t REGION_TX_POWER[REGION_COUNT] = {
+    LORA_DEFAULT_TX_POWER, 22, LORA_DEFAULT_TX_POWER, LORA_DEFAULT_TX_POWER
 };
 
 static const char* const REGION_LABELS[REGION_COUNT] = {
-    "Americas (915)", "Europe (868)", "Australia (915)", "Asia (923)"
+    "Americas (915)", "Europe (869.463)", "Australia (915)", "Asia (923)"
 };
 
 // --- Serial Debug ---

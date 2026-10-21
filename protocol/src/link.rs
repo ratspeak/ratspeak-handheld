@@ -403,9 +403,86 @@ pub unsafe extern "C" fn rs_handheld_rns_link_encrypt(
     })
 }
 
+/// Link-frame decrypt with a lenient PKCS7 unpad: the length byte (1..=16, not past the data end)
+/// is validated, but unlike `rns_lite_core::crypto`'s strict unpad, every trailing padding byte is
+/// NOT required to equal that length. `rns_lite_core` deliberately stays byte-exact with the
+/// trusted `../rsReticulum` reference (see its own Cargo.toml), so this interop leniency belongs
+/// here instead of patching that shared dependency.
+///
+/// Confirmed on real hardware: a microReticulum-based repeater's own Token encrypt zero-fills
+/// padding bytes and only sets the final length byte (`00 00 00 00 05` instead of the strictly
+/// correct `05 05 05 05 05`), which a byte-exact PKCS7 unpad rejects even though the frame is
+/// entirely genuine -- its NomadNet response decrypts to perfectly valid Micron markup once the
+/// padding bytes' content stops being checked. This costs no real security: HMAC-SHA256 over the
+/// full `IV || ciphertext` is verified FIRST, below, so a forged/corrupted frame is already
+/// rejected before AES decrypt or unpad ever run; an attacker who can't forge that HMAC can't
+/// exploit lenient padding content either.
+fn lenient_link_decrypt(key: &[u8; LINK_KEY_LENGTH], data: &[u8], out: &mut [u8]) -> Result<usize, ()> {
+    use cbc::cipher::block_padding::NoPadding;
+    use cbc::cipher::{BlockDecryptMut, KeyIvInit};
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    use zeroize::Zeroize;
+
+    // IV(16) + >=1 ciphertext block(16) + HMAC(32).
+    if data.len() < 16 + 16 + 32 {
+        return Err(());
+    }
+    let split = data.len() - 32;
+    let signed_parts = &data[..split]; // IV || ciphertext
+    let received = &data[split..];
+
+    let mut mac = Hmac::<Sha256>::new_from_slice(&key[..32]).map_err(|_| ())?;
+    mac.update(signed_parts);
+    mac.verify_slice(received).map_err(|_| ())?;
+
+    let iv = &signed_parts[..16];
+    let ciphertext = &signed_parts[16..];
+    if ciphertext.is_empty() || !ciphertext.len().is_multiple_of(16) || ciphertext.len() > LINK_PADDED_MAX {
+        return Err(());
+    }
+    let mut buf = [0u8; LINK_PADDED_MAX];
+    buf[..ciphertext.len()].copy_from_slice(ciphertext);
+    let dec = match cbc::Decryptor::<aes::Aes256>::new_from_slices(&key[32..], iv) {
+        Ok(d) => d,
+        Err(_) => {
+            buf.zeroize();
+            return Err(());
+        }
+    };
+    let padded = match dec.decrypt_padded_mut::<NoPadding>(&mut buf[..ciphertext.len()]) {
+        Ok(p) => p,
+        Err(_) => {
+            buf.zeroize();
+            return Err(());
+        }
+    };
+
+    // Lenient PKCS7 unpad: trust the declared length, don't re-validate every padding byte's
+    // content (see doc comment above -- HMAC already authenticated the whole frame).
+    if padded.is_empty() {
+        buf.zeroize();
+        return Err(());
+    }
+    let pad = padded[padded.len() - 1] as usize;
+    if pad == 0 || pad > 16 || pad > padded.len() {
+        buf.zeroize();
+        return Err(());
+    }
+    let n = padded.len() - pad;
+    if out.len() < n {
+        buf.zeroize();
+        return Err(());
+    }
+    out[..n].copy_from_slice(&padded[..n]);
+    buf.zeroize();
+    Ok(n)
+}
+
 /// Decrypt one link frame with the session `key`. Writes the plaintext to `out`, `*out_len` its
-/// length. Every malformed/forged frame returns `ErrCrypto` (no padding/HMAC oracle). `ErrCapacity`
-/// if `out` is too small.
+/// length. Every malformed/forged frame returns `ErrCrypto` (no padding/HMAC oracle; HMAC is
+/// verified before anything else runs). `ErrCapacity` if `out` is too small. Padding-byte CONTENT
+/// is deliberately not re-validated past the HMAC check -- see [`lenient_link_decrypt`].
 ///
 /// # Safety
 /// `key` 64 readable bytes; `data` `data_len` readable; `out` `out_cap` writable; `out_len` writable.
@@ -425,16 +502,12 @@ pub unsafe extern "C" fn rs_handheld_rns_link_decrypt(
         // SAFETY: non-null + correctly sized per the contract.
         let data = unsafe { core::slice::from_raw_parts(data, data_len) };
         let out_slice = unsafe { core::slice::from_raw_parts_mut(out, out_cap) };
-        let keys = LinkKeys::from_combined(unsafe { &*key });
-        match rns_link::link_decrypt(&keys, data, out_slice) {
+        match lenient_link_decrypt(unsafe { &*key }, data, out_slice) {
             Ok(n) => {
                 unsafe { *out_len = n };
                 RsHandheldStatus::Ok
             }
-            Err(rns_lite_core::crypto::CryptoError::OutputTooSmall) => {
-                RsHandheldStatus::ErrCapacity
-            }
-            Err(_) => RsHandheldStatus::ErrCrypto,
+            Err(()) => RsHandheldStatus::ErrCrypto,
         }
     })
 }

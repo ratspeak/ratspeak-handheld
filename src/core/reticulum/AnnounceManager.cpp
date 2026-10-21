@@ -70,7 +70,7 @@ struct ContactFilter {
     bool allowObject() const { return root; }
     bool allowValue() const { return selected; }
     ContactFilter operator[](JsonString key) const {
-        return {false, root && (key == "hash" || key == "name" || key == "deleted")};
+        return {false, root && (key == "hash" || key == "name" || key == "deleted" || key == "key" || key == "favorite")};
     }
     template<class Index> ContactFilter operator[](Index) const { return {false, false}; }
 };
@@ -394,6 +394,7 @@ int AnnounceManager::findNodeIndexHex(const std::string& hash) const {
 }
 
 void AnnounceManager::receivedAnnounceEvent(const uint8_t destHash[16], const uint8_t identityHash[16],
+                                            const uint8_t publicKey[64],
                                             const uint8_t* appData, size_t appLen, int rssi,
                                             float snr, uint8_t hops) {
     handheld::assertDeviceOwner();
@@ -412,6 +413,9 @@ void AnnounceManager::receivedAnnounceEvent(const uint8_t destHash[16], const ui
         node.lastSeen = now; node.hops = hops;
         if (rssi) node.rssi = rssi;
         if (snr) node.snr = snr;
+        // A saved contact's on-disk key trails RAM until the next save cycle picks this up.
+        if (node.saved && memcmp(node.publicKey, publicKey, sizeof node.publicKey) != 0) _contactsDirty = true;
+        memcpy(node.publicKey, publicKey, sizeof node.publicKey);
     }
     // Background display/cache growth must leave the same reserve as Settings.
     // The protocol already owns the authenticated announce independently.
@@ -443,13 +447,14 @@ void AnnounceManager::receivedAnnounceEvent(const uint8_t destHash[16], const ui
             if (!handheld::config::Memory::admits(0)) return;
             if (rename) node.name.swap(nextName);
             if (rebind) node.identityHex.swap(nextIdentity);
-            if (rename && node.saved) _contactsDirty = true; // Contact records hold only hash and name.
+            if (rename && node.saved) _contactsDirty = true;
             return;
         }
 
         // Prepare the entire replacement before evicting any live peer.
         DiscoveredNode node;
         node.hash = rs::Bytes(destHash, 16);
+        memcpy(node.publicKey, publicKey, sizeof node.publicKey);
         if (!name.empty()) node.name.assign(name.data(), name.size());
         else {
             const auto cached = _nameCache.find(destination);
@@ -726,6 +731,10 @@ bool AnnounceManager::saveContact(const DiscoveredNode& node) {
         handheld::assertDeviceOwner();
         JsonDocument doc;
         doc["hash"] = node.hash.toHex(); doc["name"] = node.name;
+        bool hasKey = false;
+        for (uint8_t b : node.publicKey) if (b) { hasKey = true; break; }
+        if (hasKey) doc["key"] = rs::Bytes(node.publicKey, sizeof node.publicKey).toHex();
+        if (node.nomadFavorite) doc["favorite"] = true;
         String json;
         if (doc.overflowed() || serializeJson(doc, json) != measureJson(doc)) return false;
         doc.clear(); // Release the JSON pool before the bounded mirror parser.
@@ -786,6 +795,22 @@ bool AnnounceManager::setContactName(const std::string& hexHash, const std::stri
     } catch (const std::bad_alloc&) { return false; }
 }
 
+bool AnnounceManager::setContactFavorite(const std::string& hexHash, bool favorite) {
+    try {
+        handheld::assertDeviceOwner();
+        const int index = findNodeIndexHex(hexHash);
+        if (index < 0) return false;
+        auto& node = _nodes[size_t(index)];
+        if (node.nomadFavorite == favorite) return true;
+        auto candidate = node;
+        candidate.nomadFavorite = favorite;
+        candidate.saved = true; // Favoriting implies keeping the contact, same as naming one does.
+        if (!handheld::config::Memory::admits(0) || !saveContact(candidate)) return false;
+        node = std::move(candidate);
+        return true;
+    } catch (const std::bad_alloc&) { return false; }
+}
+
 void AnnounceManager::loadContacts() {
     handheld::assertDeviceOwner();
     handheld::storage::StorageLease lease;
@@ -811,6 +836,8 @@ void AnnounceManager::loadContacts() {
             const std::string hexHash = input.document["hash"].as<std::string>();
             const bool deleted = input.document["deleted"] | false;
             const std::string safeName = sanitizeName(input.document["name"] | "");
+            const std::string hexKey = input.document["key"] | "";
+            const bool favorite = input.document["favorite"] | false;
             input.document.clear();
             if (!canonical) {
                 const ContactSource source(input.file);
@@ -826,6 +853,11 @@ void AnnounceManager::loadContacts() {
             node.hash = hash;
             node.name = safeName.empty() ? hexHash.substr(0, 12) : safeName;
             node.saved = true;
+            node.nomadFavorite = favorite;
+            if (hexKey.size() == sizeof(node.publicKey) * 2) {
+                rs::Bytes key; key.assignHex(hexKey.c_str());
+                if (key.size() == sizeof(node.publicKey)) memcpy(node.publicKey, key.data(), sizeof(node.publicKey));
+            }
             _nodes.push_back(std::move(node));
         }
         dir.close();

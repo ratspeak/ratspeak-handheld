@@ -135,6 +135,7 @@ bool DeviceService::readyForCommand() {
     if (request->operation == Operation::VoiceCommand || request->operation == Operation::MemoCommand ||
         request->operation == Operation::PeerName || request->operation == Operation::Nodes ||
         request->operation == Operation::PropagationNodes || request->operation == Operation::PropagationSync ||
+        request->operation == Operation::NomadBrowse || request->operation == Operation::CancelNomadBrowse ||
         (request->operation >= Operation::RrcHubs && request->operation <= Operation::RrcContext && !rrcCatalog(request->operation))) return true;
     if (!_messages.deferredIO()) return false;
     switch (request->operation) {
@@ -175,6 +176,7 @@ void DeviceService::poll() {
     pollSends();
     pollStorageWrites();
     pollRrcCommands();
+    pollNomadBrowse();
     if (_backend.pollRadioBeforeBlockingWork()) pollSettings();
     if (_status.state == ServiceState::Running && millis() - _lastIdentityRetry >= 30000 &&
         _backend.pollRadioBeforeBlockingWork()) {
@@ -327,6 +329,10 @@ void DeviceService::refreshStatus() {
     _status.rrc = _backend.rrcStatus();
     _status.voice = _backend.voiceStatus();
     _status.memo = _backend.memoStatus();
+    _status.nomadStatus = _backend.nomadBrowseStatus();
+    _status.nomadRevision = _backend.nomadBrowseRequestId();
+    _status.nomadAttempt = _backend.nomadBrowseAttempt();
+    strlcpy(_status.nomadDestHex, _backend.nomadBrowseDestHashHex().c_str(), sizeof _status.nomadDestHex);
     _status.flash = _flash.isReady();
     _status.sd = _sd.isReady();
     if ((!_lastStorageStatus || _lastStatus - _lastStorageStatus >= 5000) &&
@@ -359,6 +365,7 @@ void DeviceService::refreshStatus() {
         fingerprintBytes(&node.snr, sizeof(node.snr));
         fingerprintBytes(&node.hops, sizeof(node.hops));
         fingerprintBytes(&node.saved, sizeof(node.saved));
+        fingerprintBytes(&node.nomadFavorite, sizeof(node.nomadFavorite));
     }
     if (fingerprint != _nodeFingerprint) { _nodeFingerprint = fingerprint; ++_status.nodeRevision; }
     if (networkStatus) networkStatus(_status);
@@ -487,7 +494,7 @@ void DeviceService::execute(uint8_t slot) {
     }
     if (!_maintenance.accepting() && (request.operation == Operation::Announce ||
         request.operation == Operation::Diagnostics || request.operation == Operation::HomeReady ||
-        request.operation == Operation::Scan || request.operation == Operation::PropagationSync || request.operation == Operation::RrcCommand || request.operation == Operation::VoiceCommand || request.operation == Operation::MemoCommand)) {
+        request.operation == Operation::Scan || request.operation == Operation::PropagationSync || request.operation == Operation::RrcCommand || request.operation == Operation::VoiceCommand || request.operation == Operation::MemoCommand || request.operation == Operation::NomadBrowse)) {
         complete(slot, Outcome::Cancelled, "Cancelled for maintenance"); return;
     }
     const auto length = _mailbox.length(slot);
@@ -513,6 +520,21 @@ void DeviceService::execute(uint8_t slot) {
         const auto code=_backend.memoCommand(command);
         Result result;result.outcome=code==memo::Code::Ok?Outcome::Ok:Outcome::Failed;
         result.next=uint32_t(code);_mailbox.complete(slot,result);break;
+    }
+    case Operation::NomadBrowse: executeNomad(slot); break;
+    case Operation::CancelNomadBrowse: {
+        // Unconditional on whatever's currently in _nomadSlot -- only one
+        // browse is ever in flight (see executeNomad's admission guard), so
+        // there's no id to match against. A late/duplicate cancel (the
+        // browse already settled naturally, or a second tap before the
+        // first cancel's completion reached the UI) is just a safe no-op.
+        if (_nomadSlot != ServiceMailbox::NoSlot) {
+            _backend.nomadBrowseCancel();
+            const auto browseSlot = _nomadSlot; _nomadSlot = ServiceMailbox::NoSlot;
+            Result cancelled; cancelled.outcome = Outcome::Cancelled;
+            _mailbox.complete(browseSlot, cancelled);
+        }
+        complete(slot, Outcome::Ok); break;
     }
     case Operation::Send: {
         if (_outgoingPaused || _mailbox.cancellationRequested(slot)) {
@@ -576,6 +598,9 @@ void DeviceService::execute(uint8_t slot) {
                  ""); break;
     case Operation::RenameContact:
         complete(slot, _nodes && _nodes->setContactName(request.peer, _scratch) ? Outcome::Ok : Outcome::Failed,
+                 ""); break;
+    case Operation::FavoriteContact:
+        complete(slot, _nodes && _nodes->setContactFavorite(request.peer, request.argument != 0) ? Outcome::Ok : Outcome::Failed,
                  ""); break;
     case Operation::Announce: {
         if (settingsApplyPending()) { complete(slot, Outcome::NotReady, "Settings apply pending"); break; }
@@ -678,6 +703,7 @@ void DeviceService::execute(uint8_t slot) {
             row["hash"] = node.hash.toHex(); row["name"] = node.name; row["identity"] = node.identityHex;
             row["rssi"] = node.rssi; row["snr"] = node.snr; row["hops"] = node.hops;
             row["seen"] = node.lastSeen; row["saved"] = node.saved;
+            if (node.nomadFavorite) row["favorite"] = true;
         }
         // Publish every completed pass even under continuous traffic. If the
         // live revision advanced, ServiceClient immediately schedules another.
@@ -866,6 +892,7 @@ void DeviceService::pollHistory() {
 }
 
 #include "RrcService.inc"
+#include "NomadService.inc"
 
 void DeviceService::runLifecycle(uint8_t slot) {
     const auto request = _mailbox.request(slot);

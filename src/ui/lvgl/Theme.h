@@ -81,7 +81,13 @@ constexpr int CONTENT_H      = SCREEN_H - STATUS_BAR_H - TAB_BAR_H;
 constexpr int CONTENT_W      = SCREEN_W;
 
 // --- Tab Bar ---
+// Must track LvTabBar::TAB_COUNT exactly (separate constant, same value by
+// convention -- see LvTabBar.h).
+#if defined(RSSENSECAPD1L)
+constexpr int TAB_COUNT      = 6;
+#else
 constexpr int TAB_COUNT      = 5;
+#endif
 constexpr int TAB_W          = SCREEN_W / TAB_COUNT;
 constexpr int TAB_BADGE_W    = 18;
 constexpr int TAB_BADGE_H    = 10;

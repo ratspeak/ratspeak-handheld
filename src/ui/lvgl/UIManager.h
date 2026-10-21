@@ -17,6 +17,22 @@ public:
     virtual void onExit() {}
     virtual bool handleKey(const KeyEvent& event) { return false; }
     virtual bool handleLongPress() { return false; }
+    // True while this screen wants on-screen (touch) text entry — e.g. a
+    // textarea or text-edit sub-state is active. Default false; overridden
+    // by the handful of screens with a text-entry flow.
+    virtual bool wantsVirtualKeyboard() const { return false; }
+    // Fired once when the on-screen keyboard's own Close button was tapped
+    // (see LvVirtualKeyboard::takeDismissed()'s doc comment) -- that button
+    // only hides the keyboard widget, it never touches LVGL's focus state,
+    // so a screen whose wantsVirtualKeyboard() tracks a "focused" flag that
+    // normally only clears on the textarea's native LV_EVENT_DEFOCUSED would
+    // otherwise get stuck thinking it still wants keyboard space forever.
+    // Override to resync that flag directly (do whatever the DEFOCUSED
+    // handler already does). Default no-op -- most screens with text entry
+    // use a dedicated, always-visible Cancel button instead and don't need
+    // this (see LvNodesScreen's nickname input, LvNomadBrowserScreen's URL
+    // entry); this exists for the composer-style case where there isn't one.
+    virtual void onVirtualKeyboardDismissed() {}
     virtual const char* title() const = 0;
 
     lv_obj_t* screen() const { return _screen; }

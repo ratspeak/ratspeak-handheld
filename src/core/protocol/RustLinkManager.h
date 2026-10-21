@@ -120,6 +120,24 @@ public:
     bool linkEstablishing(const uint8_t dest[16]) const;
     bool linkOnRoute(const uint8_t dest[16], const rs_handheld_route_t&) const;
 
+    // NOMAD: outbound-only Link to a peer's nomadnetwork.node destination, derived from an
+    // already-known contact's public key (rs_handheld_rns_nomad_node_hash) -- never learned
+    // from a live nomadnetwork.node announce. Own owner tag (not Delivery) so closing it
+    // can never spuriously notify the LXMF incoming-delivery engine.
+    bool ensureNomadLink(const uint8_t dest[16], const uint8_t pubkey[64], const rs_handheld_route_t& route);
+    bool nomadLinkActive(const uint8_t dest[16]) const;
+    bool nomadLinkEstablishing(const uint8_t dest[16]) const;
+    // Identify is per-Link, not per-request, on BOTH ends -- the destination's own
+    // copy of an already-identified Link remembers who you are for as long as that
+    // Link stays open, independent of whether this device sends another identify
+    // frame. Turning the "identify on request" setting off can't retroactively
+    // un-identify an existing Link, so when a caller wants to browse without
+    // identifying and the Link to this peer is already identified, call this
+    // first -- it closes that Link so ensureNomadLink() establishes a genuinely
+    // fresh, unidentified one. A no-op if there's no Nomad link to this dest, or
+    // it exists but was never identified (the common case -- nothing to undo).
+    void closeNomadLinkIfIdentified(const uint8_t dest[16]);
+
     enum class RequestError : uint8_t { Timeout, LinkClosed, Unsupported, Invalid };
     struct RequestSink {
         virtual ~RequestSink() = default;
@@ -132,6 +150,20 @@ public:
     // message body is retained. Caller owns retries after local refusal.
     bool startGet(const uint8_t dest[16], uint8_t operation, const uint8_t* transientId,
                   uint16_t limitBytes, RequestSink& sink, uint32_t timeoutMs);
+    // One NomadNet page/path request over an already-ACTIVE Nomad link (ensureNomadLink
+    // first). `path` is the request path (e.g. "/page/index.mu"), NOT the whole packet --
+    // same one-request-at-a-time slot startGet uses, never concurrent with it.
+    // `fieldData`/`fieldDataLen` is OPTIONAL, ALREADY-msgpack-encoded form field data
+    // (a fixmap of name->value strings) -- NULL/0 for a plain page fetch with no form
+    // submission. Passed straight through to rs_handheld_rns_nomad_request_build(),
+    // which already documents exactly this shape (see ratspeak_protocol.h).
+    // `identifyOnRequest` (off by default): whether to send a Link-Identify frame
+    // alongside this request -- see NomadBrowseClient::start()'s doc comment for why
+    // this is opt-in, not automatic, for Nomad browsing specifically.
+    bool startNomadRequest(const uint8_t dest[16], const uint8_t* path, uint8_t pathLen,
+                           RequestSink& sink, uint32_t timeoutMs,
+                           const uint8_t* fieldData = nullptr, size_t fieldDataLen = 0,
+                           bool identifyOnRequest = false);
     // Dedicated receipt slot, between incoming credits and outgoing rows.
     static constexpr uint8_t RequestReceiptSlot = 64, IdentifyReceiptSlot = 65;
     bool requestReceipt(handheld::TxReceipt, handheld::TxReceiptEvent);
@@ -151,7 +183,7 @@ public:
     void endAll();  // zeroize + free all links (teardown)
 
 private:
-    enum class Owner : uint8_t { Delivery, Rrc, Voice };
+    enum class Owner : uint8_t { Delivery, Rrc, Voice, Nomad };
     struct Link {
         State state = State::Free;
         Owner owner = Owner::Delivery;

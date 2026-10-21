@@ -40,7 +40,8 @@
     "runtime": "dedicated",
     "app_environments": [
       "tpager",
-      "tpager_cooperative"
+      "tpager_cooperative",
+      "tpager_lr1121"
     ],
     "device_aliases": [
       "rspager",
@@ -109,5 +110,31 @@
       "standalone"
     ],
     "web_flasher": true
+  },
+  "sensecap_d1l": {
+    "artifact_prefix": "d1l",
+    "flash_size": "8MB",
+    "partition_csv": null,
+    "standalone_partition_csv": "partitions/standalone-8mb.csv",
+    "rnode_target": null,
+    "rnode_prep_target": null,
+    "renderer": "lvgl",
+    "protocol_profile": "small",
+    "runtime": "dedicated",
+    "app_environments": [
+      "sensecap_d1l"
+    ],
+    "device_aliases": [
+      "d1l",
+      "sensecap_indicator"
+    ],
+    "post_build_image": "d1l-standalone-factory.bin",
+    "standalone_flash_freq": null,
+    "rnode_partition_scheme": null,
+    "rnode_partition_csv": null,
+    "modes": [
+      "standalone"
+    ],
+    "web_flasher": false
   }
 }
