@@ -17,6 +17,7 @@ public:
 
 private:
     bool readGT911();
+    bool readFT6336();  // SenseCAP D1L — see TouchInput.cpp for why this is a plain-Wire driver
 
     uint8_t _i2cAddress = 0;
 

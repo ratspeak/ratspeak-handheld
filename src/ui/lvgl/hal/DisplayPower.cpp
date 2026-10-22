@@ -1,5 +1,5 @@
 #include "config/BoardConfig.h"
-#if defined(RSDECK) || defined(RSM9)
+#if defined(RSDECK) || defined(RSM9) || defined(RSSENSECAPD1L)
 #include "hal/Power.h"
 #include "hal/Display.h"
 #include "hal/Keyboard.h"

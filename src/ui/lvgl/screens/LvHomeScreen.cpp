@@ -14,38 +14,59 @@ constexpr lv_coord_t kPad = 6;
 constexpr lv_coord_t kPanelW = Theme::CONTENT_W - (kPad * 2);
 // Wide short panels (T-Pager 480x222) use the pager's compact row metrics;
 // the non-wide values reproduce the original 320x240 T-Deck layout exactly.
-constexpr bool kWide = Theme::SCREEN_W >= 400;
-constexpr lv_coord_t kIdentityY = 4;
-constexpr lv_coord_t kIdentityH = kWide ? 50 : 58;
+// A square/tall panel (SenseCAP D1L, 480x480) gets its own mode: the wide
+// metrics alone left ~240px of blank screen below the footer on real D1L
+// hardware (checked kWide on width only, no concept of height at all) — so
+// kTall takes priority and actually spends the extra vertical space, with
+// bigger touch targets throughout (this board is touch-only, no
+// keyboard/encoder fallback, so generous tap targets are a real usability
+// win here, not just filling space for its own sake) and a full-width
+// Announce button as its own row instead of squeezed beside the footer.
+constexpr bool kTall = Theme::CONTENT_H >= 400;
+constexpr bool kWide = !kTall && Theme::SCREEN_W >= 400;
+constexpr lv_coord_t kIdentityY = kTall ? 6 : 4;
+// Tall: LXMF address and ID get their own stacked rows instead of sharing
+// one row side-by-side (that's what forced the width-juggling below) — the
+// extra ~22px goes to the identity panel, taken back from the other rows'
+// gaps/heights so the bottom (Announce row) still lands above the tab bar.
+constexpr lv_coord_t kIdentityH = kTall ? 86 : (kWide ? 50 : 58);
 // Wide: 34px cells keep value ink >=3px clear of the 2px focused border
-constexpr lv_coord_t kRowGap = kWide ? 4 : 6;
-constexpr lv_coord_t kChipY = kIdentityY + kIdentityH + kRowGap;           // 58 / 68
-constexpr lv_coord_t kChipH = kWide ? 34 : 36;
-constexpr lv_coord_t kStatY = kChipY + kChipH + (kWide ? kRowGap : 4);     // 96 / 108
-constexpr lv_coord_t kStatH = kWide ? 34 : 38;
-constexpr lv_coord_t kFooterY = kStatY + kStatH + (kWide ? kRowGap : 6);   // 134 / 152
-constexpr lv_coord_t kFooterH = kWide ? 36 : 38;
+constexpr lv_coord_t kRowGap = kTall ? 8 : (kWide ? 4 : 6);
+constexpr lv_coord_t kChipY = kIdentityY + kIdentityH + kRowGap;           // 100 / 58 / 68
+constexpr lv_coord_t kChipH = kTall ? 74 : (kWide ? 34 : 36);
+constexpr lv_coord_t kStatY = kChipY + kChipH + (kTall ? kRowGap : (kWide ? kRowGap : 4)); // 182/96/108
+constexpr lv_coord_t kStatH = kTall ? 74 : (kWide ? 34 : 38);
+constexpr lv_coord_t kFooterY = kStatY + kStatH + (kTall ? kRowGap : (kWide ? kRowGap : 6)); // 264/134/152
+constexpr lv_coord_t kFooterH = kTall ? 64 : (kWide ? 36 : 38);
+// Tall only: Announce gets its own full-width row below the footer instead
+// of sharing the footer's row beside it.
+constexpr lv_coord_t kAnnounceRowY = kFooterY + kFooterH + kRowGap;        // 340 (tall only)
+constexpr lv_coord_t kAnnounceRowH = 90;                                   // (tall only)
 constexpr lv_coord_t kGap = 7;
-constexpr lv_coord_t kCellW = (kPanelW - (kGap * 2)) / 3;                  // 151 / 98
+constexpr lv_coord_t kCellW = (kPanelW - (kGap * 2)) / 3;                  // 149 / 151 / 98
 constexpr lv_coord_t kCellValueW = kCellW - 14;
-constexpr int kAvatarSize = kWide ? 34 : 40;
-constexpr lv_coord_t kIdentityTextX = kWide ? 54 : 58;
-constexpr lv_coord_t kIdentityTextW = kPanelW - kIdentityTextX - 10;       // 404 / 240
-constexpr lv_coord_t kStatusW = kWide ? 116 : 114;
-constexpr lv_coord_t kIdentityIdW = kWide ? 104 : 100;  // "ID xxxx..." worst case 102px in 10pt
+// Tall's text column reuses wide's exact X/width (confirmed to fit the
+// full 32-hex LXMF address) — only a modest avatar bump fits without
+// cutting into it (confirmed clipped on real hardware at 44px/x=60).
+constexpr int kAvatarSize = kTall ? 38 : (kWide ? 34 : 40);
+constexpr lv_coord_t kIdentityTextX = kTall ? 54 : (kWide ? 54 : 58);
+constexpr lv_coord_t kIdentityTextW = kPanelW - kIdentityTextX - 10;       // 410 / 404 / 240
+constexpr lv_coord_t kStatusW = kTall ? 120 : (kWide ? 116 : 114);
+constexpr lv_coord_t kIdentityIdW = kTall ? 104 : (kWide ? 104 : 100);  // "ID xxxx..." worst case 102px in 10pt
 constexpr lv_coord_t kIdentityLxmfW =
-    kWide ? (kIdentityTextW - kIdentityIdW - 8) : 136;  // 292 fits the full 32-hex LXMF addr
-constexpr lv_coord_t kActionW = kWide ? 128 : 104;
-constexpr lv_coord_t kFooterInfoW = kWide ? (kPanelW - kActionW - kGap) : 198;
-constexpr lv_coord_t kAnnounceX = kPad + kFooterInfoW + (kWide ? kGap : 6); // 346 / 210
-constexpr lv_coord_t kIdTitleY = kWide ? 5 : 6;
-constexpr lv_coord_t kIdNameY = kWide ? 19 : 21;
-constexpr lv_coord_t kIdRowY = kWide ? 36 : 41;
-constexpr lv_coord_t kAvatarY = kWide ? 8 : 9;
-constexpr lv_coord_t kChipValY = kWide ? 16 : 18;
-constexpr lv_coord_t kStatValY = kWide ? 14 : 17;
-constexpr lv_coord_t kSummaryY = kWide ? 5 : 6;
-constexpr lv_coord_t kAnnounceAgeY = kWide ? 21 : 23;
+    kTall ? kIdentityTextW : (kWide ? (kIdentityTextW - kIdentityIdW - 8) : 136);  // tall: own row, full width
+constexpr lv_coord_t kActionW = kWide ? 128 : 104;  // unused when kTall (full-width row instead)
+constexpr lv_coord_t kFooterInfoW = kTall ? kPanelW : (kWide ? (kPanelW - kActionW - kGap) : 198);
+constexpr lv_coord_t kAnnounceX = kTall ? kPad : (kPad + kFooterInfoW + (kWide ? kGap : 6)); // 6/346/210
+constexpr lv_coord_t kIdTitleY = kTall ? 8 : (kWide ? 5 : 6);
+constexpr lv_coord_t kIdNameY = kTall ? 26 : (kWide ? 19 : 21);
+constexpr lv_coord_t kIdRowY = kTall ? 46 : (kWide ? 36 : 41);   // LXMF row (own row in tall)
+constexpr lv_coord_t kIdRowY2 = kTall ? 66 : kIdRowY;            // ID row (own row only in tall)
+constexpr lv_coord_t kAvatarY = kTall ? 20 : (kWide ? 8 : 9);
+constexpr lv_coord_t kChipValY = kTall ? 38 : (kWide ? 16 : 18);
+constexpr lv_coord_t kStatValY = kTall ? 38 : (kWide ? 14 : 17);
+constexpr lv_coord_t kSummaryY = kTall ? 10 : (kWide ? 5 : 6);
+constexpr lv_coord_t kAnnounceAgeY = kTall ? 36 : (kWide ? 21 : 23);
 
 lv_obj_t* makePanel(lv_obj_t* parent, lv_coord_t x, lv_coord_t y, lv_coord_t w,
                     lv_coord_t h, uint32_t bg, uint32_t border) {
@@ -193,6 +214,10 @@ void LvHomeScreen::createUI(lv_obj_t* parent) {
 
     _identityPanel = makePanel(parent, kPad, kIdentityY, kPanelW, kIdentityH,
                                Theme::BG_ELEVATED, Theme::BORDER);
+    makeClickable(_identityPanel, [](lv_event_t* e) {
+        auto* self = (LvHomeScreen*)lv_event_get_user_data(e);
+        if (self->_showQrCb) self->_showQrCb();
+    }, this);
 
     lv_obj_t* rail = lv_obj_create(_identityPanel);
     lv_obj_set_pos(rail, 0, 0);
@@ -226,10 +251,13 @@ void LvHomeScreen::createUI(lv_obj_t* parent) {
     lv_label_set_long_mode(_lblName, LV_LABEL_LONG_DOT);
 
     _lblId = makeLabel(_identityPanel, kIdentityTextX, kIdRowY, kIdentityLxmfW,
-                       &lv_font_rsdeck_10, Theme::TEXT_SECONDARY, "LXMF ----");
-    _lblIdentity = makeLabel(_identityPanel, kPanelW - kIdentityIdW - 10, kIdRowY,
-                             kIdentityIdW, &lv_font_rsdeck_10, Theme::TEXT_MUTED,
-                             "ID ----", LV_TEXT_ALIGN_RIGHT);
+                       &lv_font_rsdeck_10, Theme::TEXT_PRIMARY, "LXMF ----");
+    _lblIdentity = kTall
+        ? makeLabel(_identityPanel, kIdentityTextX, kIdRowY2, kIdentityTextW,
+                    &lv_font_rsdeck_10, Theme::TEXT_PRIMARY, "ID ----")
+        : makeLabel(_identityPanel, kPanelW - kIdentityIdW - 10, kIdRowY2,
+                    kIdentityIdW, &lv_font_rsdeck_10, Theme::TEXT_PRIMARY,
+                    "ID ----", LV_TEXT_ALIGN_RIGHT);
 
     _chipLora = makeChip(parent, kPad, "LORA", &_lblLoraState);
     makeClickable(_chipLora, [](lv_event_t* e) {
@@ -252,24 +280,38 @@ void LvHomeScreen::createUI(lv_obj_t* parent) {
         auto* self = (LvHomeScreen*)lv_event_get_user_data(e);
         self->openPeers();
     }, this);
+#if HAS_AUDIO
     _statPaths = makeStat(parent, kPad + kCellW + kGap, "AUDIO", &_lblPaths);
     makeClickable(_statPaths, [](lv_event_t* e) {
         auto* self = (LvHomeScreen*)lv_event_get_user_data(e);
         self->toggleAudio();
     }, this);
+    // AUDIO ON/OFF matches the chip-row typography; the 14pt stat font stays
+    // for numeric values (PEERS). Donors rendered these in the stat font.
+    lv_obj_set_style_text_font(_lblPaths, &lv_font_rsdeck_12, 0);
+    lv_obj_set_pos(_lblPaths, 7, kChipValY);
+#else
+    // No audio hardware on this board at all — showing an AUDIO ON/OFF
+    // toggle would be misleading (confirmed on real D1L hardware: it looked
+    // like a real control for audio the board can't produce). Uptime is
+    // already computed every refresh for the throttle check below, so
+    // showing it here is free.
+    _statPaths = makeStat(parent, kPad + kCellW + kGap, "UPTIME", &_lblPaths);
+#endif
 
+#if HAS_GPS
     _statLinks = makeStat(parent, kPad + (kCellW + kGap) * 2, "GPS", &_lblLinks);
     makeClickable(_statLinks, [](lv_event_t* e) {
         auto* self = (LvHomeScreen*)lv_event_get_user_data(e);
         self->toggleGPS();
     }, this);
-
-    // AUDIO/GPS ON/OFF values match the chip-row typography; the 14pt stat font
-    // stays for numeric values (PEERS). Donors rendered these in the stat font.
-    lv_obj_set_style_text_font(_lblPaths, &lv_font_rsdeck_12, 0);
-    lv_obj_set_pos(_lblPaths, 7, kChipValY);
     lv_obj_set_style_text_font(_lblLinks, &lv_font_rsdeck_12, 0);
     lv_obj_set_pos(_lblLinks, 7, kChipValY);
+#else
+    // Same reasoning as AUDIO above — no GPS hardware on this board either.
+    // Free heap is also already computed every refresh.
+    _statLinks = makeStat(parent, kPad + (kCellW + kGap) * 2, "HEAP", &_lblLinks);
+#endif
 
     lv_obj_t* footer = makePanel(parent, kPad, kFooterY, kFooterInfoW, kFooterH,
                                  Theme::BG_ELEVATED, Theme::BORDER);
@@ -281,8 +323,8 @@ void LvHomeScreen::createUI(lv_obj_t* parent) {
     lv_label_set_long_mode(_lblLastAnnounce, LV_LABEL_LONG_CLIP);
 
     _btnAnnounce = lv_btn_create(parent);
-    lv_obj_set_pos(_btnAnnounce, kAnnounceX, kFooterY);
-    lv_obj_set_size(_btnAnnounce, kActionW, kFooterH);
+    lv_obj_set_pos(_btnAnnounce, kAnnounceX, kTall ? kAnnounceRowY : kFooterY);
+    lv_obj_set_size(_btnAnnounce, kTall ? kPanelW : kActionW, kTall ? kAnnounceRowH : kFooterH);
     lv_obj_add_style(_btnAnnounce, LvTheme::styleBtn(), 0);
     lv_obj_add_style(_btnAnnounce, LvTheme::styleBtnPressed(), LV_STATE_PRESSED);
     lv_obj_set_style_bg_color(_btnAnnounce, lv_color_hex(Theme::PRIMARY_SUBTLE), 0);
@@ -292,7 +334,9 @@ void LvHomeScreen::createUI(lv_obj_t* parent) {
     lv_obj_set_style_pad_all(_btnAnnounce, 0, 0);
 
     _lblAnnounceAction = lv_label_create(_btnAnnounce);
-    lv_obj_set_style_text_font(_lblAnnounceAction, &lv_font_rsdeck_12, 0);
+    // Tall: its own full-width row, primary action on this screen — worth
+    // the bigger built-in font instead of this app's regular 12pt custom one.
+    lv_obj_set_style_text_font(_lblAnnounceAction, kTall ? &lv_font_montserrat_16 : &lv_font_rsdeck_12, 0);
     lv_obj_set_style_text_color(_lblAnnounceAction, lv_color_hex(Theme::ACCENT), 0);
     lv_label_set_text(_lblAnnounceAction, "ANNOUNCE");
     lv_obj_center(_lblAnnounceAction);
@@ -348,11 +392,15 @@ void LvHomeScreen::refreshUI() {
         String dh = _backend->destinationHashHex();
         if (!dh.isEmpty() && dh != "unknown") avatarSeed = dh;
         // Narrow panel: truncate; wide panel shows the full 32-hex LXMF addr
-        if (!kWide && dh.length() > 12) dh = dh.substring(0, 12);
+        if (!kWide && !kTall && dh.length() > 12) dh = dh.substring(0, 12);
         lv_label_set_text_fmt(_lblId, "LXMF %s", dh.c_str());
 
-        String ih = _backend->identityHash();
-        if (ih.length() > 14) ih = ih.substring(0, 14);
+        // identityHash() is a deliberately shortened display label (see
+        // ProtocolBackend.h), not a truncated version of the real hash —
+        // tall mode has its own full-width row and room to spare, so show
+        // the actual full 32-hex identity (identityHashHex()) there instead.
+        String ih = kTall ? _backend->identityHashHex() : _backend->identityHash();
+        if (!kTall && ih.length() > 14) ih = ih.substring(0, 14);
         lv_label_set_text_fmt(_lblIdentity, "ID %s", ih.c_str());
     } else {
         lv_label_set_text(_lblId, "LXMF ----");
@@ -406,23 +454,34 @@ void LvHomeScreen::refreshUI() {
     setPanelTone(_statNodes, online > 0 ? Theme::PRIMARY_SUBTLE : Theme::BG_ELEVATED,
                  online > 0 ? Theme::PRIMARY : Theme::BORDER);
 
+#if HAS_AUDIO
     bool audioOn = !_cfg || _cfg->settings().audioEnabled;
     lv_label_set_text(_lblPaths, audioOn ? "ON" : "OFF");
     lv_obj_set_style_text_color(_lblPaths, lv_color_hex(
         audioOn ? Theme::SUCCESS : Theme::TEXT_MUTED), 0);
     setPanelTone(_statPaths, audioOn ? Theme::PRIMARY_SUBTLE : Theme::BG_ELEVATED,
                  audioOn ? Theme::PRIMARY : Theme::BORDER);
+#else
+    // No audio hardware — show uptime instead (see createUI()).
+    char uptimeStr[16];
+    if (upMins < 60) snprintf(uptimeStr, sizeof(uptimeStr), "%lum", upMins);
+    else snprintf(uptimeStr, sizeof(uptimeStr), "%luh%02lum", upMins / 60, upMins % 60);
+    lv_label_set_text(_lblPaths, uptimeStr);
+    lv_obj_set_style_text_color(_lblPaths, lv_color_hex(Theme::TEXT_PRIMARY), 0);
+#endif
 
 #if HAS_GPS
     bool gpsOn = _cfg && _cfg->settings().gpsTimeEnabled;
-#else
-    bool gpsOn = false;
-#endif
     lv_label_set_text(_lblLinks, gpsOn ? "ON" : "OFF");
     lv_obj_set_style_text_color(_lblLinks, lv_color_hex(
         gpsOn ? Theme::SUCCESS : Theme::TEXT_MUTED), 0);
     setPanelTone(_statLinks, gpsOn ? Theme::PRIMARY_SUBTLE : Theme::BG_ELEVATED,
                  gpsOn ? Theme::PRIMARY : Theme::BORDER);
+#else
+    // No GPS hardware — show free heap instead (see createUI()).
+    lv_label_set_text_fmt(_lblLinks, "%luk", (unsigned long)heap);
+    lv_obj_set_style_text_color(_lblLinks, lv_color_hex(Theme::TEXT_PRIMARY), 0);
+#endif
 
     if (!_backend) {
         lv_label_set_text(_lblSummary, "Identity unavailable");

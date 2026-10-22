@@ -74,6 +74,36 @@
 #define XL9555_SD_PULLEN    11
 #define XL9555_SD_EN        12
 
+#if defined(RATPAGER_LR1121)
+// --- LR1121 LoRa Radio (shared SPI bus) ---
+// LilyGo T-Pager, LR1121 radio-module variant. Pins/TCXO/RF-switch below are
+// confirmed against Meshtastic's official support for this exact board
+// (variants/esp32s3/tlora-pager) — not a placeholder. CS/IRQ(DIO1)/RST/BUSY
+// are identical to the SX1262 variant (same mainboard, swappable radio header).
+#define LORA_CS             36
+#define LORA_IRQ            14   // DIO1
+#define LORA_RST            47
+#define LORA_BUSY           48
+#define LORA_RXEN           -1   // Unused — RF switch goes via DIO5/DIO6, see LR1121Chip::configureRfSwitch()
+#define LORA_TXEN           -1   // Unused — see above
+
+// --- LR1121 Radio Configuration ---
+#define LORA_USE_DCDC_REGULATOR true
+#define LORA_TCXO_VOLTAGE_V     3.0f   // Confirmed via Meshtastic's LR11X0_DIO3_TCXO_VOLTAGE for this board
+// SX1262.cpp stays in this env's build_src_filter (unused, dropped by the
+// linker) rather than excluded, to keep the platformio.ini diff minimal. It
+// still needs these to compile even though LR1121Radio never reads them.
+#define LORA_HAS_TCXO           true
+#define LORA_DIO2_AS_RF_SWITCH  true
+#define LORA_TCXO_VOLTAGE       0x06     // MODE_TCXO_3_0V_6X — unused by LR1121Radio
+#define LORA_OCP_TUNED          0x38     // unused by LR1121Radio
+#define LORA_DEFAULT_FREQ       915000000
+#define LORA_DEFAULT_BW         250000   // Medium Fast preset
+#define LORA_DEFAULT_SF         9
+#define LORA_DEFAULT_CR         5
+#define LORA_DEFAULT_TX_POWER   17       // Medium Fast preset
+#define LORA_DEFAULT_PREAMBLE   18
+#else
 // --- SX1262 LoRa Radio (shared SPI bus) ---
 #define LORA_CS             36
 #define LORA_IRQ            14   // DIO1
@@ -94,6 +124,7 @@
 #define LORA_DEFAULT_CR         5
 #define LORA_DEFAULT_TX_POWER   17       // Medium Fast preset
 #define LORA_DEFAULT_PREAMBLE   18
+#endif
 
 // --- Shared SPI Bus (display + LoRa + SD) ---
 #define SPI_SCK             35

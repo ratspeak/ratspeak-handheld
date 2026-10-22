@@ -73,7 +73,7 @@ extern const lv_font_t lv_font_rsdeck_14;
 #define LV_USE_ARC        0
 #define LV_USE_SPINNER    0
 #define LV_USE_MSGBOX     0
-#define LV_USE_KEYBOARD   0
+#define LV_USE_KEYBOARD   1  // Layout widget for LvVirtualKeyboard (touch-only boards)
 #define LV_USE_CHECKBOX   0
 #define LV_USE_CANVAS     1   // required by LV_USE_QRCODE
 #define LV_USE_QRCODE     1

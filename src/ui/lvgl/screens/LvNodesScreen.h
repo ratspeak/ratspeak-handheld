@@ -27,6 +27,7 @@ public:
     void setUIManager(class UIManager* ui) { _ui = ui; }
     void setUserConfig(UserConfig* cfg) { _cfg = cfg; }
     bool handleLongPress() override;
+    bool wantsVirtualKeyboard() const override { return _actionState == NodeAction::NICKNAME_INPUT; }
 
     const char* title() const override { return "Peers"; }
 
@@ -69,7 +70,13 @@ private:
     lv_obj_t* _nicknameBox = nullptr;
     lv_obj_t* _nicknameLbl = nullptr;
     lv_obj_t* _nicknameHint = nullptr;
-    static constexpr int RowHeight = 36;
+    // Square/tall panels (today: SenseCAP D1L) have room for the same
+    // per-row identicon Contacts already shows; kRowH/kTextX match
+    // LvContactsScreen's kContactRowH/kContactTextX exactly for visual
+    // consistency between the two lists.
+    static constexpr bool kShowAvatar = Theme::SCREEN_W >= 400 && Theme::SCREEN_H >= 400;
+    static constexpr int RowHeight = kShowAvatar ? 38 : 36;
+    static constexpr int TextX = kShowAvatar ? 48 : 8;
     static constexpr int ViewportHeight = Theme::CONTENT_H - 19;
     // Partial first/last rows, one overscan each side, and one pinned press.
     static constexpr size_t RowPoolSize = (ViewportHeight + RowHeight - 1) / RowHeight + 4;
@@ -79,20 +86,33 @@ private:
         lv_obj_t* name = nullptr;
         lv_obj_t* meta = nullptr;
         lv_obj_t* id = nullptr;
+        lv_obj_t* avatar = nullptr;  // Only created when kShowAvatar.
         std::string nameText;
         std::string hex;
         size_t index = 0;
     };
     std::array<Row, RowPoolSize> _rows;
+    // One persistent render buffer per row slot (not per-peer, since rows
+    // are a recycled/virtualized pool — see bindRows()).
+    std::array<std::vector<uint8_t>, RowPoolSize> _avatarBuffers;
     lv_obj_t* _caption = nullptr;
     lv_obj_t* _extent = nullptr;
     lv_obj_t* _pressedRow = nullptr;
     std::string _pressedHex;
+    // Set by a touch long-press on a row; checked by the row's CLICKED
+    // branch so the inevitable click-on-release doesn't also open/select —
+    // LVGL does not suppress CLICKED after LONG_PRESSED on its own.
+    bool _longPressFired = false;
     bool _bindingRows = false;
     bool interactionBusy() const;
     void bindRows();
     void focusSelection();
     void scrollToSelection();
+    // Shared by handleLongPress() (encoder/keyboard hold, sources the hex via
+    // getFocusedNodeHex()) and the row's native LV_EVENT_LONG_PRESSED touch
+    // handler (sources the hex via the press-time-pinned _pressedHex, since
+    // these rows don't participate in LVGL click-focus — see bindRows()).
+    bool confirmOrOpenAction(const std::string& nodeHex);
     unsigned long _lastRebuild = 0;
 
     lv_obj_t* _list = nullptr;

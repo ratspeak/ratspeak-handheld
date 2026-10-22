@@ -17,6 +17,10 @@ public:
     virtual void onExit() {}
     virtual bool handleKey(const KeyEvent& event) { return false; }
     virtual bool handleLongPress() { return false; }
+    // True while this screen wants on-screen (touch) text entry — e.g. a
+    // textarea or text-edit sub-state is active. Default false; overridden
+    // by the handful of screens with a text-entry flow.
+    virtual bool wantsVirtualKeyboard() const { return false; }
     virtual const char* title() const = 0;
 
     lv_obj_t* screen() const { return _screen; }

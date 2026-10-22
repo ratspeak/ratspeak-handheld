@@ -370,6 +370,13 @@ void LoRaInterface::loop() {
     if (_maintenance) { pollMaintenance(); return; }
     if (!_online || !_radio || _changingOwner || _notifying) return;
     if (!_radio->isRadioOnline()) { stop(); return; }
+#if defined(RSSENSECAPD1L)
+    // Drain the IRQ-expander's pending flag on this same task, right before
+    // packetAvailable is read below — see SensecapRadioHal::pollIrq()/
+    // attachInterrupt() for why this board can't call RadioLib's packet
+    // callback directly from the ISR.
+    _radio->pollIrq();
+#endif
     refreshRadioTiming();
     discardExpired();
     if (!_online || _maintenance) return;

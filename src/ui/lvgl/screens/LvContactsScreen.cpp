@@ -231,11 +231,21 @@ void LvContactsScreen::rebuildList() {
 
         lv_obj_add_event_cb(row, [](lv_event_t* e) {
             auto* self = (LvContactsScreen*)lv_event_get_user_data(e);
+            if (self->_confirmDelete) return;  // Click-on-release after a touch long-press; already handled.
             int idx = (int)(intptr_t)lv_obj_get_user_data(lv_event_get_target(e));
             if (idx >= 0 && idx < (int)self->_contactHexes.size() && self->_onSelect) {
                 self->_onSelect(self->_contactHexes[idx]);
             }
         }, LV_EVENT_CLICKED, this);
+
+        // Rows keep LVGL's default click-focus, so handleLongPress()'s
+        // existing lv_group_get_focused()-based lookup already resolves to
+        // the touched row correctly — no press-time pinning needed here
+        // (unlike LvNodesScreen, which disables click-focus on its rows).
+        lv_obj_add_event_cb(row, [](lv_event_t* e) {
+            auto* self = (LvContactsScreen*)lv_event_get_user_data(e);
+            self->handleLongPress();
+        }, LV_EVENT_LONG_PRESSED, this);
 
         lv_group_add_obj(LvInput::group(), row);
         lv_obj_add_event_cb(row, [](lv_event_t* e) {

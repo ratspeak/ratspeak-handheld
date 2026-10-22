@@ -26,6 +26,7 @@ public:
     void setWiFiToggleCallback(std::function<void()> cb) { _wifiToggleCb = cb; }
     void setGPSToggleCallback(std::function<void()> cb) { _gpsToggleCb = cb; }
     void setPeersCallback(std::function<void()> cb) { _peersCb = cb; }
+    void setShowQrCallback(std::function<void()> cb) { _showQrCb = cb; }
 
     const char* title() const override { return "Home"; }
 
@@ -41,6 +42,7 @@ private:
     std::function<void()> _wifiToggleCb;
     std::function<void()> _gpsToggleCb;
     std::function<void()> _peersCb;
+    std::function<void()> _showQrCb;
     unsigned long _lastRefreshMs = 0;
     unsigned long _lastUptime = 0;
     uint32_t _lastHeap = 0;

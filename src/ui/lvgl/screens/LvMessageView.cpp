@@ -453,8 +453,10 @@ void LvMessageView::createUI(lv_obj_t* parent) {
         if (code == LV_EVENT_FOCUSED || code == LV_EVENT_CLICKED || code == LV_EVENT_PRESSED) {
             self->dismissSelection();
             self->refreshComposerPlaceholder();
+            self->_textareaFocused = true;
         } else if (code == LV_EVENT_DEFOCUSED) {
             self->refreshComposerPlaceholder();
+            self->_textareaFocused = false;
         }
     }, LV_EVENT_ALL, this);
 
@@ -834,6 +836,14 @@ void LvMessageView::onEnter() {
     dismissSelection();
     _selectAfterPage=false;_dismissedDelete=false;
     _entered = true;
+#if HAS_TOUCH
+    // _screen may still be shrunk from a previous visit (e.g. the user left
+    // while the composer/keyboard was active) — always start full-height;
+    // refreshUI() re-shrinks it on its next tick if still needed.
+    if (_screen) lv_obj_set_height(_screen, Theme::CONTENT_H);
+    _kbSpaceReserved = false;
+    _textareaFocused = false;
+#endif
     if (_rrcMode) {
         _markReadPending=false;_readThrough=0;_readRetry=false;
         _scrollToEnd=true;_atBottom=true;hideSendModeMenu();clearMessages();
@@ -879,6 +889,20 @@ void LvMessageView::onExit() {
 void LvMessageView::refreshUI() {
     pollRrc();
     if (!_screen || !_entered || !_service) return;
+#if HAS_TOUCH
+    // The on-screen keyboard (lv_layer_top(), LVGL's default 50% height —
+    // see lv_keyboard.c's height_def) draws over whatever's underneath it,
+    // not inside this screen's own flex layout — so without this it simply
+    // overlapped the message history/input row instead of the history
+    // shrinking to make room above it. _msgScroll has flex_grow=1, so
+    // resizing just the screen's own height is enough; the fixed-height
+    // header/input row stay put and the grow area absorbs the difference.
+    const bool wantKbSpace = wantsVirtualKeyboard();
+    if (wantKbSpace != _kbSpaceReserved) {
+        _kbSpaceReserved = wantKbSpace;
+        lv_obj_set_height(_screen, wantKbSpace ? Theme::CONTENT_H - Theme::SCREEN_H / 2 : Theme::CONTENT_H);
+    }
+#endif
     auto& window = _service->historyWindow();
     const bool matches = windowMatches();
     if (!matches || !window.visible()) {
@@ -1257,6 +1281,14 @@ void LvMessageView::sendCurrentMessage(bool viaLink) {
     if (!id) _sendPending = false;
     if (_screen) updateComposerState();
     if (id && _ui) _ui->lvStatusBar().showToast("Saving message...", 1000);
+}
+
+bool LvMessageView::composerActive() const {
+    if (_messageTools.visible()) return false;
+    if (_rrcMode && _rrcTools.visible()) return false;
+    if (boundWindow() && _service->historyWindow().mode() == HistoryWindow::Mode::Full) return false;
+    if (_sendOverlay) return false;
+    return true;
 }
 
 bool LvMessageView::handleKey(const KeyEvent& event) {

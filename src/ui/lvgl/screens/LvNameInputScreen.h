@@ -8,6 +8,7 @@ public:
     void createUI(lv_obj_t* parent) override;
     bool handleKey(const KeyEvent& event) override;
     const char* title() const override { return "Setup"; }
+    bool wantsVirtualKeyboard() const override { return _textarea && !_saving; }
 
     void setDoneCallback(std::function<void(const String&)> cb) { _doneCb = cb; }
     void onEnter() override { _enterTime = millis(); }

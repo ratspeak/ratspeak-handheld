@@ -2,6 +2,7 @@
 #include "Theme.h"
 #include "LvTheme.h"
 #include "LvInput.h"
+#include "LxmFaceAvatar.h"
 #include <cstring>
 #include "UIManager.h"
 #include "config/UserConfig.h"
@@ -155,7 +156,15 @@ void LvNodesScreen::createUI(lv_obj_t* parent) {
             if (lv_event_get_code(e) == LV_EVENT_PRESSED) {
                 self->_pressedRow = box;
                 self->_pressedHex = row.hex;
+                self->_longPressFired = false;
+            } else if (lv_event_get_code(e) == LV_EVENT_LONG_PRESSED) {
+                // These rows don't participate in LVGL click-focus (see the
+                // flags cleared above), so the hex must come from the
+                // press-time pin, not getFocusedNodeHex()/group focus.
+                const auto hex = self->_pressedRow == box ? self->_pressedHex : row.hex;
+                if (!hex.empty() && self->confirmOrOpenAction(hex)) self->_longPressFired = true;
             } else if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
+                if (self->_longPressFired) return;  // Already handled by the long-press above.
                 const auto hex = self->_pressedRow == box ? self->_pressedHex : row.hex;
                 if (hex.empty()) return;
                 for (size_t i = 0; i < self->_peers.total(); ++i)
@@ -166,10 +175,16 @@ void LvNodesScreen::createUI(lv_obj_t* parent) {
             // RELEASED precedes CLICKED. The pinned slot is retired only by a
             // subsequent refresh, after LVGL finishes delivering this input.
         }, LV_EVENT_ALL, this);
+        if (kShowAvatar) {
+            _avatarBuffers[i].resize(LxmFaceAvatar::bufferSize(32));
+            auto avatar = LxmFaceAvatar::create(row.box, 8, 3, 32, _avatarBuffers[i].data(),
+                                                Theme::PRIMARY_SUBTLE, Theme::BORDER);
+            row.avatar = avatar.canvas;
+        }
         row.name = lv_label_create(row.box);
         lv_obj_set_style_text_font(row.name, &lv_font_rsdeck_12, 0);
-        lv_obj_set_pos(row.name, 8, 3);
-        lv_obj_set_size(row.name, Theme::CONTENT_W - 132, lv_font_rsdeck_12.line_height);
+        lv_obj_set_pos(row.name, TextX, 3);
+        lv_obj_set_size(row.name, Theme::CONTENT_W - TextX - 124, lv_font_rsdeck_12.line_height);
         lv_label_set_long_mode(row.name, LV_LABEL_LONG_DOT);
         row.meta = lv_label_create(row.box);
         lv_obj_set_style_text_font(row.meta, &lv_font_rsdeck_10, 0);
@@ -181,8 +196,8 @@ void LvNodesScreen::createUI(lv_obj_t* parent) {
         row.id = lv_label_create(row.box);
         lv_obj_set_style_text_font(row.id, &lv_font_rsdeck_10, 0);
         lv_obj_set_style_text_color(row.id, lv_color_hex(Theme::TEXT_MUTED), 0);
-        lv_obj_set_pos(row.id, 8, 20);
-        lv_obj_set_size(row.id, Theme::CONTENT_W - 16, lv_font_rsdeck_10.line_height);
+        lv_obj_set_pos(row.id, TextX, 20);
+        lv_obj_set_size(row.id, Theme::CONTENT_W - TextX - 8, lv_font_rsdeck_10.line_height);
         lv_label_set_long_mode(row.id, LV_LABEL_LONG_CLIP);
     }
     // --- Action modal overlay (on top layer, centered) ---
@@ -392,7 +407,9 @@ void LvNodesScreen::bindRows() {
         if (!bound) for (auto& row : _rows) if (row.hex.empty() && row.box != _pressedRow) { bound = &row; break; }
         if (!bound) continue; // Pool includes a spare for a pinned pointer row.
         auto& row = *bound;
+        const bool freshBind = row.hex != _peers.hash(index);
         row.index = index; row.hex = _peers.hash(index);
+        if (kShowAvatar && freshBind && row.avatar) LxmFaceAvatar::render(row.avatar, String(row.hex.c_str()));
         lv_obj_set_pos(row.box, 0, int(index) * RowHeight);
         lv_obj_clear_flag(row.box, LV_OBJ_FLAG_HIDDEN);
         const auto* node = _am->findNodeByHex(row.hex);
@@ -535,7 +552,11 @@ bool LvNodesScreen::handleLongPress() {
     // On trackball/touch boards, an unfocused hold belongs to the power shell.
     if (!_focusActive) return false;
 #endif
-    std::string nodeHex = getFocusedNodeHex();
+    return confirmOrOpenAction(getFocusedNodeHex());
+}
+
+bool LvNodesScreen::confirmOrOpenAction(const std::string& nodeHex) {
+    if (!_am) return false;
     const DiscoveredNode* node = nodeHex.empty() ? nullptr : _am->findNodeByHex(nodeHex);
     if (!node) return false;
     if (node->saved) {

@@ -21,7 +21,16 @@ constexpr int TextX = 54;
 constexpr int NavigationHeight = 30;
 constexpr int NavigationSpace = NavigationHeight + 6;
 constexpr int FamilyHeight = handheld::ui::RrcEnabled ? 24 : 0;
+// Every other board pages exactly 2 conversations at a time, so dividing
+// the available height by 2 fills the screen either way. D1L's 16-row
+// page (see LvMessagesScreen.h) needs a real, content-sized row instead —
+// compact like Contacts/Nodes (avatar + name/preview/status), scrolled via
+// the list's existing flex-column + scrollbar styling rather than paged.
+#if defined(RSSENSECAPD1L)
+constexpr int RowHeight = 58;
+#else
 constexpr int RowHeight = (Theme::CONTENT_H - FamilyHeight - NavigationSpace) / 2;
+#endif
 void peerText(const uint8_t* peer, char (&out)[33]) {
     constexpr char hex[] = "0123456789abcdef";
     for (size_t i=0;i<16;++i) { out[2*i]=hex[peer[i]>>4]; out[2*i+1]=hex[peer[i]&15]; }
