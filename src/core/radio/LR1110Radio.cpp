@@ -1,6 +1,8 @@
 #include "radio/LR1110Radio.h"
 #if defined(RSM9)
 #include <cstring>
+#include "radio/RadioBandwidth.h"
+#include "radio/SX1262Timing.h"
 
 LR1110Radio* LR1110Radio::_instance = nullptr;
 LR1110Radio::LR1110Radio(SPIClass* spi)
@@ -21,7 +23,8 @@ bool LR1110Radio::begin(uint32_t frequency) {
             _sf, _cr, RADIOLIB_LR11X0_LORA_SYNC_WORD_PRIVATE, _power, _preamble, 3.3f), "begin")) return false;
     // Initialization resets chip DIO state; install the board switch afterward.
     if (!checked(_chip.configureM9Switch(), "RF switch") ||
-        !checked(_chip.setRegulatorDCDC(), "regulator")) return false;
+        !checked(_chip.setRegulatorDCDC(), "regulator") ||
+        !checked(_chip.forceLDRO(lowDataRateEnabled()), "LDRO")) return false;
     if (!checked(_chip.setCRC(2), "CRC") || !checked(_chip.explicitHeader(), "header") ||
         !checked(_chip.invertIQ(false), "IQ")) return false;
     _frequency = frequency; _invertIq = false; _lastError = 0;
@@ -98,10 +101,16 @@ void LR1110Radio::setTxPower(int dbm) {
     if (configureReady() && checked(_chip.setOutputPower(dbm), "power")) _power = dbm;
 }
 void LR1110Radio::setSpreadingFactor(int sf) {
-    if (configureReady() && checked(_chip.setSpreadingFactor(sf), "SF")) _sf = sf;
+    if (configureReady() && checked(_chip.setSpreadingFactor(sf), "SF")) {
+        _sf = sf;
+        checked(_chip.forceLDRO(lowDataRateEnabled()), "LDRO");
+    }
 }
 void LR1110Radio::setSignalBandwidth(uint32_t hz) {
-    if (configureReady() && checked(_chip.setBandwidth(hz / 1000.0f), "bandwidth")) _bandwidth = hz;
+    if (configureReady() && checked(_chip.setBandwidth(hz / 1000.0f), "bandwidth")) {
+        _bandwidth = hz;
+        checked(_chip.forceLDRO(lowDataRateEnabled()), "LDRO");
+    }
 }
 void LR1110Radio::setCodingRate4(int cr) {
     if (configureReady() && checked(_chip.setCodingRate(cr), "coding rate")) _cr = cr;
@@ -130,7 +139,10 @@ uint32_t LR1110Radio::getIrqFlags() {
     return irq;
 }
 float LR1110Radio::getAirtime(uint16_t bytes) { return (_chip.getTimeOnAir(bytes) + 999) / 1000; }
-bool LR1110Radio::lowDataRateEnabled() const { return (uint32_t{1} << _sf) * 1000 > 16 * _bandwidth; }
+// RadioLib's automatic LDRO uses the 16 ms rule; peers expect RNode's, so it is forced.
+bool LR1110Radio::lowDataRateEnabled() const {
+    return handheld::sx1262_timing::lowDataRateOptimize(_sf, RadioBandwidth::code(_bandwidth));
+}
 uint32_t LR1110Radio::getBitrate() const { return uint32_t(uint64_t(_sf) * 4 * _bandwidth / ((uint32_t{1} << _sf) * _cr)); }
 void LR1110Radio::printDiagnostics() {
     LR11x0VersionInfo_t info{};

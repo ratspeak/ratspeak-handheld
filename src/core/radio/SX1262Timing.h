@@ -75,10 +75,29 @@ constexpr uint32_t bandwidthHz(uint8_t code) {
     }
 }
 
+// Bandwidth as RNode firmware's getSignalBandwidth() reports each code.
+constexpr uint32_t rnodeBandwidthHz(uint8_t code) {
+    switch (code) {
+        case 0x00: return 7800;
+        case 0x08: return 10400;
+        case 0x01: return 15600;
+        case 0x09: return 20800;
+        case 0x02: return 31250;
+        case 0x0A: return 41700;
+        case 0x03: return 62500;
+        case 0x04: return 125000;
+        case 0x05: return 250000;
+        case 0x06: return 500000;
+        default: return 0;
+    }
+}
+
+// RNode firmware 1.86 handleLowDataRate(): (1 << sf) / (bw / 1000) > 16 in C
+// integer arithmetic. LDRO must match the peer's, so keep upstream's
+// truncation (SF11/125 kHz off, SF7/7.8 kHz on), not Semtech's 16 ms rule.
 constexpr bool lowDataRateOptimize(uint8_t sf, uint8_t bandwidthCode) {
-    const uint32_t bw = bandwidthHz(bandwidthCode);
-    return sf >= 5 && sf <= 12 && bw != 0 &&
-           (uint64_t{1} << sf) * 1000 > uint64_t{16} * bw;
+    const uint32_t khz = rnodeBandwidthHz(bandwidthCode) / 1000;
+    return sf >= 5 && sf <= 12 && khz != 0 && (uint32_t{1} << sf) / khz > 16;
 }
 
 constexpr uint32_t bitrate(uint8_t sf, uint8_t bandwidthCode, uint8_t codingRateDenominator) {
