@@ -145,7 +145,13 @@ void UserConfig::swap(UserConfig& other) noexcept {
 }
 
 void UserConfig::sanitizeScalars(UserScalars& settings) {
-    if (settings.radioRegion >= REGION_COUNT) settings.radioRegion = REGION_AMERICAS;
+#if !HAS_SD
+    settings.sdStorageEnabled = false;
+#endif
+#if !HAS_AUDIO
+    settings.audioEnabled = false;
+#endif
+    if (settings.radioRegion >= REGION_COUNT) settings.radioRegion = BOARD_DEFAULT_RADIO_REGION;
     // Region selects a default; it must not override a supported manual tune,
     // including after the developer controls are locked again.
     if (!loRaFrequencyBand(settings.loraFrequency)) {
@@ -242,7 +248,7 @@ bool UserConfig::parseJson(const char* json, size_t length, bool persisted, bool
             if (namePending && !nameBound) return false;
         }
 
-        parsed.radioRegion   = constrain((int)(doc["radio_region"] | 0), 0, REGION_COUNT - 1);
+        parsed.radioRegion   = constrain((int)(doc["radio_region"] | int(BOARD_DEFAULT_RADIO_REGION)), 0, REGION_COUNT - 1);
         parsed.loraFrequency = doc["lora_freq"] | (long)LORA_DEFAULT_FREQ;
         // Clamp in the JSON reader's integer type before narrowing to stored fields.
         parsed.loraSF        = constrain(doc["lora_sf"] | (int)LORA_DEFAULT_SF, 5, 12);
@@ -323,6 +329,7 @@ bool UserConfig::parseJson(const char* json, size_t length, bool persisted, bool
         if (rawBri > 100) rawBri = std::min(rawBri, 255) * 100 / 255;  // Migrate from PWM to percentage
         parsed.brightness = constrain(rawBri, 1, 100);
         parsed.denseFontMode    = doc["dense_font"] | false;
+        parsed.touchKeyboardLayout = constrain(doc["touch_keyboard_layout"] | 0, 0, 255);
         parsed.themeLight       = doc["theme_light"] | false;
         parsed.keyboardBrightness = constrain(doc["kb_brightness"] | 0, 0, 100);
         parsed.keyboardAutoOn     = doc["kb_auto_on"] | false;
@@ -447,6 +454,7 @@ void UserConfig::writeJson(handheld::config::JsonWriter& writer, bool persisted,
     writer.member("screen_off", scalars.screenOffTimeout);
     writer.member("brightness", scalars.brightness);
     writer.member("dense_font", scalars.denseFontMode);
+    writer.member("touch_keyboard_layout", scalars.touchKeyboardLayout);
     writer.member("theme_light", scalars.themeLight);
     writer.member("kb_brightness", scalars.keyboardBrightness);
     writer.member("kb_auto_on", scalars.keyboardAutoOn);

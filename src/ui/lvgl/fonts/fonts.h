@@ -11,3 +11,13 @@
 LV_FONT_DECLARE(lv_font_rsdeck_10)
 LV_FONT_DECLARE(lv_font_rsdeck_12)
 LV_FONT_DECLARE(lv_font_rsdeck_14)
+
+#ifdef RSCROWPANEL
+// CrowPanel's 800x480 surface uses larger type; other boards retain their fonts.
+LV_FONT_DECLARE(lv_font_crowpanel_14)
+LV_FONT_DECLARE(lv_font_crowpanel_18)
+LV_FONT_DECLARE(lv_font_crowpanel_22)
+#define lv_font_rsdeck_10 lv_font_crowpanel_14
+#define lv_font_rsdeck_12 lv_font_crowpanel_18
+#define lv_font_rsdeck_14 lv_font_crowpanel_22
+#endif

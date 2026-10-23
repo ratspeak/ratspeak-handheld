@@ -19,8 +19,8 @@ Send encrypted LXMF messages over LoRa or WiFi, directly from your handheld.
 No account or phone required. Keep contacts, discover peers, and carry your
 conversations with you. LoRa messaging works without an internet connection.
 
-This is the shared home for our handheld firmware, bringing rsDeck, rsPager
-and rsCardputer into one codebase. The protocol core uses rsReticulumLite and
+This codebase supports T-Deck, T-Pager, Cardputer, ThinkNode M9 and
+CrowPanel Advance 5-inch devices. The protocol core uses rsReticulumLite and
 rsLXMFLite, with device support built around the same messaging services.
 
 ## Devices
@@ -31,16 +31,23 @@ rsLXMFLite, with device support built around the same messaging services.
 | LilyGO T-Pager (SX1262) | Standalone and RNode |
 | M5Stack Cardputer Adv | Standalone and RNode; Cap LoRa-1262 required for LoRa |
 | Elecrow ThinkNode M9 | Standalone; RNode coming soon |
+| Elecrow CrowPanel Advance 5-inch V1.2/V1.3 + SX1262 | Standalone; display, touch, SX1262 messaging and Wi-Fi tested on hardware |
 
-An SD card is optional for normal messaging. Downloads are available for all
-four devices.
+CrowPanel support targets **V1.2/V1.3 with the Elecrow SX1262 module**. It has an
+English interface and an RU/EN touch keyboard, with optional additional layouts.
+It uses internal flash storage; SD, voice, RNode and launcher modes are disabled.
+See the [CrowPanel build and flashing guide](docs/crowpanel.md) for its required
+Elecrow 120 MHz SDK. CrowPanel images are built from this checkout; the upstream
+release and web-flasher links below are not a distribution path for this port.
+
+An SD card is optional for normal messaging on the other devices.
 
 This is beta firmware. If something isn't working, open an issue with your
 device, firmware version, and the steps to reproduce it.
 
 ## Install
 
-Download the ZIP for your device from [Releases](https://github.com/ratspeak/ratspeak-handheld/releases):
+For the upstream handheld targets, download the ZIP for your device from [Releases](https://github.com/ratspeak/ratspeak-handheld/releases):
 
 - **Full** — Standalone and RNode, with a launcher to choose between them at startup.
 - **Standalone** — the on-device messenger, using LoRa or WiFi.
@@ -66,6 +73,9 @@ back up your identity and messages first. See the
 for backups, updates and Launcher storage, and the [handheld guide](https://docs.ratspeak.org/docs/hardware/handheld-guide)
 for controls and setup.
 
+CrowPanel build instructions, the required 120 MHz SDK, and touch keyboard details
+are in [the CrowPanel guide](docs/crowpanel.md).
+
 ## Message history
 
 Internal storage keeps the newest messages. When it runs low, the oldest
@@ -73,14 +83,15 @@ messages are removed across all conversations; messages still being sent and
 drafts are kept. To keep the full history, use an SD card for messages: turn on
 **Settings → Storage → SD Message Store**; Cardputer uses an inserted card
 automatically. **Settings → Storage** shows internal usage and whether history
-is complete on the card or rolling.
+is complete on the card or rolling. CrowPanel uses internal storage only.
 
 ## Voice messages
 
 T-Deck, T-Pager, and Cardputer Adv can record and play voice messages up to
 15 seconds long. Open **Voice message** in a conversation, record your clip,
 then preview and send it. Sending returns to the conversation with inline
-playback and delivery status. ThinkNode M9 has no supported audio hardware.
+playback and delivery status. ThinkNode M9 has no supported audio hardware;
+voice support is disabled in the CrowPanel target.
 
 On Pager, move the wheel down from the composer to reach Voice and Send, then
 click to select. Cardputer also opens the recorder with **Ctrl+V**.
@@ -148,6 +159,18 @@ are written to `dist/`. Normal builds use the included Rust libraries; a Rust
 toolchain is not required.
 
 M9 builds Standalone only and does not require Arduino CLI.
+
+For **CrowPanel**, follow [docs/crowpanel.md](docs/crowpanel.md) first to install
+Elecrow's SDK next to the project and create the Python 3.12 environment. Then:
+
+```bash
+export PLATFORMIO_CORE_DIR="$PWD/.platformio-core"
+make package DEVICE=crowpanel PYTHON=.venv/bin/python
+```
+
+CrowPanel uses Arduino ESP32 3.0.2 through PlatformIO and builds Standalone only.
+Arduino CLI and a Rust toolchain are not required. The output is
+`dist/crowpanel-standalone.bin`, a complete image for address **0x0**.
 
 ## License
 

@@ -10,6 +10,44 @@
 
 namespace {
 
+#ifdef RSCROWPANEL
+// CrowPanel uses 14/18/22px type (19/24/28px line heights), not the
+// compact T-Pager metrics selected by screen width on the other boards.
+constexpr bool kWide = true;
+constexpr lv_coord_t kPad = 8;
+constexpr lv_coord_t kPanelW = Theme::CONTENT_W - kPad * 2;
+constexpr lv_coord_t kIdentityY = 8;
+constexpr lv_coord_t kIdentityH = 96;
+constexpr lv_coord_t kRowGap = 12;
+constexpr lv_coord_t kChipY = kIdentityY + kIdentityH + kRowGap;
+constexpr lv_coord_t kChipH = 72;
+constexpr lv_coord_t kStatY = kChipY + kChipH + kRowGap;
+constexpr lv_coord_t kStatH = 72;
+constexpr lv_coord_t kFooterY = kStatY + kStatH + kRowGap;
+constexpr lv_coord_t kFooterH = 72;
+constexpr lv_coord_t kGap = 12;
+constexpr lv_coord_t kCellW = (kPanelW - kGap * 2) / 3;
+constexpr lv_coord_t kCellValueW = kCellW - 14;
+constexpr int kAvatarSize = 64;
+constexpr lv_coord_t kIdentityTextX = 92;
+constexpr lv_coord_t kIdentityTextW = kPanelW - kIdentityTextX - 10;
+constexpr lv_coord_t kStatusW = 160;
+constexpr lv_coord_t kIdentityIdW = 180;
+constexpr lv_coord_t kIdentityLxmfW = kIdentityTextW - kIdentityIdW - 12;
+constexpr lv_coord_t kActionW = 180;
+constexpr lv_coord_t kFooterInfoW = kPanelW - kActionW - kGap;
+constexpr lv_coord_t kAnnounceX = kPad + kFooterInfoW + kGap;
+constexpr lv_coord_t kIdTitleY = 8;
+constexpr lv_coord_t kIdNameY = 32;
+constexpr lv_coord_t kIdRowY = 66;
+constexpr lv_coord_t kAvatarY = 16;
+constexpr lv_coord_t kChipValY = 32;
+constexpr lv_coord_t kStatValY = 32;
+constexpr lv_coord_t kSummaryY = 10;
+constexpr lv_coord_t kAnnounceAgeY = 42;
+static_assert(kFooterY + kFooterH <= Theme::CONTENT_H,
+              "Home panels must fit above the navigation bar");
+#else
 constexpr lv_coord_t kPad = 6;
 constexpr lv_coord_t kPanelW = Theme::CONTENT_W - (kPad * 2);
 // Wide short panels (T-Pager 480x222) use the pager's compact row metrics;
@@ -47,6 +85,8 @@ constexpr lv_coord_t kStatValY = kWide ? 14 : 17;
 constexpr lv_coord_t kSummaryY = kWide ? 5 : 6;
 constexpr lv_coord_t kAnnounceAgeY = kWide ? 21 : 23;
 
+#endif
+
 lv_obj_t* makePanel(lv_obj_t* parent, lv_coord_t x, lv_coord_t y, lv_coord_t w,
                     lv_coord_t h, uint32_t bg, uint32_t border) {
     lv_obj_t* obj = lv_obj_create(parent);
@@ -69,6 +109,9 @@ lv_obj_t* makeLabel(lv_obj_t* parent, lv_coord_t x, lv_coord_t y, lv_coord_t w,
     lv_obj_t* lbl = lv_label_create(parent);
     lv_obj_set_pos(lbl, x, y);
     lv_obj_set_width(lbl, w);
+#ifdef RSCROWPANEL
+    lv_obj_set_height(lbl, lv_font_get_line_height(font));
+#endif
     lv_label_set_long_mode(lbl, LV_LABEL_LONG_CLIP);
     lv_obj_set_style_text_font(lbl, font, 0);
     lv_obj_set_style_text_color(lbl, lv_color_hex(color), 0);

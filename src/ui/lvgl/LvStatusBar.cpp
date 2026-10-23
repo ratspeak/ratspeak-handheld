@@ -9,10 +9,17 @@
 
 namespace {
 
+#ifdef RSCROWPANEL
+constexpr int kTimeW = 82;
+constexpr int kBattW = 64;
+constexpr int kWifiW = 24;
+constexpr int kLinksX = 90;
+#else
 constexpr int kTimeW = 50;
 constexpr int kBattW = 44;
 constexpr int kWifiW = 22;
 constexpr int kLinksX = 56;
+#endif
 constexpr int kLinksW = Theme::SCREEN_W - kLinksX - kBattW - kWifiW - 8;
 
 int normalizedBattery(int pct) {

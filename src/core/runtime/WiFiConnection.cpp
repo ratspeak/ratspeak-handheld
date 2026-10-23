@@ -1,3 +1,4 @@
+#include "transport/WiFiVersion.h"
 #include "WiFiConnection.h"
 #include "config/NetworkTiming.h"
 #include "transport/WiFiInterface.h"
@@ -44,7 +45,7 @@ bool WiFiConnection::begin(const UserSettings& settings) {
     if (replacing || WiFi.status() == WL_CONNECTED) WiFi.disconnect(false);
     WiFi.setAutoReconnect(false);
     if (!WiFi.mode(WIFI_STA)) return false;
-    if (settings.autoIfaceEnabled) WiFi.enableIpV6();
+    if (settings.autoIfaceEnabled) handheld::wifi_version::enableIPv6();
     _state = State::Waiting; _deadline = static_cast<uint32_t>(millis());
     return true;
 }

@@ -1,4 +1,5 @@
 #include "LvNodesScreen.h"
+#include "TouchKeyboard.h"
 #include "Theme.h"
 #include "LvTheme.h"
 #include "LvInput.h"
@@ -181,7 +182,7 @@ void LvNodesScreen::createUI(lv_obj_t* parent) {
         row.id = lv_label_create(row.box);
         lv_obj_set_style_text_font(row.id, &lv_font_rsdeck_10, 0);
         lv_obj_set_style_text_color(row.id, lv_color_hex(Theme::TEXT_MUTED), 0);
-        lv_obj_set_pos(row.id, 8, 20);
+        lv_obj_set_pos(row.id, 8, 4 + lv_font_rsdeck_12.line_height);
         lv_obj_set_size(row.id, Theme::CONTENT_W - 16, lv_font_rsdeck_10.line_height);
         lv_label_set_long_mode(row.id, LV_LABEL_LONG_CLIP);
     }
@@ -189,6 +190,9 @@ void LvNodesScreen::createUI(lv_obj_t* parent) {
     _overlay = lv_obj_create(lv_layer_top());
     lv_obj_set_size(_overlay, 260, 158);
     lv_obj_set_pos(_overlay, (Theme::SCREEN_W - 260) / 2, Theme::STATUS_BAR_H + (Theme::CONTENT_H - 158) / 2);
+    #ifdef RSCROWPANEL
+    lv_obj_set_size(_overlay,420,260);lv_obj_center(_overlay);
+#endif
     lv_obj_add_style(_overlay, LvTheme::styleModal(), 0);
     lv_obj_set_style_pad_all(_overlay, 0, 0);
     lv_obj_clear_flag(_overlay, LV_OBJ_FLAG_SCROLLABLE);
@@ -206,20 +210,23 @@ void LvNodesScreen::createUI(lv_obj_t* parent) {
     lv_obj_set_style_text_color(_overlayMeta, lv_color_hex(Theme::TEXT_MUTED), 0);
     lv_label_set_long_mode(_overlayMeta, LV_LABEL_LONG_CLIP);
     lv_obj_set_width(_overlayMeta, 236);
-    lv_obj_set_pos(_overlayMeta, 12, 29);
+    lv_obj_set_pos(_overlayMeta, 12, 10 + lv_font_rsdeck_14.line_height);
 
     _overlayReach = lv_label_create(_overlay);
     lv_obj_set_style_text_font(_overlayReach, &lv_font_rsdeck_10, 0);
     lv_obj_set_style_text_color(_overlayReach, lv_color_hex(Theme::TEXT_SECONDARY), 0);
     lv_label_set_long_mode(_overlayReach, LV_LABEL_LONG_CLIP);
     lv_obj_set_width(_overlayReach, 236);
-    lv_obj_set_pos(_overlayReach, 12, 43);
+    lv_obj_set_pos(_overlayReach, 12, 10 + lv_font_rsdeck_14.line_height + lv_font_rsdeck_10.line_height);
 
     const char* menuText[] = {"Save Contact", "Message", "Close"};
     for (int i = 0; i < 3; i++) {
         lv_obj_t* btn = lv_obj_create(_overlay);
         lv_obj_set_size(btn, 236, 24);
         lv_obj_set_pos(btn, 12, 63 + i * 27);
+#ifdef RSCROWPANEL
+        lv_obj_set_size(btn,396,48);lv_obj_set_pos(btn,12,90+i*52);
+#endif
         lv_obj_set_style_bg_color(btn, lv_color_hex(Theme::BG_SURFACE), 0);
         lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
         lv_obj_set_style_border_color(btn, lv_color_hex(Theme::BORDER), 0);
@@ -263,6 +270,12 @@ void LvNodesScreen::createUI(lv_obj_t* parent) {
     lv_label_set_text(nickTitle, "Contact name");
     lv_obj_set_pos(nickTitle, 0, 0);
 
+#ifdef RSCROWPANEL
+    lv_obj_add_flag(_nicknameBox,LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(_nicknameBox,[](lv_event_t* e) {
+        static_cast<LvNodesScreen*>(lv_event_get_user_data(e))->showNicknameInput();
+    },LV_EVENT_CLICKED,this);
+#endif
     _nicknameLbl = lv_label_create(_nicknameBox);
     lv_obj_set_style_text_font(_nicknameLbl, &lv_font_rsdeck_14, 0);
     lv_obj_set_style_text_color(_nicknameLbl, lv_color_hex(Theme::PRIMARY), 0);
@@ -502,6 +515,13 @@ void LvNodesScreen::showNicknameInput() {
     for (int i = 0; i < 3; i++) lv_obj_add_flag(_menuBtns[i], LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(_nicknameBox, LV_OBJ_FLAG_HIDDEN);
     updateNicknameDisplay();
+#ifdef RSCROWPANEL
+    TouchKeyboard::show("Contact name",_nicknameText.c_str(),16,[this](const std::string& value) {
+        _nicknameText=value.c_str();updateNicknameDisplay();
+        KeyEvent enter{};enter.enter=true;handleKey(enter);
+        return true;
+    });
+#endif
 }
 
 void LvNodesScreen::updateMenuSelection() {

@@ -19,6 +19,9 @@ private:
     bool readGT911();
 
     uint8_t _i2cAddress = 0;
+#ifdef RSCROWPANEL
+    uint32_t _lastSampleMs = 0;
+#endif
 
     bool _touched = false;
     int16_t _x = 0;
