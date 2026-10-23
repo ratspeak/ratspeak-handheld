@@ -1,4 +1,5 @@
 #include "LvMessageView.h"
+#include "input/Utf8.h"
 #include "ClockText.h"
 #include "ui/FeatureAvailability.h"
 #include "ui/MessageAudio.h"
@@ -18,9 +19,17 @@
 
 namespace {
 
+#ifdef RSCROWPANEL
+constexpr int kHeaderH = 56;
+constexpr int kInputH = 56;
+constexpr int kComposerButtonW = 88;
+constexpr int kComposerHeight = 46;
+#else
 constexpr int kHeaderH = 36;
 constexpr int kInputH = 31;
 constexpr int kComposerButtonW = 44;
+constexpr int kComposerHeight = 23;
+#endif
 constexpr int kBubbleMaxW = Theme::CONTENT_W * 3 / 4;
 constexpr const char* kComposerPlaceholder = "Message...";
 
@@ -292,7 +301,9 @@ void LvMessageView::updateComposerText() {
 #if HAS_SCROLLWHEEL
     if (!_composerAction) display += "_";
 #else
+#ifndef RSCROWPANEL
     display += "_";
+#endif
 #endif
     lv_textarea_set_text(_textarea, display.c_str());
     lv_textarea_set_cursor_pos(_textarea, LV_TEXTAREA_CURSOR_LAST);
@@ -341,7 +352,7 @@ void LvMessageView::createUI(lv_obj_t* parent) {
     lv_obj_set_style_text_color(_lblHeaderMeta, lv_color_hex(Theme::TEXT_SECONDARY), 0);
     lv_label_set_long_mode(_lblHeaderMeta, LV_LABEL_LONG_DOT);
     lv_obj_set_size(_lblHeaderMeta, Theme::CONTENT_W - 30, lv_font_rsdeck_10.line_height);
-    lv_obj_set_pos(_lblHeaderMeta, 22, 21);
+    lv_obj_set_pos(_lblHeaderMeta, 22, 2 + lv_font_rsdeck_14.line_height);
 
     // Make header tappable for back navigation
     lv_obj_add_flag(_header, LV_OBJ_FLAG_CLICKABLE);
@@ -437,7 +448,7 @@ void LvMessageView::createUI(lv_obj_t* parent) {
     lv_obj_clear_flag(_inputRow, LV_OBJ_FLAG_SCROLLABLE);
 
     _textarea = lv_textarea_create(_inputRow);
-    lv_obj_set_size(_textarea, Theme::CONTENT_W - kComposerButtonW - 12, 23);
+    lv_obj_set_size(_textarea, Theme::CONTENT_W - kComposerButtonW - 12, kComposerHeight);
     lv_obj_align(_textarea, LV_ALIGN_LEFT_MID, 0, 0);
     lv_textarea_set_one_line(_textarea, true);
     lv_textarea_set_max_length(_textarea, (_rrcMode?handheld::rrc::DraftCapacity:MAX_COMPOSER_CHARS) + 1);
@@ -450,6 +461,14 @@ void LvMessageView::createUI(lv_obj_t* parent) {
     lv_obj_add_event_cb(_textarea, [](lv_event_t* e) {
         auto* self = (LvMessageView*)lv_event_get_user_data(e);
         lv_event_code_t code = lv_event_get_code(e);
+#ifdef RSCROWPANEL
+        if(code == LV_EVENT_READY) {
+            const auto capacity=self->_rrcMode?handheld::rrc::DraftCapacity:MAX_COMPOSER_CHARS;
+            self->_inputText=handheld::utf8::prefix(lv_textarea_get_text(self->_textarea),capacity);
+            self->composerEdited();self->updateComposerState();self->updateComposerText();
+            return;
+        }
+#endif
         if (code == LV_EVENT_FOCUSED || code == LV_EVENT_CLICKED || code == LV_EVENT_PRESSED) {
             self->dismissSelection();
             self->refreshComposerPlaceholder();
@@ -459,7 +478,7 @@ void LvMessageView::createUI(lv_obj_t* parent) {
     }, LV_EVENT_ALL, this);
 
     _btnSend = lv_btn_create(_inputRow);
-    lv_obj_set_size(_btnSend, kComposerButtonW, 23);
+    lv_obj_set_size(_btnSend, kComposerButtonW, kComposerHeight);
     lv_obj_align(_btnSend, LV_ALIGN_RIGHT_MID, 0, 0);
     lv_obj_add_style(_btnSend, LvTheme::styleBtn(), 0);
     lv_obj_set_style_pad_all(_btnSend, 0, 0);
@@ -1332,7 +1351,7 @@ bool LvMessageView::handleKey(const KeyEvent& event) {
             return true;
         }
         if (!_inputText.empty()) {
-            _inputText.pop_back();
+            handheld::utf8::eraseLast(_inputText);
             composerEdited();
             updateComposerState();
         } else if (!event.repeat) {

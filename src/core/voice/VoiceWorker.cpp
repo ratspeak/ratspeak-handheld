@@ -372,7 +372,7 @@ void VoiceWorker::runMemo(Impl& i) {
         return elapsed<=(encoding?80000u:40000u);
     };
     auto frames=[&] {
-        const size_t completed=record?total:std::min(total,size_t(i.resumeFrame)+i.device.playedSamples()/320);
+        const size_t completed=record?total:std::min<size_t>(total,size_t(i.resumeFrame)+i.device.playedSamples()/320);
         portENTER_CRITICAL(&i.mux);i.status.frames=std::max(completed,size_t(i.resumeFrame));portEXIT_CRITICAL(&i.mux);
     };
     auto encode=[&](bool captureRunning=true) {

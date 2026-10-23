@@ -1,5 +1,6 @@
+#include "transport/WiFiVersion.h"
 #include "config/BoardConfig.h"
-#if defined(RSDECK) || defined(RSM9)
+#if defined(RSDECK) || defined(RSM9) || defined(RSCROWPANEL)
 #include "runtime/LvglApplication.h"
 #include "LvMemory.h"
 #include "runtime/FactoryResetRecovery.h"
@@ -42,6 +43,7 @@
 #include "input/HotkeyManager.h"
 #include "UIManager.h"
 #include "Theme.h"
+#include "TouchKeyboard.h"
 #include "LvTabBar.h"
 #include "LvInput.h"
 #include "screens/LvBootScreen.h"
@@ -341,7 +343,7 @@ static void printAutoIface() {
     Serial.printf("Online              : %s\n", autoIface.isOnline() ? "YES" : "no");
     if (autoIface.isOnline()) {
         Serial.printf("Multicast address   : %s\n", autoIface.multicastAddress().c_str());
-        Serial.printf("Link-local          : %s\n", WiFi.localIPv6().toString().c_str());
+        Serial.printf("Link-local          : %s\n", handheld::wifi_version::localIPv6().toString().c_str());
         Serial.printf("Peers               : %u\n", (unsigned)autoIface.peerCount());
     }
     Serial.printf("Deferred-start armed: %s (elapsed=%lums)\n",
@@ -497,7 +499,9 @@ void handheld::lvgl_application::setup() {
     sharedSPI.begin(SPI_SCK, SPI_MISO, SPI_MOSI);
     // Deassert all slave CS pins to prevent bus contention
     pinMode(LORA_CS, OUTPUT); digitalWrite(LORA_CS, HIGH);
+#if HAS_SD
     pinMode(SD_CS, OUTPUT);   digitalWrite(SD_CS, HIGH);
+#endif
     bootTraceStage("i2c-spi");
 
     // Mount flash before radio bring-up so persisted RF settings are used from
@@ -533,6 +537,7 @@ void handheld::lvgl_application::setup() {
     bool sdInitializationFailed = false;
     digitalWrite(LORA_CS, HIGH);
     delay(10);
+#if HAS_SD
     if (sdStore.begin(&sharedSPI, SD_CS)) {
         if (flash.resetState() == FlashStore::ResetState::Clear) {
             sdHadExistingData = sdStore.hasExistingData();
@@ -542,6 +547,7 @@ void handheld::lvgl_application::setup() {
     } else {
         Serial.println("[SD] Not detected");
     }
+#endif
     bootTraceStage("sd-probe");
 
 #if !defined(RSM9)
@@ -619,6 +625,9 @@ void handheld::lvgl_application::setup() {
     trackball.begin();
     inputManager.begin(&keyboard, &trackball, &touch);
     LvInput::init(&keyboard, &trackball, &touch);
+#elif defined(RSCROWPANEL)
+    inputManager.begin(&keyboard, &touch);
+    LvInput::init(&keyboard, &touch);
 #else
     inputManager.begin(&keyboard);
     LvInput::init(&keyboard);
@@ -1194,6 +1203,13 @@ void handheld::lvgl_application::setup() {
         }, false)) lvTimezoneScreen.setSaving(false);
     });
 
+#ifdef RSCROWPANEL
+    TouchKeyboard::configure(serviceClient.config.settings().touchKeyboardLayout,[](uint8_t index) {
+        if(serviceClient.settingsPending()) return false;
+        serviceClient.config.settings().touchKeyboardLayout=index;
+        return serviceClient.applySettings({},false);
+    });
+#endif
     // Name input screen (first boot only — when no display name is set)
     lvNameInputScreen.setDoneCallback([showTimezone](const String& name) {
         if (serviceClient.settingsPending()) return;

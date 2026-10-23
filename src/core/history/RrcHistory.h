@@ -157,7 +157,7 @@ inline bool project(const disk::Context& context, const HistoryWindow::Query& qu
         unsupported?sizeof(handheld::rrc::UnsupportedResourceText)-1:view.text.length;
     const size_t total = header.titleLength + header.contentLength;
     if (query.offset > total) return fail(result, storage::Error::Stale);
-    const size_t copied = std::min(total - query.offset, std::min(capacity, size_t(query.capacity)) - sizeof header);
+    const size_t copied = std::min<size_t>(total - query.offset, std::min<size_t>(capacity, query.capacity) - sizeof header);
     std::memcpy(bytes, &header, sizeof header);
     for (size_t n = 0; n < copied; ++n) {
         const auto offset = query.offset + n;

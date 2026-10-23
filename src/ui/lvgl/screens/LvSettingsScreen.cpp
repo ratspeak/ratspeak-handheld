@@ -1,4 +1,6 @@
 #include "LvSettingsScreen.h"
+#include "TouchKeyboard.h"
+#include <cerrno>
 #include "LvPrivacy.h"
 #include <new>
 #include <algorithm>
@@ -246,6 +248,9 @@ const char* LvSettingsScreen::confirmationTitle() const {
 }
 
 const char* LvSettingsScreen::confirmationDetail() const {
+#ifdef RSCROWPANEL
+    if (hasPendingConfirmation()) return "Release, then hold the armed row to confirm. Tap Back to cancel.";
+#endif
     if (_confirmingInitSD) return "Hold " BOARD_CONFIRM_INPUT_NAME ": initialize & restart. Back cancels.";
     if (_confirmingWipeSD) return "Hold " BOARD_CONFIRM_INPUT_NAME " to erase SD data. Backspace cancels.";
     if (_confirmingReset) return "Hold " BOARD_CONFIRM_INPUT_NAME " to erase device. Backspace cancels.";
@@ -692,7 +697,9 @@ void LvSettingsScreen::buildItems() {
     _categories.back().id = SettingsCategoryId::Network;
 
     buildPropagationItems(idx);
+#if HAS_AUDIO
     buildVoiceItems(idx);
+#endif
 
     // Identity
     int devStart = idx;
@@ -843,6 +850,7 @@ void LvSettingsScreen::buildItems() {
         [](int v) { return String(v) + "s"; }, 10, 7200, 10});
     _items.back().id = SettingId::DisplayOffAfter;
     idx++;
+#if HAS_KEYBOARD
     _items.push_back({"Key Backlight", SettingType::ENUM_CHOICE,
         [&s]() { return keyboardBacklightChoice(s.keyboardBrightness); },
         [&s](int v) { s.keyboardBrightness = keyboardBacklightPercent(v); },
@@ -861,6 +869,7 @@ void LvSettingsScreen::buildItems() {
         [](int v) { return String(onOff(v != 0)); }});
     _items.back().id = SettingId::KeysAutoOff;
     idx++;
+#endif
 #if HAS_TRACKBALL || HAS_SCROLLWHEEL
     // Same persisted field/JSON key on all boards; label follows the pointer device
 #if HAS_SCROLLWHEEL
@@ -888,12 +897,17 @@ void LvSettingsScreen::buildItems() {
     _categories.push_back({"Display & Input", dispStart, idx - dispStart,
         [&s]() -> String {
             String summary = String("Screen ") + String(s.brightness);
+#if HAS_KEYBOARD
             summary += "% / Keys ";
             summary += keyboardBacklightLabel(s.keyboardBrightness);
+#else
+            summary += "% / Touch";
+#endif
             return summary;
         }});
     _categories.back().id = SettingsCategoryId::Display;
 
+    #if HAS_AUDIO
     // Alerts & Audio
     int audioStart = idx;
     _items.push_back({"Audio Alerts", SettingType::TOGGLE,
@@ -916,6 +930,7 @@ void LvSettingsScreen::buildItems() {
         }});
     _categories.back().id = SettingsCategoryId::Alerts;
 
+    #endif
     // Time & Location
     int gpsStart = idx;
 #if HAS_GPS
@@ -1040,6 +1055,7 @@ void LvSettingsScreen::buildItems() {
         }});
     _items.back().id = SettingId::Flash;
     idx++;
+#if HAS_SD
     _items.push_back({"SD Card", SettingType::READONLY, nullptr, nullptr,
         [this](int) { return _service && _service->status().sd ? String("Ready") : String("Not Found"); }});
     _items.back().id = SettingId::SdCard;
@@ -1050,6 +1066,7 @@ void LvSettingsScreen::buildItems() {
         [](int v) { return String(onOff(v != 0)); }});
     _items.back().id = SettingId::SdMessageStore;
     idx++;
+#endif
     _items.push_back({handheld::ui::storage_history::Label, SettingType::READONLY, nullptr, nullptr,
         [this](int) {
             if (!_service) return String("Unknown");
@@ -1127,6 +1144,7 @@ void LvSettingsScreen::buildItems() {
             ; }});
     _items.back().id = SettingId::Firmware;
     idx++;
+    #ifndef RSCROWPANEL
     {
         SettingItem updateCheck;
         updateCheck.label = "Check Firmware";
@@ -1142,6 +1160,7 @@ void LvSettingsScreen::buildItems() {
         _items.back().id = SettingId::CheckFirmware;
         idx++;
     }
+    #endif
     _items.push_back({"RNS Transport", SettingType::READONLY, nullptr, nullptr,
         [this](int) { return _backend && _backend->isTransportActive() ? String("ACTIVE") : String("OFFLINE"); }});
     _items.back().id = SettingId::RnsTransport;
@@ -1416,6 +1435,9 @@ void LvSettingsScreen::rebuildCategoryList() {
     // Title
     lv_obj_t* titleRow = lv_obj_create(_scrollContainer);
     lv_obj_set_size(titleRow, Theme::CONTENT_W, 26);
+#ifdef RSCROWPANEL
+    lv_obj_set_height(titleRow, 40);
+#endif
     lv_obj_set_style_bg_color(titleRow, lv_color_hex(Theme::BG_ELEVATED), 0);
     lv_obj_set_style_bg_opa(titleRow, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(titleRow, lv_color_hex(Theme::BORDER), 0);
@@ -1445,6 +1467,9 @@ void LvSettingsScreen::rebuildCategoryList() {
 
         lv_obj_t* row = lv_obj_create(_scrollContainer);
         lv_obj_set_size(row, Theme::CONTENT_W, 40);
+#ifdef RSCROWPANEL
+        lv_obj_set_height(row,52);
+#endif
         lv_obj_add_style(row, LvTheme::styleListBtn(), 0);
         lv_obj_add_style(row, LvTheme::styleListBtnFocused(), LV_STATE_FOCUSED);
         lv_obj_set_style_bg_color(row, lv_color_hex(selected ? Theme::BG_HOVER : Theme::BG), 0);
@@ -1523,6 +1548,9 @@ void LvSettingsScreen::rebuildItemList() {
     // Category header
     lv_obj_t* headerRow = lv_obj_create(_scrollContainer);
     lv_obj_set_size(headerRow, Theme::CONTENT_W, 24);
+#ifdef RSCROWPANEL
+    lv_obj_set_height(headerRow, 40);
+#endif
     lv_obj_set_style_bg_color(headerRow, lv_color_hex(Theme::BG_ELEVATED), 0);
     lv_obj_set_style_bg_opa(headerRow, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(headerRow, lv_color_hex(Theme::BORDER), 0);
@@ -1585,6 +1613,9 @@ void LvSettingsScreen::rebuildItemList() {
         uint32_t confirmColor = _confirmingDevMode || _confirmingInitSD ? Theme::WARNING_CLR : Theme::ERROR_CLR;
         lv_obj_t* confirm = lv_obj_create(_scrollContainer);
         lv_obj_set_size(confirm, Theme::CONTENT_W, 34);
+#ifdef RSCROWPANEL
+    lv_obj_set_height(confirm, 56);
+#endif
         lv_obj_set_style_bg_color(confirm, lv_color_hex(Theme::BG_SURFACE), 0);
         lv_obj_set_style_bg_opa(confirm, LV_OPA_COVER, 0);
         lv_obj_set_style_border_color(confirm, lv_color_hex(confirmColor), 0);
@@ -1625,6 +1656,9 @@ void LvSettingsScreen::rebuildItemList() {
 
         lv_obj_t* row = lv_obj_create(_scrollContainer);
         lv_obj_set_size(row, Theme::CONTENT_W, voiceLimitHint ? 64 : fullValue || radioRules ? 44 : _freqEditing && selected ? 46 : 28);
+#ifdef RSCROWPANEL
+        lv_obj_set_height(row,52);
+#endif
         lv_obj_add_style(row, LvTheme::styleListBtn(), 0);
         lv_obj_add_style(row, LvTheme::styleListBtnFocused(), LV_STATE_FOCUSED);
         lv_obj_set_style_bg_color(row, lv_color_hex(armed ? Theme::BG_SURFACE : (selected ? Theme::BG_HOVER : Theme::BG)), 0);
@@ -1649,7 +1683,25 @@ void LvSettingsScreen::rebuildItemList() {
                 KeyEvent tap = {};
                 tap.enter = true;
                 self->handleKey(tap);
-            }, LV_EVENT_CLICKED, this);
+            },
+#ifdef RSCROWPANEL
+            LV_EVENT_SHORT_CLICKED,
+#else
+            LV_EVENT_CLICKED,
+#endif
+            this);
+#ifdef RSCROWPANEL
+            lv_obj_add_event_cb(row, [](lv_event_t* e) {
+                auto* self = static_cast<LvSettingsScreen*>(lv_event_get_user_data(e));
+                lv_obj_t* target = lv_event_get_target(e);
+                const int idx = int(intptr_t(lv_obj_get_user_data(target)));
+                if (idx < 0 || idx >= int(self->_items.size()) ||
+                    !self->armedAction(self->_items[idx])) return;
+                self->_selectedIdx = idx;
+                lv_group_focus_obj(target);
+                self->handleLongPress();
+            }, LV_EVENT_LONG_PRESSED, this);
+#endif
         }
         // Information and one-choice rows are navigable but never activatable.
         lv_obj_add_event_cb(row, [](lv_event_t* e) {
@@ -1685,7 +1737,11 @@ void LvSettingsScreen::rebuildItemList() {
             item.type == SettingType::ACTION ? Theme::TEXT_PRIMARY :
             !editable ? Theme::TEXT_MUTED : Theme::TEXT_SECONDARY;
         lv_obj_set_style_text_color(nameLbl, lv_color_hex(nameColor), 0);
+        #ifdef RSCROWPANEL
+        clipLabel(nameLbl, Theme::CONTENT_W - 300);
+#else
         clipLabel(nameLbl, Theme::CONTENT_W - (deliveryPolicy ? 176 : 136));
+#endif
         lv_label_set_text(nameLbl, item.label);
         lv_obj_align(nameLbl, LV_ALIGN_LEFT_MID, 8, valueOffset);
 
@@ -1744,7 +1800,11 @@ void LvSettingsScreen::rebuildItemList() {
             lv_obj_set_style_text_font(valLbl, fullValue ? &lv_font_rsdeck_10 : font, 0);
             lv_obj_set_style_text_color(valLbl, lv_color_hex(valColor), 0);
             lv_obj_set_style_text_align(valLbl, LV_TEXT_ALIGN_RIGHT, 0);
+            #ifdef RSCROWPANEL
+            clipLabel(valLbl, fullValue ? Theme::CONTENT_W - 16 : 280);
+#else
             clipLabel(valLbl, fullValue ? Theme::CONTENT_W - 16 : _freqEditing && selected ? 180 : deliveryPolicy ? 156 : 124);
+#endif
             lv_label_set_text(valLbl, valStr.c_str());
             lv_obj_align(valLbl, LV_ALIGN_RIGHT_MID, -8, fullValue ? 10 : valueOffset);
             // Cache value label for the actively edited item (in-place updates)
@@ -1845,6 +1905,9 @@ void LvSettingsScreen::rebuildWifiList() {
     // Header
     lv_obj_t* headerRow = lv_obj_create(_scrollContainer);
     lv_obj_set_size(headerRow, Theme::CONTENT_W, 22);
+#ifdef RSCROWPANEL
+    lv_obj_set_height(headerRow, 40);
+#endif
     lv_obj_set_style_bg_opa(headerRow, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_color(headerRow, lv_color_hex(Theme::BORDER), 0);
     lv_obj_set_style_border_width(headerRow, 1, 0);
@@ -1887,6 +1950,9 @@ void LvSettingsScreen::rebuildWifiList() {
 
         lv_obj_t* row = lv_obj_create(_scrollContainer);
         lv_obj_set_size(row, Theme::CONTENT_W, 22);
+#ifdef RSCROWPANEL
+        lv_obj_set_height(row,52);
+#endif
         lv_obj_add_style(row, LvTheme::styleListBtn(), 0);
         lv_obj_add_style(row, LvTheme::styleListBtnFocused(), LV_STATE_FOCUSED);
         lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
@@ -1931,6 +1997,9 @@ void LvSettingsScreen::rebuildWifiList() {
     {
         lv_obj_t* retry = lv_btn_create(_scrollContainer);
         lv_obj_set_size(retry, Theme::CONTENT_W, 26);
+#ifdef RSCROWPANEL
+    lv_obj_set_height(retry, 40);
+#endif
         lv_obj_add_style(retry, LvTheme::styleListBtn(), 0);
         lv_obj_add_style(retry, LvTheme::styleListBtnFocused(), LV_STATE_FOCUSED);
         lv_obj_set_user_data(retry, (void*)(intptr_t)-1);
@@ -2215,6 +2284,9 @@ bool LvSettingsScreen::handleKey(const KeyEvent& event) {
                             }
                             _selectedIdx = i; _editing = _numericTyping = false; _textEditing = true;
                             rebuildItemList();
+#ifdef RSCROWPANEL
+                            showTouchTextEditor();
+#endif
                             return true;
                         }
                         return true;
@@ -2296,6 +2368,9 @@ bool LvSettingsScreen::handleKey(const KeyEvent& event) {
                     }
                     _textEditing = true;
                     rebuildItemList();
+#ifdef RSCROWPANEL
+                    showTouchTextEditor();
+#endif
                 } else if (item.type == SettingType::TOGGLE) {
                     clearConfirmations();
                     int val = item.getter ? item.getter() : 0;
@@ -2306,6 +2381,26 @@ bool LvSettingsScreen::handleKey(const KeyEvent& event) {
                     }
                     applyAndSave();
                     rebuildItemList();
+#ifdef RSCROWPANEL
+                } else if (item.type == SettingType::INTEGER || item.type == SettingType::ENUM_CHOICE) {
+                    const int selected=_selectedIdx;
+                    const auto value=String(item.getter?item.getter():0);
+                    if(item.type==SettingType::ENUM_CHOICE) {
+                        // Touch choices use the existing setting setter and validation.
+                        showTouchChoices(selected);
+                    } else {
+                        TouchKeyboard::show(item.id==SettingId::Frequency?"Frequency (Hz)":item.label,
+                            value.c_str(),12,[this,selected](const std::string& text) {
+                                if(text.empty() || selected>=int(_items.size())) return false;
+                                errno=0;char* end=nullptr;long v=strtol(text.c_str(),&end,10);
+                                auto& setting=_items[selected];
+                                if(errno || !end || *end || (v<setting.minVal && !(setting.allowOff && v==0)) || v>setting.maxVal || !setting.setter) return false;
+                                _selectedIdx=selected;_editValue=int(v);_editing=true;_numericTyping=false;
+                                KeyEvent enter{};enter.enter=true;handleKey(enter);
+                                return !_editing;
+                            });
+                    }
+#endif
                 } else if (item.id == SettingId::Frequency && item.type == SettingType::INTEGER) {
                     clearConfirmations();
                     // Radio-style digit cursor editor for frequency
@@ -2517,3 +2612,31 @@ bool LvSettingsScreen::applyAndSave(bool rebuildItems) {
     }
     return admitted;
 }
+
+#ifdef RSCROWPANEL
+void LvSettingsScreen::showTouchChoices(int selected) {
+ auto& item=_items[selected];
+ std::vector<std::string> labels;
+ for(const auto* label:item.enumLabels) labels.emplace_back(label);
+ TouchKeyboard::choose(item.label,labels,item.getter?item.getter():0,
+  [this,selected](size_t index) {
+   auto& setting=_items[selected];
+   if(index>=setting.enumLabels.size() || !setting.setter) return false;
+   _selectedIdx=selected;_editValue=int(index);_editing=true;_numericTyping=false;
+   KeyEvent enter{};enter.enter=true;handleKey(enter);
+   return !_editing;
+  });
+}
+#endif
+
+#ifdef RSCROWPANEL
+void LvSettingsScreen::showTouchTextEditor() {
+ const auto& item=_items[_selectedIdx];
+ TouchKeyboard::show(item.label,_editText.c_str(),item.maxTextLen,
+  [this](const std::string& value) {
+   if(!UserConfig::trySetString(_editText,value.c_str(),value.size())) return false;
+   KeyEvent enter{};enter.enter=true;handleKey(enter);
+   return !_textEditing;
+  },item.id==SettingId::WiFiPassword);
+}
+#endif

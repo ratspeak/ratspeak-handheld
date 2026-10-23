@@ -8,6 +8,9 @@
 #include "SPIFile.h"
 
 bool SDStore::begin(SPIClass* spi, int csPin) {
+#if !HAS_SD
+    (void)spi; (void)csPin; return false;
+#endif
     handheld::storage::assertOwner();
     if (!handheld::storage::StorageLease::initialize()) return false;
     handheld::storage::StorageLease lease;

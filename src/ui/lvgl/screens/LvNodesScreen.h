@@ -69,7 +69,11 @@ private:
     lv_obj_t* _nicknameBox = nullptr;
     lv_obj_t* _nicknameLbl = nullptr;
     lv_obj_t* _nicknameHint = nullptr;
+    #ifdef RSCROWPANEL
+    static constexpr int RowHeight = 56;
+#else
     static constexpr int RowHeight = 36;
+#endif
     static constexpr int ViewportHeight = Theme::CONTENT_H - 19;
     // Partial first/last rows, one overscan each side, and one pinned press.
     static constexpr size_t RowPoolSize = (ViewportHeight + RowHeight - 1) / RowHeight + 4;

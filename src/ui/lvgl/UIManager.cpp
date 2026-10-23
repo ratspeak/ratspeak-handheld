@@ -1,4 +1,5 @@
 #include "UIManager.h"
+#include "TouchKeyboard.h"
 #include "voice/VoiceInput.h"
 #include "Theme.h"
 #include "LvTheme.h"
@@ -44,6 +45,7 @@ void UIManager::begin() {
 
 void UIManager::setScreen(LvScreen* screen) {
     if (_currentLvScreen == screen) return;
+    TouchKeyboard::close();
     handheld::voice::VoiceInput::instance().cancel();
     if(_voicePanel && _voicePanel->visible()) _voicePanel->hide();
     const char* fromTitle = _currentLvScreen ? _currentLvScreen->title() : "none";
@@ -117,6 +119,8 @@ void UIManager::setBootMode(bool boot) {
 void UIManager::update() {
     _lvStatusBar.update();
     if (_currentLvScreen) _currentLvScreen->refreshUI();
+    TouchKeyboard::attach(lv_scr_act());
+    TouchKeyboard::attach(lv_layer_top());
 }
 
 void UIManager::forceRedraw() {

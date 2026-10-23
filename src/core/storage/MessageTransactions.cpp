@@ -676,7 +676,7 @@ void MessageTransactions::read(const Request& request, uint8_t* bytes, size_t ca
     const size_t total = size_t(header.titleLength) + header.contentLength;
     if (request.offset > total) { result.error = Error::InvalidRecord; return; }
     memcpy(bytes, &header, sizeof(header));
-    const size_t count = std::min(total - request.offset, capacity - sizeof(header));
+    const size_t count = std::min<size_t>(total - request.offset, capacity - sizeof(header));
     size_t offset = request.offset, copied = 0;
     for (const char* field : {"title", "content"}) {
         const auto value = document.document()[field].as<JsonString>();
@@ -699,7 +699,7 @@ void MessageTransactions::readAudio(const Request& request, uint8_t* bytes, size
     if (header.audio.state != 1 || request.offset > header.audio.length) {
         result.error = Error::InvalidRecord; return;
     }
-    const size_t count = std::min(size_t(header.audio.length) - request.offset, capacity - sizeof(header));
+    const size_t count = std::min<size_t>(size_t(header.audio.length) - request.offset, capacity - sizeof(header));
     File file = openAudio(request.key, 0, header, bytes + sizeof(header), request.offset, count);
     if (!file) file = openAudio(request.key, 1, header, bytes + sizeof(header), request.offset, count);
     if (!file) { result.error = Error::Read; return; }

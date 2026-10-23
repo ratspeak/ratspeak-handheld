@@ -21,7 +21,17 @@ constexpr int TextX = 54;
 constexpr int NavigationHeight = 30;
 constexpr int NavigationSpace = NavigationHeight + 6;
 constexpr int FamilyHeight = handheld::ui::RrcEnabled ? 24 : 0;
+#ifdef RSCROWPANEL
+constexpr int RowHeight = 88;
+constexpr int PreviewY = 33;
+constexpr int StatusBottom = 24;
+constexpr int TimeWidth = 76;
+#else
 constexpr int RowHeight = (Theme::CONTENT_H - FamilyHeight - NavigationSpace) / 2;
+constexpr int PreviewY = 22;
+constexpr int StatusBottom = 16;
+constexpr int TimeWidth = 43;
+#endif
 void peerText(const uint8_t* peer, char (&out)[33]) {
     constexpr char hex[] = "0123456789abcdef";
     for (size_t i=0;i<16;++i) { out[2*i]=hex[peer[i]>>4]; out[2*i+1]=hex[peer[i]&15]; }
@@ -275,7 +285,7 @@ void LvMessagesScreen::bindRows() {
             lv_obj_add_event_cb(avatar.canvas,[](lv_event_t* event) { lv_mem_free(lv_event_get_user_data(event)); },LV_EVENT_DELETE,pixels);
             LxmFaceAvatar::render(avatar.canvas,String(peer));
         }
-        widgets.name=label(row,&lv_font_rsdeck_14,Theme::TEXT_PRIMARY,TextX,2,Theme::CONTENT_W-TextX-58);
+        widgets.name=label(row,&lv_font_rsdeck_14,Theme::TEXT_PRIMARY,TextX,2,Theme::CONTENT_W-TextX-TimeWidth-15);
         // DOT only truncates after exhausting the label's height; keep the preview's line clear.
         lv_obj_set_height(widgets.name,lv_font_get_line_height(&lv_font_rsdeck_14));
         lv_label_set_long_mode(widgets.name,LV_LABEL_LONG_DOT);
@@ -287,21 +297,21 @@ void LvMessagesScreen::bindRows() {
             const time_t stamp=static_cast<time_t>(value.timestamp);struct tm result;
             if (localtime_r(&stamp,&result)) {
                 char clock[8];formatClockText(clock,sizeof(clock),result,_use24h);
-                auto* time=label(row,&lv_font_rsdeck_10,Theme::TEXT_MUTED,Theme::CONTENT_W-47,6,43);
+                auto* time=label(row,&lv_font_rsdeck_10,Theme::TEXT_MUTED,Theme::CONTENT_W-TimeWidth-4,6,TimeWidth);
                 lv_label_set_text(time,clock);
             }
         }
-        widgets.preview=label(row,&lv_font_rsdeck_12,Theme::TEXT_SECONDARY,TextX,22,Theme::CONTENT_W-TextX-8);
+        widgets.preview=label(row,&lv_font_rsdeck_12,Theme::TEXT_SECONDARY,TextX,PreviewY,Theme::CONTENT_W-TextX-8);
         lv_obj_set_height(widgets.preview,lv_font_get_line_height(&lv_font_rsdeck_12));
         // CLIP never mutates borrowed bytes; DOT is forbidden for bank pointers.
         lv_label_set_text_static(widgets.preview,(value.flags&Row::Unavailable)?"Message unavailable":
             value.previewLength?value.preview:"No preview");
         if (value.flags&Row::PreviewTruncated) {
             lv_obj_set_width(widgets.preview,Theme::CONTENT_W-TextX-23);
-            auto* more=label(row,&lv_font_rsdeck_12,Theme::TEXT_MUTED,Theme::CONTENT_W-19,22,15);
+            auto* more=label(row,&lv_font_rsdeck_12,Theme::TEXT_MUTED,Theme::CONTENT_W-25,PreviewY,21);
             lv_label_set_text_static(more,"...");
         }
-        widgets.status=label(row,&lv_font_rsdeck_10,Theme::TEXT_MUTED,TextX,RowHeight-16,Theme::CONTENT_W-TextX-8);
+        widgets.status=label(row,&lv_font_rsdeck_10,Theme::TEXT_MUTED,TextX,RowHeight-StatusBottom,Theme::CONTENT_W-TextX-8);
         lv_obj_set_height(widgets.status,lv_font_get_line_height(&lv_font_rsdeck_10));
     }
     updateStatuses();

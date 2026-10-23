@@ -377,7 +377,7 @@ void MessageStore::settle(const Request& request, const Result& result) noexcept
     if (result.conversationDelta < 0)
         _totalConversations -= std::min<uint32_t>(uint32_t(-int(result.conversationDelta)), _totalConversations);
     _totalUnread = result.unreadDelta > 0 && result.unreadDelta > INT_MAX - _totalUnread ? INT_MAX :
-        std::max(0, _totalUnread + result.unreadDelta);
+        std::max<int32_t>(0, _totalUnread + result.unreadDelta);
     bumpRevision();
 }
 
