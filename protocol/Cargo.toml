@@ -28,11 +28,15 @@ profile-small = []
 profile-micro = []
 
 [dependencies]
+lxst-codec2 = { path = "../../rsLXST/crates/lxst-codec2" }
+lxst-embedded = { path = "../../rsLXST/crates/lxst-embedded" }
 # The embedded Reticulum port (rsReticulumLite) for identity/announce/transport/proof/link/resource,
 # and the split LXMF codec (rsLXMFLite). Cross-repo path deps; both are no_std and stay faithful to
 # the trusted ../rsReticulum / ../rsLXMF.
 rns-lite-core = { path = "../../rsReticulumLite" }
 lxmf-lite-core = { path = "../../rsLXMFLite" }
+sha2 = { version = "0.10", default-features = false }
+zeroize = { version = "1", default-features = false }
 
 [lints.rust]
 unsafe_op_in_unsafe_fn = "warn"

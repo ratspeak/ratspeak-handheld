@@ -31,18 +31,9 @@ public:
 
     // Display backlight — accepts percentage 1-100
     void setBrightness(uint8_t percent);
-    void setDimTimeout(uint16_t seconds) {
-        _dimTimeout = seconds * 1000UL;
-        if (_offTimeout > 0 && _offTimeout <= _dimTimeout) {
-            _offTimeout = _dimTimeout + 10000UL;
-        }
-    }
-    void setOffTimeout(uint16_t seconds) {
-        _offTimeout = seconds * 1000UL;
-        if (_offTimeout > 0 && _offTimeout <= _dimTimeout) {
-            _offTimeout = _dimTimeout + 10000UL;
-        }
-    }
+    // Saved timeouts keep off >= dim; equal values turn the screen off without dimming.
+    void setDimTimeout(uint16_t seconds) { _dimTimeout = seconds * 1000UL; }
+    void setOffTimeout(uint16_t seconds) { _offTimeout = seconds * 1000UL; }
 
     // Keyboard backlight — accepts percentage 0-100 (0 = off)
     void setKbBrightness(uint8_t percent, bool apply=false);
@@ -64,6 +55,9 @@ private:
     unsigned long _offTimeout = 60000;
     uint8_t _brightnessPct = 100;  // User brightness as 1-100%
     static constexpr uint8_t DIM_PWM = 40;  // ~15% PWM when dimmed
+    // Dimming never brightens a low brightness setting.
+    uint8_t dimPWM() const { const uint8_t active = percentToPWM(_brightnessPct); return active < DIM_PWM ? active : DIM_PWM; }
+    uint8_t _kbBrightnessPct = 0xFF;  // Unknown until the first setKbBrightness.
     bool _kbAutoOn = false;
     bool _kbAutoOff = false;
     bool _kbLitBeforeOff = false;

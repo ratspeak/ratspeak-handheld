@@ -21,11 +21,70 @@ const _: () = {
     assert!(RS_HANDHELD_LINK_KEY_LEN == 64);
 };
 
+/// Build the 128-byte LINKIDENTIFY plaintext for an ACTIVE initiator Link.
+/// The owner encrypts this under that Link and sends context LINKIDENTIFY.
+///
+/// # Safety
+/// `ctx` is live; `link_id` reads 16 bytes, `out` writes 128 bytes. Regions
+/// must not overlap. No output is changed if the identity is unavailable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rs_handheld_rns_link_identify(
+    ctx: *const RsHandheldRns,
+    link_id: *const [u8; 16],
+    out: *mut [u8; 128],
+) -> RsHandheldStatus {
+    guard(|| {
+        if ctx.is_null() || link_id.is_null() || out.is_null() {
+            return RsHandheldStatus::ErrInvalidArg;
+        }
+        // SAFETY: checked pointers, caller owns disjoint correctly sized regions.
+        let Some(identity) = &unsafe { &*ctx }.identity else {
+            return RsHandheldStatus::ErrNotReady;
+        };
+        match rns_link::build_identification(identity, unsafe { &*link_id }, unsafe { &mut *out }) {
+            Ok(_) => RsHandheldStatus::Ok,
+            Err(_) => RsHandheldStatus::ErrInternal,
+        }
+    })
+}
+
+/// Verify a decrypted 128-byte LINKIDENTIFY on its exact responder Link, from the handshake on.
+/// C++ must retain the first verified identity and suppress repeat callbacks.
+///
+/// # Safety
+/// `link_id` reads 16 bytes, `data` reads `data_len`, `out_public` writes 64
+/// bytes; all regions are valid, correctly aligned and non-overlapping.
+/// Output is unchanged on any error. No Link state or caller policy is inferred.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rs_handheld_rns_link_verify_identification(
+    link_id: *const [u8; 16],
+    data: *const u8,
+    data_len: usize,
+    out_public: *mut [u8; 64],
+) -> RsHandheldStatus {
+    guard(|| {
+        if link_id.is_null() || data.is_null() || out_public.is_null() || data_len != 128 {
+            return RsHandheldStatus::ErrInvalidArg;
+        }
+        // SAFETY: exact length checked; disjoint regions guaranteed by caller.
+        let plaintext = unsafe { core::slice::from_raw_parts(data, data_len) };
+        match rns_link::verify_identification(unsafe { &*link_id }, plaintext) {
+            Some(public) => {
+                // SAFETY: required output was checked and caller owns 64 bytes.
+                unsafe { *out_public = public };
+                RsHandheldStatus::Ok
+            }
+            None => RsHandheldStatus::ErrCrypto,
+        }
+    })
+}
+
 /// Build a LINKREQUEST payload (initiator → destination) into `out`, `*out_len` its length (67).
 /// `x25519_priv` (32) + `ed25519_seed` (32) are the initiator's per-link EPHEMERAL key material
 /// (caller entropy; `no_std`: no RNG). The initiator MUST retain `x25519_priv` to derive the session
 /// key once the proof arrives. `mode` MUST be 1 (AES-256-CBC — rsDeck's only enabled mode); any other
-/// value returns `ErrUnsupported`. `mtu` is masked to 21 bits (use 500 for the standard link).
+/// value returns `ErrUnsupported`. `mtu` must be 0 or 500; zero normalizes to 500.
+/// Other values return `ErrInvalidArg` without changing outputs.
 ///
 /// # Safety
 /// `x25519_priv`/`ed25519_seed` 32 readable bytes each; `out` `out_cap` writable; `out_len` writable.
@@ -43,12 +102,17 @@ pub unsafe extern "C" fn rs_handheld_rns_link_request_build(
         if x25519_priv.is_null() || ed25519_seed.is_null() || out.is_null() || out_len.is_null() {
             return RsHandheldStatus::ErrInvalidArg;
         }
+        let signalling = match SignallingData::try_new(mode, mtu) {
+            Ok(value) => value,
+            Err(LinkError::UnsupportedMode) => return RsHandheldStatus::ErrUnsupported,
+            Err(_) => return RsHandheldStatus::ErrInvalidArg,
+        };
         // SAFETY: non-null + correctly sized per the contract.
         let out_slice = unsafe { core::slice::from_raw_parts_mut(out, out_cap) };
         match rns_link::build_link_request(
             unsafe { &*x25519_priv },
             unsafe { &*ed25519_seed },
-            SignallingData::new(mode, mtu),
+            signalling,
             out_slice,
         ) {
             Ok(n) => {
@@ -65,7 +129,10 @@ pub unsafe extern "C" fn rs_handheld_rns_link_request_build(
 /// Parse a LINKREQUEST payload (responder side). Writes the initiator's ephemeral X25519 public key
 /// (needed for [`rs_handheld_rns_link_derive`]) to `out_x25519_pub` (required); the initiator's ephemeral
 /// Ed25519 public key to `out_ed25519_pub`, the negotiated `mode`/`mtu` to `out_mode`/`out_mtu` (all
-/// optional — may be null). `ErrInvalidArg` on null required args or a malformed length.
+/// optional — may be null). Only AES-256 is enabled (`ErrUnsupported` otherwise). A valid
+/// offer of at least 500 bytes selects this endpoint's 500-byte capacity; legacy and zero
+/// signalling also select 500. `ErrInvalidArg` on malformed length or sub-500 MTU.
+/// Outputs are unchanged on errors.
 ///
 /// # Safety
 /// `data` `data_len` readable bytes; `out_x25519_pub` 32 writable; `out_ed25519_pub` null or 32
@@ -89,6 +156,11 @@ pub unsafe extern "C" fn rs_handheld_rns_link_request_parse(
             Ok(v) => v,
             Err(_) => return RsHandheldStatus::ErrInvalidArg,
         };
+        if view.signalling.mode != rns_link::MODE_AES256_CBC {
+            return RsHandheldStatus::ErrUnsupported;
+        }
+        // The strict parser already checked the offered MTU. This fixed-size endpoint
+        // can accept a larger offer, but can only promise the base 500-byte contract.
         unsafe {
             *out_x25519_pub = view.peer_x25519_pub;
             if !out_ed25519_pub.is_null() {
@@ -98,7 +170,7 @@ pub unsafe extern "C" fn rs_handheld_rns_link_request_parse(
                 *out_mode = view.signalling.mode;
             }
             if !out_mtu.is_null() {
-                *out_mtu = view.signalling.mtu;
+                *out_mtu = rns_lite_core::constants::MTU as u32;
             }
         }
         RsHandheldStatus::Ok
@@ -133,7 +205,8 @@ pub unsafe extern "C" fn rs_handheld_rns_link_id(
 /// `link_id || responder_x25519_pub || identity_ed25519_pub || signalling` with the ACTIVE identity's
 /// long-term Ed25519 key (this authenticates the link). `responder_x25519_priv` (32) is the
 /// responder's per-link EPHEMERAL X25519 key (caller entropy; retain it for the key derivation).
-/// `mode` MUST be 1 (AES-256); any other value returns `ErrUnsupported`. `mtu` is masked to 21 bits.
+/// `mode` MUST be 1 (AES-256); any other value returns `ErrUnsupported`. `mtu` must be
+/// 0 or 500; zero normalizes to 500. Other values return `ErrInvalidArg`.
 /// `ErrNotReady` if no identity is loaded; `ErrCapacity` if `out` is too small.
 ///
 /// # Safety
@@ -165,13 +238,18 @@ pub unsafe extern "C" fn rs_handheld_rns_link_proof_build(
             Some(id) => id,
             None => return RsHandheldStatus::ErrNotReady,
         };
+        let signalling = match SignallingData::try_new(mode, mtu) {
+            Ok(value) => value,
+            Err(LinkError::UnsupportedMode) => return RsHandheldStatus::ErrUnsupported,
+            Err(_) => return RsHandheldStatus::ErrInvalidArg,
+        };
         // SAFETY: non-null + correctly sized per the contract.
         let out_slice = unsafe { core::slice::from_raw_parts_mut(out, out_cap) };
         match rns_link::build_link_proof(
             id,
             unsafe { &*responder_x25519_priv },
             unsafe { &*link_id },
-            SignallingData::new(mode, mtu),
+            signalling,
             out_slice,
         ) {
             Ok(n) => {
@@ -187,7 +265,7 @@ pub unsafe extern "C" fn rs_handheld_rns_link_proof_build(
 
 /// Validate an LRPROOF (initiator side) against the destination identity's 64-byte public key (known
 /// from its announce) and the link id. Writes 1/0 to `*out_valid`, and — on a structurally valid
-/// proof — the responder's ephemeral X25519 public key to `out_responder_x25519_pub` (optional;
+/// and authenticated proof — the responder's ephemeral X25519 public key to `out_responder_x25519_pub` (optional;
 /// needed for [`rs_handheld_rns_link_derive`]). A malformed length, a non-AES-256 mode, or a bad signature
 /// is reported as `*out_valid = 0` with `RS_HANDHELD_OK` (not an arg error) — mirroring
 /// `rs_handheld_rns_proof_validate`. Stateless. `ErrInvalidArg` only on null required args.
@@ -231,10 +309,12 @@ pub unsafe extern "C" fn rs_handheld_rns_link_proof_validate(
                 return RsHandheldStatus::Ok;
             }
         };
-        let valid = view.validate(unsafe { &*identity_public_key }, unsafe { &*link_id });
+        let valid = view.signalling.mode == rns_link::MODE_AES256_CBC
+            && view.signalling.effective_mtu() == Ok(rns_lite_core::constants::MTU as u32)
+            && view.validate(unsafe { &*identity_public_key }, unsafe { &*link_id });
         unsafe {
             *out_valid = valid as i32;
-            if !out_responder_x25519_pub.is_null() {
+            if valid && !out_responder_x25519_pub.is_null() {
                 *out_responder_x25519_pub = view.responder_x25519_pub;
             }
         }
@@ -357,4 +437,69 @@ pub unsafe extern "C" fn rs_handheld_rns_link_decrypt(
             Err(_) => RsHandheldStatus::ErrCrypto,
         }
     })
+}
+
+#[cfg(test)]
+mod identification_tests {
+    use super::*;
+    #[test]
+    fn identification_ffi_commits_only_a_verified_peer() {
+        let identity = LocalIdentity::from_private_key(&[0x53; 64]);
+        let mut data = [0; 128];
+        rns_link::build_identification(&identity, &[0x41; 16], &mut data).unwrap();
+        let mut public = [0xa5; 64];
+        // SAFETY: all test buffers have exact lengths and disjoint ownership.
+        unsafe {
+            assert_eq!(
+                rs_handheld_rns_link_verify_identification(
+                    core::ptr::null(),
+                    data.as_ptr(),
+                    128,
+                    &mut public
+                ),
+                RsHandheldStatus::ErrInvalidArg
+            );
+            assert_eq!(
+                rs_handheld_rns_link_verify_identification(
+                    &[0x41; 16],
+                    data.as_ptr(),
+                    127,
+                    &mut public
+                ),
+                RsHandheldStatus::ErrInvalidArg
+            );
+            assert_eq!(
+                rs_handheld_rns_link_verify_identification(
+                    &[0x42; 16],
+                    data.as_ptr(),
+                    128,
+                    &mut public
+                ),
+                RsHandheldStatus::ErrCrypto
+            );
+            assert_eq!(public, [0xa5; 64]);
+            assert_eq!(
+                rs_handheld_rns_link_verify_identification(
+                    &[0x41; 16],
+                    data.as_ptr(),
+                    128,
+                    &mut public
+                ),
+                RsHandheldStatus::Ok
+            );
+            assert_eq!(&public, identity.public_key());
+            data[127] ^= 1;
+            public.fill(0xa5);
+            assert_eq!(
+                rs_handheld_rns_link_verify_identification(
+                    &[0x41; 16],
+                    data.as_ptr(),
+                    128,
+                    &mut public
+                ),
+                RsHandheldStatus::ErrCrypto
+            );
+            assert_eq!(public, [0xa5; 64]);
+        }
+    }
 }

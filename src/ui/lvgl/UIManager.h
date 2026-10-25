@@ -3,6 +3,7 @@
 #include <lvgl.h>
 #include "LvStatusBar.h"
 #include "LvTabBar.h"
+#include "LvVoicePanel.h"
 #include "hal/Keyboard.h"
 
 // What a screen's current editor needs from an on-screen keyboard. Anchor is
@@ -37,6 +38,11 @@ protected:
 class UIManager {
 public:
     void begin();
+    void setVoicePanel(LvVoicePanel* panel) {_voicePanel=panel;}
+    void openVoice(const char* peer) {if(_voicePanel)_voicePanel->start(peer);}
+    void closeVoiceConversation() {if(_voicePanel)_voicePanel->closeConversation();}
+    handheld::memo::Ui* memoUi() {return _voicePanel?&_voicePanel->model():nullptr;}
+    void openVoiceMessage(const char* peer,uint32_t counter,bool incoming) {if(_voicePanel)_voicePanel->startMessage(peer,counter,incoming);}
 
     // Screen management
     void setScreen(LvScreen* screen);
@@ -68,6 +74,7 @@ public:
 
 private:
     // LVGL components
+    LvVoicePanel* _voicePanel=nullptr;
     LvStatusBar _lvStatusBar;
     LvTabBar _lvTabBar;
     LvScreen* _currentLvScreen = nullptr;

@@ -6,10 +6,15 @@
 #include "protocol/RustInterfacePump.h"
 #include "protocol/RustKeyMap.h"
 #include "protocol/RustLxmfEngine.h"
-#include "protocol/RustPathResponseCache.h"
+#include "runtime/ResourceBudget.h"
 #include "protocol/RustRatchetStore.h"
 #include "protocol/RustLinkManager.h"
 #include "protocol/RustResourceEngine.h"
+#include "protocol/PropagationNodes.h"
+#include "protocol/RrcRuntimeEngine.h"
+#include "protocol/RustVoiceEngine.h"
+#include "voice/VoiceWorker.h"
+#include "voice/MemoController.h"
 #include "ratspeak_protocol.h"
 
 class FlashStore;
@@ -39,7 +44,7 @@ public:
     // requires both incoming and outgoing ownership drained.
     void stopReceive();
     void pollReceive();
-    bool receiveDrained() const { return _lxmf.incoming().drained() && _lxmf.drained(); }
+    bool receiveDrained() const { return _lxmf.incoming().drained() && _lxmf.drained() && _rrc.drained() && _voice.drained() && _memos.drained(); }
 
     // Retains the context and the caller-owned radio until both message owners
     // and the already-started radio burst settle. No RX, scheduler or metadata
@@ -85,6 +90,27 @@ public:
     AnnounceResult announce(const uint8_t* appData, size_t len) override;
     unsigned long lastAnnounceTime() const override { return _lastAnnounceMs; }
     uint32_t announceFilterCount() const override;
+    void configureVoice(const handheld::voice::Settings&) override;
+    handheld::voice::Status voiceStatus() const override { return _voice.status(); }
+    handheld::voice::Code voiceCommand(const handheld::voice::Command&) override { return handheld::voice::Code::Off; }
+    bool voiceDrained() const override { return _voice.drained() && _memos.drained(); }
+    void voiceStop() override { _voice.stop(); _memos.stop(); }
+    handheld::memo::Status memoStatus() const override { return _memos.status(); }
+    handheld::memo::Code memoCommand(const handheld::memo::Command&) override;
+    void configurePropagation(const handheld::propagation::Settings&) override;
+    size_t propagationNodes(handheld::propagation::NodeView*, size_t) const override;
+    handheld::propagation::SyncView propagationStatus() const override;
+    bool propagationSync() override;
+    handheld::rrc::Status rrcStatus() const override { return _rrc.status(); }
+    void rrcStopAdmissions() override { _rrc.stop(); }
+    bool rrcDrained() const override { return _rrc.drained(); }
+    size_t rrcHubs(handheld::rrc::HubView* out, size_t capacity) const override { return _rrc.hubs(out, capacity); }
+    size_t rrcRooms(handheld::rrc::RoomView* out, size_t capacity) const override { return _rrc.rooms(out, capacity); }
+    size_t rrcChannels(handheld::rrc::RoomView* out, size_t capacity, size_t offset = 0) const override { return _rrc.channels(out, capacity, offset); }
+    size_t rrcPeople(const char* room, handheld::rrc::PersonView* out, size_t capacity) const override { return _rrc.people(room, out, capacity); }
+    size_t rrcDirectory(handheld::rrc::DirectoryView* out, size_t capacity, size_t offset = 0) const override { return _rrc.directory(out, capacity, offset); }
+    handheld::rrc::Code rrcCommand(const handheld::rrc::Command& command, const uint8_t* text, size_t length) override { return _rrc.command(command, text, length); }
+    bool rrcContext(const uint8_t hub[16], const char* room, const uint8_t* participant, handheld::storage::rrc::Context& out) const override { return _rrc.context(hub, room, participant, out); }
 
     handheld::outgoing::Submission lxmfSubmit(const uint8_t dest[16],
         const uint8_t* title, size_t titleLength, const uint8_t* content,
@@ -99,6 +125,8 @@ public:
     void lxmfStopAdmissions() override;
     bool lxmfDrained() const override;
     handheld::storage::Error lxmfDrainError() const override;
+    bool lxmfBeginRecordDelete(const handheld::storage::RecordKey&) override;
+    void lxmfFinishRecordDelete(const handheld::storage::RecordKey&,const handheld::storage::Result&) override;
     bool lxmfBeginPeerDelete(const uint8_t peer[16]) override;
     void lxmfFinishPeerDelete(const uint8_t peer[16], const handheld::storage::Result&) override;
     int lxmfQueuedCount() const override { return _enginesUp ? _lxmf.queuedCount() : 0; }
@@ -120,8 +148,12 @@ public:
 
     // RustPumpSink
     void onAnnounceEvent(const rs_handheld_announce_event_t& ev, uint8_t ifaceId) override;
+    void onPropagationAnnounce(const rs_handheld_announce_event_t&, uint8_t) override;
+    void onVoiceAnnounce(const rs_handheld_announce_event_t&, uint8_t) override;
+    void onRrcAnnounce(const rs_handheld_announce_event_t&, uint8_t) override;
     void onLocalFrame(const rs_handheld_local_frame_t& f, uint8_t ifaceId) override;
     void onOwnPathRequest(uint8_t ifaceId, const uint8_t tag[16], size_t tagLen) override;
+    void onEndpointPathRequest(uint8_t ifaceId, const uint8_t tag[16], size_t tagLen, uint32_t endpoint) override;
 
 private:
     bool loadOrCreateIdentity(IdentityManager* idMgr);
@@ -129,12 +161,14 @@ private:
     void seedDedup(MessageStore* store);
     bool startEngines(FlashStore* flash, SDStore* sd, MessageStore* store,
                       AnnounceManager* announceMgr);
-    // Build + TX a signed lxmf.delivery announce with the given wire context (CTX_NONE for a
-    // normal announce, CTX_PATH_RESPONSE for a path-request answer). Refreshes _lastAnnounceMs.
-    AnnounceResult emitAnnounce(const uint8_t* appData, size_t len, uint8_t context,
-                                bool pathResponse);
-    // Answer a pending path request: re-announce our dest as a PATH_RESPONSE with the cached name.
-    void sendPathResponseAnnounce();
+    // Construction persists wire ordering before exposing signed bytes. Sent here means built;
+    // admission is separate so a refused path response retains the exact packet and lifetime.
+    AnnounceResult buildAnnouncePacket(const uint8_t* appData, size_t len, uint8_t context,
+                                      uint8_t* raw, size_t capacity, size_t& rawLen);
+    AnnounceResult emitAnnounce(const uint8_t* appData, size_t len);
+    void pollPathResponses();
+    void promotePathResponse(uint8_t ifaceId, uint64_t now);
+    void pollPropagation();
 
     rs_handheld_rns_t* _ctx = nullptr;
     uint8_t* _nodeBuf = nullptr;
@@ -143,7 +177,7 @@ private:
     bool _identityLoaded = false;
     bool _nodeOpen = false;
     bool _enginesUp = false;
-    enum AnnounceTiming : uint8_t { PathPending = 1, NormalPending = 2, HasPathResponseTime = 4 };
+    enum AnnounceTiming : uint8_t { NormalPending = 2 };
     uint8_t _announceTiming = 0; // Uses the existing alignment gap after lifecycle flags.
     LoRaInterface* _maintenanceRadio = nullptr;
 
@@ -157,19 +191,40 @@ private:
     String _publicKeyHex;
     unsigned long _lastAnnounceMs = 0;
 
-    // Path-request self-response throttle (fix map §4). Layer 2: coalesce a burst of distinct-tag
-    // retries into ONE answer after a grace window. Layer 3: cap the answer rate regardless of tag.
-    // (Layer 1 — same-tag dedup — is handled inside the Rust node before the signal reaches us.)
-    static constexpr uint32_t PATH_REQUEST_GRACE_MS = 400;   // Python PATH_REQUEST_GRACE (burst coalesce)
-    static constexpr uint32_t PATH_RESP_DEDUP_MS = 5000;     // min interval between answers
-    // Explicit flags distinguish an inactive timer from a valid wrapped time0.
-    uint32_t _pathRespPendingUntil = 0;
-    uint32_t _lastPathRespMs = 0;
+    // One owner per physical interface prevents a blocked radio/socket from holding up
+    // another requester. Same-interface bursts share its forthcoming broadcast response.
+    // Duplicate-tag filtering stays in Rust; the five-second interval is pacing, not loss.
+    static constexpr uint32_t PATH_REQUEST_GRACE_MS = 400;
+    static constexpr uint32_t PATH_RESPONSE_INTERVAL_MS = 5000;
+    static constexpr uint32_t PATH_RESPONSE_MAX_AGE_MS = 30000;
+    static constexpr uint32_t PATH_RESPONSE_RETRY_MS = 50;
+    static constexpr size_t PATH_RESPONSE_INTERFACES = RustInterfacePump::WIFI_AP_IFACE_ID + 1;
+    struct PathResponse {
+        uint8_t raw[500] = {};
+        handheld::TxLease lease;
+        uint64_t bornMs = 0;
+        uint64_t readyMs = 0;
+        uint64_t packetBornMs = 0;
+        uint64_t lastSentMs = 0;
+        uint32_t generation = 0;
+        uint16_t rawLen = 0;
+        uint8_t tag[16] = {};
+        uint8_t tagLen = 0;
+        uint8_t endpoint = 0;
+        bool pending = false;
+        bool hasLastSent = false;
+        bool replay = false;
+        // A fresh request cannot be satisfied by already-seen replay bytes. Retain
+        // one coalesced followup, without a second packet buffer or renewable age.
+        uint64_t followupBornMs = 0;
+        uint8_t followupTag[16] = {};
+        uint8_t followupTagLen = 0;
+        uint8_t followupEndpoint = 0;
+    } _pathResponses[PATH_RESPONSE_INTERFACES];
+    static_assert(sizeof(_pathResponses) <= handheld::ResourceBudget::PathResponses,
+                  "Review per-interface path-response retention budget");
     uint32_t _normalAnnouncePendingUntil = 0;
     size_t _normalAnnouncePendingLen = 0;
-    uint8_t _pendingPathResponseTag[16] = {};
-    size_t _pendingPathResponseTagLen = 0;
-    uint8_t _pendingPathResponseIface = RustInterfacePump::LORA_IFACE_ID;
     // Current name/capability bytes, seeded before ingress and refreshed after
     // committed settings changes. Shared by new path responses and nonempty
     // deferred normal announces; already admitted signed packets are immutable.
@@ -181,10 +236,20 @@ private:
     RustInterfacePump _pump;
     RustKeyMap _keymap;
     RustRatchetStore _ratchets;
-    RustPathResponseCache _pathResponseCache;
     RustLinkManager _links;
     RustResourceEngine _resources;
     RustLxmfEngine _lxmf;
+    handheld::rrc::RuntimeEngine _rrc;
+    RustVoiceEngine _voice;
+    handheld::voice::VoiceWorker _voiceAudio;
+    handheld::memo::Controller _memos;
+    uint8_t _voiceHash[16]{};
+    uint64_t _nextVoiceAnnounce=0;
+    bool _voiceEnabled=false;
+    handheld::propagation::Nodes _propagationNodes;
+    uint64_t _nextPropagationPoll = 0;
+    static_assert(sizeof(handheld::propagation::Nodes) <= handheld::ResourceBudget::PropagationNodes,
+                  "Review propagation candidate retention");
     AnnounceManager* _announceMgr = nullptr;
     LXMFManager::MessageCallback _onMessage;
     LXMFManager::StatusCallback _statusCb;

@@ -2,6 +2,7 @@
 #include "config/BoardConfig.h"
 #if HAS_ES8311_AUDIO
 #include "audio/Es8311Notify.h"
+#include "voice/AudioCoordinator.h"
 #include "hal/Power.h"
 #include <Wire.h>
 #include <driver/i2s.h>
@@ -231,8 +232,10 @@ bool AudioNotify::setCodecMute(bool mute) {
     return updateCodecReg(ES8311_DAC_REG31, 0x60, mute ? 0x60 : 0x00);
 }
 
+// Volume scales the samples (as on the T-Deck); the codec holds its full
+// reference gain while audible, so the level is not attenuated twice.
 bool AudioNotify::setCodecVolume(uint8_t volume) {
-    return writeCodecReg(ES8311_DAC_REG32, codecVolumeReg(volume));
+    return writeCodecReg(ES8311_DAC_REG32, codecVolumeReg(volume ? 100 : 0));
 }
 
 void AudioNotify::writeTone(uint16_t freq, uint16_t durationMs) {
@@ -278,6 +281,7 @@ void AudioNotify::writeSilence(uint16_t durationMs) {
 }
 
 void AudioNotify::playMessage() {
+    if (!handheld::voice::AudioCoordinator::instance().notifications()) return;
     if (!canPlay()) return;
 
     const int sr = AUDIO_SAMPLE_RATE;
@@ -328,18 +332,21 @@ void AudioNotify::requestMessage() {
 }
 
 void AudioNotify::loop() {
+    if (!handheld::voice::AudioCoordinator::instance().poll([this] { end(); }, [this] { begin(); })) return;
     if (!_messagePending) return;
     _messagePending = false;
     playMessage();
 }
 
 void AudioNotify::playAnnounce() {
+    if (!handheld::voice::AudioCoordinator::instance().notifications()) return;
     if (!_enabled) return;
     writeTone(800, 30);
     writeSilence(20);
 }
 
 void AudioNotify::playError() {
+    if (!handheld::voice::AudioCoordinator::instance().notifications()) return;
     if (!_enabled) return;
     for (int i = 0; i < 3; i++) {
         writeTone(400, 100);
@@ -349,6 +356,7 @@ void AudioNotify::playError() {
 }
 
 void AudioNotify::playBoot() {
+    if (!handheld::voice::AudioCoordinator::instance().notifications()) return;
     if (!canPlay()) return;
 
     // === RATDECK BOOT SEQUENCE ===

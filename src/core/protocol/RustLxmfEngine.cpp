@@ -8,6 +8,7 @@
 #include "protocol/RustLinkManager.h"
 #include "protocol/RustResourceEngine.h"
 #include "storage/MessageStore.h"
+#include "storage/PreparedEnvelope.h"
 #include <Arduino.h>
 #include <algorithm>
 
@@ -45,10 +46,14 @@ void secureZero(uint8_t* data, size_t len) {
     volatile uint8_t* p = data;
     while (len--) *p++ = 0;
 }
-bool sendableBody(size_t titleLength, size_t contentLength) {
+bool sendableBody(size_t titleLength, size_t contentLength, const handheld::storage::AudioMetadata& audio = {}) {
     size_t packed = 0;
-    return handheld::storage::Budget::validBody(titleLength, contentLength) &&
-        rs_handheld_lxmf_packed_size(titleLength, contentLength, &packed) == RS_HANDHELD_OK &&
+    if (!handheld::storage::Budget::validBody(titleLength, contentLength) || audio.state > 1 ||
+        audio.length > handheld::storage::Budget::MaxMessageBody - titleLength - contentLength) return false;
+    const auto status = audio.state == 1 ?
+        rs_handheld_lxmf_audio_packed_size(titleLength, contentLength, audio.mode, audio.length, &packed) :
+        rs_handheld_lxmf_packed_size(titleLength, contentLength, &packed);
+    return status == RS_HANDHELD_OK &&
         packed <= RS_HANDHELD_RESOURCE_DATA_MAX;
 }
 }  // namespace
@@ -64,12 +69,13 @@ bool RustLxmfEngine::begin(const Deps& deps) {
         !deps.store || !deps.pump || !deps.ourDestHash) return false;
     _d = deps;
     ++_identityGeneration;
-    _accepting = true; _recovering = true; _recoveryCursor = {};
+    _accepting = true; _recovering = true; _recoverAgain = false; _recoveryCursor = {};
     RustIncomingDelivery::Deps incoming;
     incoming.ctx = deps.ctx; incoming.clock = deps.clock; incoming.store = deps.store;
     incoming.pump = deps.pump; incoming.links = deps.links; incoming.onMessage = deps.onMessage;
     incoming.ourDestHash = deps.ourDestHash;
     if (!_incoming.begin(incoming, false)) { _accepting = false; return false; }
+    _inbox.begin(*this);
     _d.pump->setReceiptHook(receiptHook, this);
     return true;
 }
@@ -116,12 +122,14 @@ RustLxmfEngine::Ticket RustLxmfEngine::allocate() {
 void RustLxmfEngine::releaseBody(Ticket ticket) {
     if (_body.slot == ticket.slot && _body.generation == ticket.generation) {
         _body.slot = UINT8_MAX; _body.generation = 0; _body.length = 0; _body.targets = 0;
+        _body.audioReady = false;
     }
 }
 void RustLxmfEngine::retire(Ticket ticket) {
     auto* value = row(ticket);
     if (!value || value->storageSequence || value->queuedReceipts) return;
     releaseBody(ticket);
+    if (_relay.ticket == ticket) resetRelay();
     const uint32_t generation = value->generation;
     *value = {}; value->generation = generation;
     ++_statusRevision;
@@ -129,11 +137,55 @@ void RustLxmfEngine::retire(Ticket ticket) {
 
 RustLxmfEngine::Submission RustLxmfEngine::submit(const uint8_t dest[16], const uint8_t* title,
     size_t titleLength, const uint8_t* content, size_t contentLength, bool preferLink) {
+    return submitMedia(dest, title, titleLength, content, contentLength, preferLink, {}, nullptr);
+}
+
+RustLxmfEngine::Submission RustLxmfEngine::submitAudio(const uint8_t dest[16], const uint8_t* title,
+    size_t titleLength, const uint8_t* content, size_t contentLength, uint8_t mode,
+    const uint8_t* bytes, size_t length) {
+    rs_handheld_memo_info_t info;
+    if (!bytes || length > RS_HANDHELD_MEMO_RECORD_BYTES ||
+        rs_handheld_memo_inspect(mode, length, &info) != RS_HANDHELD_OK) return {{}, Rejection::Invalid};
+    return submitMedia(dest, title, titleLength, content, contentLength, true,
+        {0, uint16_t(length), mode, 1}, bytes);
+}
+
+void RustLxmfEngine::storedMessage() {
+    if(!_accepting) return; // Next boot resumes the already durable outbox.
+    if(_recovering) _recoverAgain=true;
+    else {_recoveryCursor={};_recovering=true;}
+}
+
+handheld::storage::Submission RustLxmfEngine::requestRetry(const handheld::storage::RecordKey& key,uint32_t revision) {
+    using Reject=handheld::storage::Rejection;
+    if(!_accepting || !_d.store) return {{},Reject::Unavailable};
+    if(!key.counter || key.incoming || !revision) return {{},Reject::Invalid};
+    if(_deleting && !memcmp(_deletingPeer,key.peer,16) && (!_deletingCounter || (_deletingCounter==key.counter && _deletingIncoming==key.incoming))) return {{},Reject::Fenced};
+    Ticket previous;
+    for(uint8_t i=0;i<RowCount;++i) {
+        const auto& value=_rows[i];
+        if(value.phase==Phase::Free || value.counter!=key.counter || memcmp(value.peer,key.peer,16)) continue;
+        if(!handheld::messaging::retryableStatus(uint8_t(value.desired))) return {{},Reject::Invalid};
+        if(value.storageSequence || value.queuedReceipts || value.desired!=value.durable ||
+           !(value.flags&Acknowledged) || (value.phase!=Phase::Settled && value.phase!=Phase::Grace)) return {{},Reject::Busy};
+        previous={value.generation,i};
+    }
+    const auto submission=_d.store->requestRetry(key,_d.ourDestHash,revision);
+    // This owner is serialized with proof handling. Busy admissions leave the
+    // old receipt intact; a successful reservation prevents its late callbacks
+    // from overwriting the new retry. Storage still checks the durable revision.
+    if(submission.accepted() && previous.valid()) retire(previous);
+    return submission;
+}
+
+RustLxmfEngine::Submission RustLxmfEngine::submitMedia(const uint8_t dest[16], const uint8_t* title,
+    size_t titleLength, const uint8_t* content, size_t contentLength, bool preferLink,
+    const handheld::storage::AudioMetadata& audio, const uint8_t* audioBytes) {
     if (!_accepting) return {{}, Rejection::Stopped};
     if (_recovering) return {{}, Rejection::Recovering};
     if (!dest || (titleLength && !title) || (contentLength && !content)) return {{}, Rejection::Invalid};
-    if (_deleting && !memcmp(_deletingPeer, dest, 16)) return {{}, Rejection::Fenced};
-    if (!sendableBody(titleLength, contentLength)) return {{}, Rejection::TooLarge};
+    if (_deleting && !_deletingCounter && !memcmp(_deletingPeer, dest, 16)) return {{}, Rejection::Fenced};
+    if (!sendableBody(titleLength, contentLength, audio)) return {{}, Rejection::TooLarge};
     const Ticket ticket = allocate();
     auto* value = row(ticket);
     if (!value) {
@@ -151,8 +203,15 @@ RustLxmfEngine::Submission RustLxmfEngine::submit(const uint8_t dest[16], const 
     memcpy(request.destination, dest, 16); request.timestamp = value->timestamp;
     request.identityGeneration = _identityGeneration;
     request.titleLength = titleLength; request.contentLength = contentLength;
-    request.status = uint8_t(LXMFStatus::QUEUED);
-    const auto admission = _d.store->requestSave(request, title, content);
+    request.audio = audio;
+    if (_d.propagation && _d.propagation->settings().enabled) {
+        const bool always = _d.propagation->settings().delivery == handheld::propagation::Delivery::Always;
+        request.deliveryPolicy = always ? handheld::messaging::DeliveryPolicy::Always : handheld::messaging::DeliveryPolicy::Auto;
+        value->flags |= always ? PolicyAlways | RelayRequired : PolicyAuto;
+        if (always) value->desired = value->durable = LXMFStatus::PROP_QUEUED;
+    }
+    request.status = uint8_t(value->desired);
+    const auto admission = _d.store->requestSave(request, title, content, audioBytes);
     if (!admission.accepted()) {
         retire(ticket);
         return {{}, static_cast<Rejection>(admission.rejection)};
@@ -201,9 +260,18 @@ void RustLxmfEngine::setStatus(Ticket ticket, LXMFStatus status) {
     auto* value = row(ticket);
     if (!value || (value->flags & Deleted) || value->desired == LXMFStatus::DELIVERED || value->desired == status) return;
     value->desired = status; value->statusRetry = 0; value->flags |= Notify; ++_statusRevision;
+    if (_relay.ticket == ticket && _relay.direct &&
+        (handheld::messaging::failedStatus(uint8_t(status)) || status == LXMFStatus::UNCONFIRMED)) {
+        if (value->proofCount && !(value->flags & ProofGrace)) {
+            value->flags |= ProofGrace; value->receiptSince = _d.clock->nowMs();
+            value->phase = Phase::Grace;
+        }
+        resetRelay();
+    }
     if (status == LXMFStatus::DELIVERED) {
         value->receiptMask = 0; value->phase = Phase::Settled; releaseBody(ticket);
         if (_d.resources) _d.resources->cancelSend(ticket);
+        if (_relay.ticket == ticket) resetRelay();
     }
 }
 bool RustLxmfEngine::cancel(Ticket ticket) {
@@ -216,12 +284,47 @@ bool RustLxmfEngine::cancel(Ticket ticket) {
     if (!value->storageSequence || (value->phase != Phase::Saving && value->phase != Phase::Query))
         value->phase = Phase::Settled;
     if (_d.resources) _d.resources->cancelSend(ticket);
+    if (_relay.ticket == ticket) resetRelay();
     ++_statusRevision;
     return true;
 }
+bool RustLxmfEngine::beginRecordDelete(const handheld::storage::RecordKey& record) {
+    if(!_accepting || _deleting || !record.counter) return false;
+    _deleting=true;_deletingCounter=record.counter;_deletingIncoming=record.incoming;
+    memcpy(_deletingPeer,record.peer,16);
+    for(uint8_t i=0;i<RowCount;++i) {
+        auto& value=_rows[i];if(value.phase==Phase::Free) continue;
+        // A pre-deletion recovery query may contain this record without having
+        // a bound row yet. Retire that query and restart discovery after commit.
+        if(value.storageOperation==Operation::ReadPending && value.storageSequence) {
+            cancel({value.generation,i});_recoveryCursor={};_recoverAgain=true;continue;
+        }
+        if(!record.incoming && value.counter==record.counter && !memcmp(value.peer,record.peer,16)) {
+            value.flags|=DeletePending;cancel({value.generation,i});
+        }
+    }
+    return true;
+}
+void RustLxmfEngine::finishRecordDelete(const handheld::storage::RecordKey& record,const handheld::storage::Result& result) {
+    if(!_deleting || _deletingCounter!=record.counter || _deletingIncoming!=record.incoming || memcmp(_deletingPeer,record.peer,16)) return;
+    for(auto& value:_rows) {
+        if(value.phase==Phase::Free || !(value.flags&DeletePending) || value.counter!=record.counter || memcmp(value.peer,record.peer,16)) continue;
+        value.flags&=~DeletePending;
+        if(result.outcome==Outcome::Committed && result.key.counter==record.counter && result.key.incoming==record.incoming && !memcmp(result.key.peer,record.peer,16)) {
+            value.flags|=Deleted;value.error=Error::None;
+        } else {
+            // Failed deletion keeps the record and restores ordinary recovery;
+            // cancellation must not strand an unrelated or surviving outbox row.
+            value.desired=value.durable;value.proofCount=0;
+        }
+        ++_statusRevision;
+    }
+    _deleting=false;_deletingCounter=0;storedMessage();
+}
 bool RustLxmfEngine::beginPeerDelete(const uint8_t peer[16]) {
     if (!_accepting || _deleting || !peer) return false;
-    _deleting = true; memcpy(_deletingPeer, peer, 16);
+    _deleting = true;_deletingCounter=0; memcpy(_deletingPeer, peer, 16);
+    _inbox.dropPeer(peer);
     _incoming.dropPeer(peer);
     for (uint8_t i = 0; i < RowCount; ++i) {
         auto& value = _rows[i];
@@ -233,7 +336,7 @@ bool RustLxmfEngine::beginPeerDelete(const uint8_t peer[16]) {
     return true;
 }
 void RustLxmfEngine::finishPeerDelete(const uint8_t peer[16], const handheld::storage::Result& result) {
-    if (!_deleting || memcmp(_deletingPeer, peer, 16)) return;
+    if (!_deleting || _deletingCounter || memcmp(_deletingPeer, peer, 16)) return;
     _deleting = false;
     for (uint8_t i = 0; i < RowCount; ++i) {
         auto& value = _rows[i];
@@ -249,6 +352,7 @@ void RustLxmfEngine::finishPeerDelete(const uint8_t peer[16], const handheld::st
 }
 void RustLxmfEngine::stopAdmissions() {
     _accepting = false; _recovering = false;
+    _inbox.stop();
     for (uint8_t i = 0; i < RowCount; ++i) {
         auto& value = _rows[i];
         if (value.phase == Phase::Free) continue;
@@ -259,7 +363,7 @@ void RustLxmfEngine::stopAdmissions() {
     }
 }
 bool RustLxmfEngine::drained() const {
-    if (_deleting) return false;
+    if (_deleting || !_inbox.drained()) return false;
     for (const auto& value : _rows) if (value.phase != Phase::Free) return false;
     return _body.slot == UINT8_MAX;
 }
@@ -273,6 +377,7 @@ Error RustLxmfEngine::drainError() const {
 void RustLxmfEngine::settleStorage(Ticket ticket) {
     auto* value = row(ticket);
     if (!value || !value->storageSequence) return;
+    if (settleRelayStorage(ticket)) return;
     handheld::storage::Result result;
     const auto held = storageTicket(*value);
     if (!_d.store->peekResult(held, result)) return;
@@ -280,7 +385,7 @@ void RustLxmfEngine::settleStorage(Ticket ticket) {
     handheld::storage::StoredRecordHeader header;
     bool validHeader = false, foreignIdentity = false;
     if (result.outcome == Outcome::Committed &&
-        (operation == Operation::ReadRecord || operation == Operation::ReadPending) && result.length) {
+        (operation == Operation::ReadRecord || operation == Operation::ReadAudio || operation == Operation::ReadPending) && result.length) {
         validHeader = result.length >= sizeof(header) && _d.store->readPayload(held, &header, sizeof(header));
         foreignIdentity = validHeader && memcmp(header.source, _d.ourDestHash, 16);
         validHeader = validHeader && !foreignIdentity && !header.incoming && header.counter == result.key.counter &&
@@ -288,14 +393,30 @@ void RustLxmfEngine::settleStorage(Ticket ticket) {
         if (operation == Operation::ReadRecord) {
             validHeader = validHeader && value->counter == result.key.counter &&
                 !memcmp(value->peer, result.key.peer, 16) &&
-                sendableBody(header.titleLength, header.contentLength) &&
+                sendableBody(header.titleLength, header.contentLength, header.audio) &&
                 result.length == sizeof(header) + header.titleLength + header.contentLength && !result.more &&
                 result.nextOffset == header.titleLength + header.contentLength &&
                 _body.slot == ticket.slot && _body.generation == ticket.generation;
             if (validHeader) {
                 _body.header = header;
+                _body.audioReady = header.audio.state != 1;
+                if (header.audio.state == 1) value->flags |= PreferLink;
                 validHeader = _d.store->readPayload(held, _body.bytes,
                     header.titleLength + header.contentLength, sizeof(header));
+            }
+        } else if (operation == Operation::ReadAudio) {
+            const auto& original = _body.header;
+            validHeader = validHeader && _body.slot == ticket.slot && _body.generation == ticket.generation &&
+                value->counter == result.key.counter && !memcmp(value->peer, result.key.peer, 16) &&
+                header.revision == original.revision && header.timestamp == original.timestamp &&
+                header.titleLength == original.titleLength && header.contentLength == original.contentLength &&
+                !memcmp(&header.audio, &original.audio, sizeof(header.audio)) && header.audio.state == 1 &&
+                sendableBody(header.titleLength, header.contentLength, header.audio) &&
+                result.length == sizeof(header) + header.audio.length && !result.more && result.nextOffset == header.audio.length;
+            if (validHeader) {
+                validHeader = _d.store->readPayload(held, _body.bytes + header.titleLength + header.contentLength,
+                                                  header.audio.length, sizeof(header));
+                _body.audioReady = validHeader;
             }
         }
     }
@@ -308,7 +429,8 @@ void RustLxmfEngine::settleStorage(Ticket ticket) {
         if (result.outcome == Outcome::Committed) {
             value->counter = result.key.counter; value->revision = result.revision;
             value->durable = LXMFStatus(result.newStatus); value->error = result.error;
-            value->phase = value->flags & Suppressed ? Phase::Settled : Phase::Ready;
+            value->phase = value->flags & Suppressed ? Phase::Settled :
+                value->flags & RelayRequired ? Phase::Relay : Phase::Ready;
         } else { value->error = result.error; value->phase = Phase::Settled; }
     } else if (operation == Operation::UpdateStatus) {
         if (result.outcome == Outcome::Committed) {
@@ -321,7 +443,8 @@ void RustLxmfEngine::settleStorage(Ticket ticket) {
         else if (result.outcome != Outcome::Committed) {
             value->error = result.error; value->nextAttempt = _d.clock->nowMs() + TX_RETRY_MS;
         } else if (!result.length) {
-            _recovering = false; value->phase = Phase::Settled;
+            if(_recoverAgain) {_recoverAgain=false;_recoveryCursor={};value->phase=Phase::Query;}
+            else {_recovering = false; value->phase = Phase::Settled;}
         } else {
             _recoveryCursor = result.key;
             if (!validHeader) { value->phase = Phase::Settled; }
@@ -335,7 +458,13 @@ void RustLxmfEngine::settleStorage(Ticket ticket) {
                     value->counter = result.key.counter; value->revision = result.revision;
                     value->timestamp = header.timestamp; value->durable = LXMFStatus(header.status);
                     value->desired = LXMFStatus::QUEUED; value->phase = Phase::Ready; value->error = Error::None;
-                    if (!sendableBody(header.titleLength, header.contentLength)) {
+                    if (header.deliveryPolicy == handheld::messaging::DeliveryPolicy::Auto) value->flags |= PolicyAuto;
+                    if (header.deliveryPolicy == handheld::messaging::DeliveryPolicy::Always) value->flags |= PolicyAlways;
+                    if ((value->flags & PolicyAlways) || handheld::messaging::relayStatus(header.status)) {
+                        value->flags |= RelayRequired; value->phase = Phase::Relay;
+                        value->desired = LXMFStatus::PROP_QUEUED;
+                    }
+                    if (!sendableBody(header.titleLength, header.contentLength, header.audio)) {
                         value->error = Error::InvalidRecord; value->phase = Phase::Settled;
                         value->flags |= Suppressed | BlockedRecord;
                         setStatus(ticket, LXMFStatus::FAILED);
@@ -343,25 +472,32 @@ void RustLxmfEngine::settleStorage(Ticket ticket) {
                 }
             }
         }
-    } else if (operation == Operation::ReadRecord) {
+    } else if (operation == Operation::ReadRecord || operation == Operation::ReadAudio) {
         if (value->flags & Suppressed || value->desired == LXMFStatus::DELIVERED) {
             releaseBody(ticket); value->phase = Phase::Settled;
         } else if (result.outcome != Outcome::Committed) {
             releaseBody(ticket); value->error = result.error;
-            value->phase = Phase::Ready; value->nextAttempt = _d.clock->nowMs() + TX_RETRY_MS;
+            value->phase = value->flags & RelayRequired ? Phase::Relay : Phase::Ready;
+            value->nextAttempt = _d.clock->nowMs() + TX_RETRY_MS;
         } else if (foreignIdentity) {
             // A record replaced/restored from another identity is preserved.
             // It cannot be transmitted or rewritten as this active author.
             releaseBody(ticket); value->error = Error::InvalidRecord;
             value->flags |= Suppressed | BlockedRecord; value->phase = Phase::Settled;
             value->receiptMask = 0; value->proofCount = 0; value->desired = value->durable;
+            if (_relay.ticket == ticket) resetRelay();
         } else if (!validHeader) {
+            if (_relay.ticket == ticket) resetRelay();
             releaseBody(ticket); value->error = Error::InvalidRecord; value->phase = Phase::Settled;
             value->flags |= Suppressed | BlockedRecord;
             setStatus(ticket, LXMFStatus::FAILED);
         } else {
             value->revision = result.revision; value->timestamp = header.timestamp;
             value->error = Error::None; value->phase = Phase::Reading;
+            if (header.deliveryPolicy == handheld::messaging::DeliveryPolicy::Always || handheld::messaging::relayStatus(header.status)) {
+                value->flags |= RelayRequired;
+                if (_relay.ticket != ticket) { releaseBody(ticket); value->phase = Phase::Relay; }
+            }
         }
     }
     ++_statusRevision;
@@ -369,6 +505,14 @@ void RustLxmfEngine::settleStorage(Ticket ticket) {
 
 bool RustLxmfEngine::receiptHook(void* context, handheld::TxReceipt receipt, handheld::TxReceiptEvent event) {
     auto& owner = *static_cast<RustLxmfEngine*>(context);
+    static_assert(RustLinkManager::RequestReceiptSlot >= RustIncomingDelivery::ReceiptCount &&
+                  RustLinkManager::VoiceReceiptSlot < ReceiptBase, "Receipt namespaces must not overlap");
+    if (receipt.slot == RustLinkManager::VoiceReceiptSlot)
+        return owner._d.links && owner._d.links->voiceReceipt(receipt, event);
+    if (receipt.slot == RustLinkManager::RrcReceiptSlot)
+        return owner._d.links && owner._d.links->rrcReceipt(receipt, event);
+    if (receipt.slot == RustLinkManager::RequestReceiptSlot || receipt.slot == RustLinkManager::IdentifyReceiptSlot)
+        return owner._d.links && owner._d.links->requestReceipt(receipt, event);
     if (receipt.slot < RustIncomingDelivery::ReceiptCount)
         return RustIncomingDelivery::receiptHook(&owner._incoming, receipt, event);
     if (receipt.slot < ReceiptBase || receipt.slot >= ReceiptBase + RowCount * 4) return false;
@@ -377,10 +521,18 @@ bool RustLxmfEngine::receiptHook(void* context, handheld::TxReceipt receipt, han
     auto* value = owner.row(ticket);
     if (!value) return false;
     if (event == handheld::TxReceiptEvent::Validate) return owner._accepting &&
+        (!(value->flags & RelayRequired) || (variant == 3 && owner._relay.ticket == ticket && owner.relayAllowed())) &&
         value->identityGeneration == owner._identityGeneration && !(value->flags & (Suppressed | Deleted)) &&
         value->desired != LXMFStatus::DELIVERED && (value->receiptMask & (1u << variant));
     if (value->queuedReceipts) --value->queuedReceipts;
-    if (event == handheld::TxReceiptEvent::Started) owner.setStatus(ticket, LXMFStatus::SENT);
+    if (event == handheld::TxReceiptEvent::Started) {
+        if (value->flags & RelayRequired) {
+            if (owner._relay.ticket == ticket) {
+                owner._relay.emitted = true; owner._relay.sentAt = owner._d.clock->nowMs();
+            }
+            owner.setStatus(ticket, LXMFStatus::PROP_SENDING);
+        } else owner.setStatus(ticket, LXMFStatus::SENT);
+    }
     return true;
 }
 
@@ -463,9 +615,10 @@ handheld::TxOffer RustLxmfEngine::offerResource(Ticket ticket, uint8_t iface, co
 uint64_t RustLxmfEngine::resourceSendBinding(Ticket ticket, uint8_t iface, const uint8_t linkId[16]) const {
     const auto* value = row(ticket);
     if (!value || !_accepting || value->phase != Phase::Resource || (value->flags & Suppressed) || !_d.links) return 0;
-    const auto* active = _d.links->activeLinkId(value->peer);
+    const auto* peer = (value->flags & RelayRequired) && _relay.ticket == ticket ? _relay.node : value->peer;
+    const auto* active = _d.links->activeLinkId(peer);
     uint8_t slot = UINT8_MAX; uint32_t generation = 0;
-    if (!active || _d.links->activeLinkIface(value->peer) != iface || memcmp(active, linkId, 16) ||
+    if (!active || _d.links->activeLinkIface(peer) != iface || memcmp(active, linkId, 16) ||
         !_d.links->receiptBinding(iface, linkId, slot, generation)) return 0;
     return (uint64_t(generation) << 8) | slot;
 }
@@ -473,6 +626,7 @@ uint64_t RustLxmfEngine::resourceSendBinding(Ticket ticket, uint8_t iface, const
 void RustLxmfEngine::finishRouteFailure(Ticket ticket) {
     auto* value = row(ticket);
     if (!value) return;
+    if (beginRelay(ticket)) return;
     value->flags &= ~Rediscover;
     releaseBody(ticket);
     if (value->proofCount) {
@@ -487,6 +641,10 @@ void RustLxmfEngine::finishRouteFailure(Ticket ticket) {
 
 void RustLxmfEngine::onLinkSetupFailure(const uint8_t peer[16], const rs_handheld_route_t& failedRoute) {
     if (!_accepting) return;
+    _inbox.onLinkSetupFailure(peer);
+    if (_relay.ticket.valid() && !memcmp(_relay.node, peer, 16)) {
+        finishRelay(_relay.ticket, LXMFStatus::PROP_UNAVAILABLE, true);
+    }
     for (auto& value : _rows) {
         if ((value.phase != Phase::Ready && value.phase != Phase::Reading) ||
             !(value.flags & (PreferLink | ViaLink)) || value.flags & Suppressed ||
@@ -550,9 +708,24 @@ void RustLxmfEngine::attempt(Ticket ticket) {
         releaseBody(ticket); value->phase = Phase::Ready;
         value->nextAttempt = now + DISCOVERY_RETRY_MS;
         if (++value->discoveryCount >= DISCOVERY_MAX_ATTEMPTS) {
-            value->phase = Phase::Settled; setStatus(ticket, LXMFStatus::FAILED);
+            if (!beginRelay(ticket)) { value->phase = Phase::Settled; setStatus(ticket, LXMFStatus::FAILED); }
         }
         return;
+    }
+    uint8_t recipientCost = 0;
+    const bool knownCost = _d.keymap && _d.keymap->recallCost(value->peer, RustClock::synchronizedEpochSecs(), now, recipientCost);
+    if (_relay.ticket == ticket && _relay.direct && !knownCost) {
+        releaseBody(ticket); value->phase = Phase::Settled; setStatus(ticket, LXMFStatus::STAMP_UNKNOWN); return;
+    }
+    if (knownCost && recipientCost > RustStampWork::MaxCost) {
+        releaseBody(ticket); value->phase = Phase::Settled; setStatus(ticket, LXMFStatus::STAMP_COST_HIGH); return;
+    }
+    if (knownCost && recipientCost) {
+        value->flags |= PreferLink | ViaLink;
+        if (route.kind != RS_HANDHELD_ROUTE_DIRECT) {
+            value->route = route; value->flags |= Rediscover;
+            releaseBody(ticket); value->phase = Phase::Ready; value->nextAttempt = now; return;
+        }
     }
     const auto& header = _body.header;
     if (!(value->flags & (ViaLink | PreferLink))) {
@@ -581,7 +754,7 @@ void RustLxmfEngine::attempt(Ticket ticket) {
     value->route = route;
     if (!_d.links->ensureLink(value->peer, value->publicKey, route)) {
         releaseBody(ticket); value->phase = Phase::Ready;
-        if (!value->linkSince) value->linkSince = now;
+        if (!value->linkSince && _d.links->linkEstablishing(value->peer)) value->linkSince = now;
         value->nextAttempt = now + TX_RETRY_MS;
         return;
     }
@@ -590,11 +763,17 @@ void RustLxmfEngine::attempt(Ticket ticket) {
     // bytes. The FFI's temporary signing scratch is a separate heap allocation.
     auto& packed = _d.resources->_codec;
     uint8_t destination[16]; size_t length = 0;
-    const auto built = rs_handheld_rns_lxmf_build_link(_d.ctx, value->publicKey, value->timestamp,
-        _body.bytes, header.titleLength, _body.bytes + header.titleLength, header.contentLength,
-        packed, RS_HANDHELD_RESOURCE_DATA_MAX, &length, destination, value->messageId);
+    const auto built = buildBody(value->publicKey, value->timestamp,
+        packed, RS_HANDHELD_RESOURCE_DATA_MAX, length, destination, value->messageId);
     if (built != RS_HANDHELD_OK || memcmp(destination, value->peer, 16)) {
         releaseBody(ticket); value->phase = Phase::Settled; setStatus(ticket, LXMFStatus::FAILED); return;
+    }
+    if (recipientCost || (_relay.ticket == ticket && _relay.direct)) {
+        if (!directStamp(ticket, recipientCost)) return;
+        if (rs_handheld_lxmf_append_stamp(packed, length, RS_HANDHELD_RESOURCE_DATA_MAX,
+                _relay.recipientStamp, &length) != RS_HANDHELD_OK) {
+            releaseBody(ticket); value->phase = Phase::Settled; setStatus(ticket, LXMFStatus::STAMP_FAILED); return;
+        }
     }
     if (length <= RS_HANDHELD_LINK_MDU) {
         uint8_t raw[500]; size_t rawLength = 0;
@@ -620,11 +799,20 @@ void RustLxmfEngine::attempt(Ticket ticket) {
     }
 }
 
-void RustLxmfEngine::onResourceOutcome(Ticket ticket, bool delivered) {
+void RustLxmfEngine::onResourceOutcome(Ticket ticket, handheld::outgoing::ResourceOutcome outcome) {
     auto* value = row(ticket);
     if (!value || value->phase != Phase::Resource) return;
+    if ((value->flags & RelayRequired) && _relay.ticket == ticket) {
+        finishRelay(ticket, outcome == handheld::outgoing::ResourceOutcome::Delivered ? LXMFStatus::PROPAGATED :
+            outcome == handheld::outgoing::ResourceOutcome::Rejected ? LXMFStatus::PROP_REJECTED :
+            outcome == handheld::outgoing::ResourceOutcome::NetworkFailure && _relay.emitted ?
+                LXMFStatus::PROP_UNCONFIRMED : LXMFStatus::PROP_UNAVAILABLE,
+            outcome == handheld::outgoing::ResourceOutcome::NetworkFailure);
+        return;
+    }
+    if (outcome == handheld::outgoing::ResourceOutcome::NetworkFailure && beginRelay(ticket)) return;
     value->receiptMask &= ~8; value->phase = Phase::Settled;
-    setStatus(ticket, delivered ? LXMFStatus::DELIVERED : LXMFStatus::FAILED);
+    setStatus(ticket, outcome == handheld::outgoing::ResourceOutcome::Delivered ? LXMFStatus::DELIVERED : LXMFStatus::FAILED);
 }
 
 bool RustLxmfEngine::validatesReceipt(const OutgoingRow& value, const rs_handheld_local_frame_t& frame) const {
@@ -638,6 +826,12 @@ bool RustLxmfEngine::validatesReceipt(const OutgoingRow& value, const rs_handhel
 void RustLxmfEngine::onProofFrame(const rs_handheld_local_frame_t& frame) {
     if (!_d.clock) return;
     const uint64_t now = _d.clock->nowMs();
+    if (_relay.ticket.valid() && _relay.packet && _relay.stage == RelayWork::Stage::Await) {
+        int32_t valid = 0;
+        if (rs_handheld_rns_proof_validate(_relay.nodeKey, _relay.packetHash, frame.payload, frame.payload_len, &valid) == RS_HANDHELD_OK && valid) {
+            finishRelay(_relay.ticket, LXMFStatus::PROPAGATED); return;
+        }
+    }
     for (uint8_t i = 0; i < RowCount; ++i) {
         const auto& value = _rows[i];
         if (value.phase == Phase::Free || value.flags & (Deleted | DeletePending) ||
@@ -661,8 +855,10 @@ void RustLxmfEngine::advance(Ticket ticket) {
     }
     if (value->phase == Phase::AwaitProof && now - value->receiptSince > value->proofWait) {
         if (value->proofCount >= ProofAttempts) {
-                value->phase = Phase::Grace; value->flags |= ProofGrace;
-                value->receiptSince = now; setStatus(ticket, LXMFStatus::UNCONFIRMED);
+                if (!beginRelay(ticket)) {
+                    value->phase = Phase::Grace; value->flags |= ProofGrace;
+                    value->receiptSince = now; setStatus(ticket, LXMFStatus::UNCONFIRMED);
+                }
         } else {
             value->phase = Phase::Ready; value->discoveryCount = 0;
             if (!(value->flags & PreferLink)) value->flags |= Rediscover;
@@ -679,11 +875,30 @@ void RustLxmfEngine::advance(Ticket ticket) {
     if (now < value->nextAttempt) return;
     if (value->flags & Suppressed) return;
     if (value->phase == Phase::Query) {
+        if(_deleting) return;
         const auto admission = _d.store->requestPending(_recoveryCursor);
         if (admission.accepted()) hold(*value, admission, Operation::ReadPending);
         return;
     }
     if (!_accepting) return;
+    if (value->phase == Phase::Reading && _body.slot == ticket.slot &&
+        _body.generation == ticket.generation && !_body.audioReady) {
+        const auto admission = _d.store->requestAudio(key(*value), 0, 4096);
+        if (admission.accepted()) hold(*value, admission, Operation::ReadAudio);
+        return;
+    }
+    if (value->phase == Phase::Stamp) {
+        if (_relay.ticket == ticket && !_relay.work.busy()) { value->phase = Phase::Ready; value->nextAttempt = 0; }
+        return;
+    }
+    if (value->flags & RelayRequired) {
+        if ((!_d.propagation || !_d.propagation->settings().enabled) && _relay.ticket != ticket &&
+            (value->phase == Phase::Relay || value->phase == Phase::Reading)) {
+            releaseBody(ticket); value->phase = Phase::Settled; value->flags |= PausedRelay;
+        }
+        if (value->desired == value->durable && (value->phase == Phase::Relay || value->phase == Phase::Reading)) advanceRelay(ticket);
+        return;
+    }
     if (value->phase == Phase::Prepared) { offerPrepared(ticket); return; }
     if (value->phase == Phase::Reading) { attempt(ticket); return; }
     if (value->phase != Phase::Ready || _body.slot != UINT8_MAX) return;
@@ -700,6 +915,29 @@ void RustLxmfEngine::loop() {
     _incoming.poll();
     if (!_d.store || !_d.clock) { _polling = false; return; }
     _d.store->poll();
+    _inbox.poll();
+    const bool enabled = _d.propagation && _d.propagation->settings().enabled;
+    if (enabled && !_propagationWasEnabled && _accepting) {
+        _recovering = true; _recoveryCursor = {};
+        for (auto& value : _rows) if (value.flags & PausedRelay) {
+            value.flags &= ~PausedRelay;
+            if (!(value.flags & Suppressed) && value.phase == Phase::Settled) value.phase = Phase::Relay;
+        }
+    }
+    _propagationWasEnabled = enabled;
+    if (_relay.ticket.valid()) {
+        auto* active = row(_relay.ticket);
+        if (!active) resetRelay();
+        else if (!relayAllowed() && !active->storageSequence) {
+            const auto ticket = _relay.ticket;
+            if (_relay.emitted) finishRelay(ticket, LXMFStatus::PROP_UNCONFIRMED);
+            else {
+                active->phase = Phase::Relay; active->receiptMask &= ~8;
+                if (_d.resources) _d.resources->cancelSend(ticket);
+                releaseBody(ticket); resetRelay();
+            }
+        } else if (relayAllowed()) _relay.work.poll(_d.clock->nowMs());
+    }
     for (uint8_t i = 0; i < RowCount; ++i) settleStorage({_rows[i].generation, i});
     // One bounded attempt/read/status admission per selected row. A rotating
     // cursor gives backpressured and failed work the same finite loop budget.
@@ -765,12 +1003,19 @@ void RustLxmfEngine::onDataFrame(const rs_handheld_local_frame_t& f, uint8_t ifa
         Serial.println("[RUST-LXMF] inbound: source key unknown; dropping");
         return;
     }
-    rs_handheld_lxmf_message_t msg;
-    if (rs_handheld_rns_lxmf_parse_hint(_d.ctx, f.payload, f.payload_len, keyHint, pub, &msg) !=
+    rs_handheld_media_view_t media = {};
+    uint8_t plaintext[RS_HANDHELD_MEDIA_PLAINTEXT_MAX];
+    if (rs_handheld_rns_lxmf_parse_hint_media(_d.ctx, f.payload, f.payload_len, keyHint, pub,
+                                            plaintext, sizeof(plaintext), &media) !=
         RS_HANDHELD_OK) {
         Serial.println("[RUST-LXMF] inbound parse/validate failed");
         return;
     }
+    const auto& msg = media.message;
+    if (msg.title_offset > sizeof(plaintext) || msg.title_len > sizeof(plaintext) - msg.title_offset ||
+        msg.content_offset > sizeof(plaintext) || msg.content_len > sizeof(plaintext) - msg.content_offset ||
+        media.audio.offset > sizeof(plaintext) || media.audio.length > sizeof(plaintext) - media.audio.offset ||
+        media.audio.state > 2 || media.audio.mode > UINT8_MAX) return;
     if (_d.keymap) _d.keymap->learn(src, pub, _d.clock->nowMs());
     uint8_t raw[128]; size_t rawLen = 0;
     RustIncomingDelivery::ReceiptSeed seed;
@@ -779,9 +1024,11 @@ void RustLxmfEngine::onDataFrame(const rs_handheld_local_frame_t& f, uint8_t ifa
     const uint64_t epoch = RustClock::epochSecs();
     RustIncomingDelivery::MessageView view;
     view.messageId = msg.message_id; view.source = msg.source_hash;
-    view.title = msg.title; view.titleLength = msg.title_len;
-    view.content = msg.content; view.contentLength = msg.content_len;
+    view.title = plaintext + msg.title_offset; view.titleLength = msg.title_len;
+    view.content = plaintext + msg.content_offset; view.contentLength = msg.content_len;
     view.timestamp = epoch ? double(epoch) : msg.timestamp; view.reaction = msg.is_reaction != 0;
+    view.audio = {0, uint16_t(media.audio.length), uint8_t(media.audio.mode), uint8_t(media.audio.state)};
+    view.audioBytes = plaintext + media.audio.offset;
     _incoming.accept(view, seed);
 }
 
@@ -803,10 +1050,14 @@ RustIncomingDelivery::ReceiveResult RustLxmfEngine::onDirectPayload(
         requestUnknownSource(src);
         return {Code::Rejected, {}, Error::SourceUnknown};
     }
-    rs_handheld_lxmf_view_t parsed = {};
-    if (rs_handheld_rns_lxmf_parse_link_view(_d.ctx, packed, len, pub, &parsed) != RS_HANDHELD_OK ||
+    rs_handheld_media_view_t media = {};
+    const auto& parsed = media.message;
+    if (rs_handheld_rns_lxmf_parse_media_view(_d.ctx, packed, len, pub, &media) != RS_HANDHELD_OK ||
         parsed.title_offset > len || parsed.title_len > len - parsed.title_offset ||
         parsed.content_offset > len || parsed.content_len > len - parsed.content_offset ||
+        media.audio.offset > len || media.audio.length > len - media.audio.offset ||
+        media.audio.length > handheld::storage::Budget::MaxMessageBody ||
+        media.audio.state > 2 || media.audio.mode > UINT8_MAX ||
         !handheld::storage::Budget::validBody(parsed.title_len, parsed.content_len))
         return {Code::Rejected, {}, Error::Invalid};
     if (_d.keymap) _d.keymap->learn(parsed.source_hash, pub, _d.clock->nowMs());
@@ -816,6 +1067,8 @@ RustIncomingDelivery::ReceiveResult RustLxmfEngine::onDirectPayload(
     view.title = packed + parsed.title_offset; view.titleLength = parsed.title_len;
     view.content = packed + parsed.content_offset; view.contentLength = parsed.content_len;
     view.timestamp = epoch ? double(epoch) : parsed.timestamp; view.reaction = parsed.is_reaction != 0;
+    view.audio = {0, uint16_t(media.audio.length), uint8_t(media.audio.mode), uint8_t(media.audio.state)};
+    view.audioBytes = packed + media.audio.offset;
     return _incoming.accept(view, seed);
 }
 
@@ -841,4 +1094,383 @@ void RustLxmfEngine::requestUnknownSource(const uint8_t source[16]) {
     uint8_t tag[16];
     RustEntropy::fill(tag, sizeof(tag));
     rs_handheld_rns_request_path(_d.ctx, source, tag, 0, now);
+}
+
+// Propagation uses the existing row, storage executor, codec scratch and Link /
+// Resource pools. Only hashes, public keys and one incremental stamp are retained.
+void RustLxmfEngine::resetRelay() {
+    if (_d.propagation) _d.propagation->release(_relay.nodeOwner);
+    _relay.nodeOwner = 0;
+    _relay.work.reset(); _relay.ticket = {};
+    _relay.born = _relay.requestAt = _relay.sentAt = _relay.linkSince = 0;
+    _relay.stage = RelayWork::Stage::Select;
+    _relay.recipientCost = _relay.nodeCost = _relay.stampedCost = 0;
+    _relay.direct = _relay.haveRecipientStamp = false;
+    _relay.prepared = _relay.verified = _relay.emitted = _relay.packet = false;
+    _relay.waitMs = 0;
+    memset(_relay.node, 0, sizeof _relay.node);
+    memset(_relay.nodeKey, 0, sizeof _relay.nodeKey);
+    memset(_relay.transient, 0, sizeof _relay.transient);
+    memset(_relay.preparedId, 0, sizeof _relay.preparedId);
+    memset(_relay.recipientStamp, 0, sizeof _relay.recipientStamp);
+    memset(_relay.nodeStamp, 0, sizeof _relay.nodeStamp);
+    memset(_relay.packetHash, 0, sizeof _relay.packetHash);
+}
+
+bool RustLxmfEngine::relayAllowed() const {
+    if (_relay.direct) return _accepting;
+    if (!_d.propagation || !_d.propagation->settings().enabled) return false;
+    const auto& settings = _d.propagation->settings();
+    return !_relay.ticket.valid() || _relay.stage == RelayWork::Stage::Select ||
+        settings.selection != handheld::propagation::Selection::Manual ||
+        (settings.hasManual && !memcmp(settings.manual, _relay.node, 16));
+}
+
+bool RustLxmfEngine::beginRelay(Ticket ticket) {
+    auto* value = row(ticket);
+    if (!value || !(value->flags & PolicyAuto) || value->flags & (RelayRequired | Suppressed) ||
+        !_d.propagation || !_d.propagation->settings().enabled) return false;
+    releaseBody(ticket);
+    if (_relay.ticket == ticket && _relay.direct) {
+        _relay.direct = false; _relay.stage = RelayWork::Stage::Select;
+        _relay.born = _d.clock->nowMs(); _relay.requestAt = 0;
+        _relay.work.reset(); // Completed recipient nonce is retained with its MID.
+    }
+    value->flags |= RelayRequired;
+    value->flags &= ~Rediscover;
+    value->receiptMask = 0; // Invalidate queued direct attempts before committing fallback.
+    value->phase = Phase::Relay; value->nextAttempt = 0; value->linkSince = 0;
+    if (value->proofCount) {
+        value->flags |= ProofGrace; value->receiptSince = _d.clock->nowMs();
+    }
+    setStatus(ticket, LXMFStatus::PROP_QUEUED);
+    return true;
+}
+
+void RustLxmfEngine::finishRelay(Ticket ticket, LXMFStatus status, bool networkFailure) {
+    auto* value = row(ticket);
+    if (!value || _relay.ticket != ticket) return;
+    const uint64_t now = _d.clock->nowMs();
+    if (_d.propagation && (networkFailure || status == LXMFStatus::PROPAGATED))
+        _d.propagation->outcome(_relay.node, status == LXMFStatus::PROPAGATED, now);
+    value->receiptMask &= ~8;
+    value->phase = value->proofCount && (value->flags & ProofGrace) &&
+        now - value->receiptSince <= LATE_PROOF_GRACE_MS ? Phase::Grace : Phase::Settled;
+    releaseBody(ticket);
+    // Set terminal state before cancellation can synchronously report an outcome.
+    setStatus(ticket, status);
+    if (_d.resources) _d.resources->cancelSend(ticket);
+    resetRelay();
+}
+
+void RustLxmfEngine::advanceRelay(Ticket ticket) {
+    using Stage = RelayWork::Stage;
+    auto* value = row(ticket);
+    if (!value || !_d.propagation || !_d.propagation->settings().enabled || !_d.links || !_d.resources) return;
+    if (_relay.ticket.valid() && _relay.ticket != ticket) return;
+    if (!_relay.nodeOwner) {
+        if (_d.resources->sending() || _d.links->requestPending()) return;
+        _relay.nodeOwner = _d.propagation->claim();
+        if (!_relay.nodeOwner) return;
+        _relay.born = _d.clock->nowMs();
+    }
+    if (!_relay.ticket.valid()) {
+        if (_d.resources->sending() || _d.links->requestPending()) return;
+        _relay.ticket = ticket; _relay.born = _d.clock->nowMs();
+    }
+    if (!relayAllowed()) return;
+    const uint64_t now = _d.clock->nowMs();
+    auto requestPath = [&](const uint8_t address[16]) {
+        uint8_t tag[16]; RustEntropy::fill(tag, sizeof tag);
+        rs_handheld_rns_request_path(_d.ctx, address, tag, 0, now);
+    };
+    if (_relay.stage == Stage::Select) {
+        const auto* node = _d.propagation->select(now, true, _relay.nodeOwner);
+        const auto& selected = _d.propagation->settings();
+        const auto* manual = selected.selection == handheld::propagation::Selection::Manual && selected.hasManual
+            ? _d.propagation->find(selected.manual) : nullptr;
+        if (!node && manual && manual->cost > RustStampWork::MaxCost) {
+            finishRelay(ticket, LXMFStatus::STAMP_COST_HIGH); return;
+        }
+        uint8_t cost = 0;
+        const bool haveKey = _d.keymap && _d.keymap->recall(value->peer, value->publicKey);
+        const bool known = haveKey && _d.keymap->recallCost(value->peer, RustClock::synchronizedEpochSecs(), now, cost);
+        if (!node || !known) {
+            if (now - _relay.born >= LINK_WAIT_TIMEOUT_MS) {
+                finishRelay(ticket, !haveKey ? LXMFStatus::RECIPIENT_UNKNOWN :
+                    !known ? LXMFStatus::STAMP_UNKNOWN : LXMFStatus::PROP_UNAVAILABLE, known && !node); return;
+            }
+            if (now >= _relay.requestAt) {
+                if (!known) requestPath(value->peer);
+                const auto& settings = _d.propagation->settings();
+                if (!node && settings.selection == handheld::propagation::Selection::Manual && settings.hasManual)
+                    requestPath(settings.manual);
+                _relay.requestAt = now + DISCOVERY_RETRY_MS;
+            }
+            return;
+        }
+        if (cost > RustStampWork::MaxCost) { finishRelay(ticket, LXMFStatus::STAMP_COST_HIGH); return; }
+        memcpy(_relay.node, node->address, 16); memcpy(_relay.nodeKey, node->publicKey, 64);
+        _relay.nodeCost = node->cost; _relay.recipientCost = cost;
+        _relay.stage = Stage::Load;
+    }
+    if (_relay.stage == Stage::Load || _relay.stage == Stage::Reload) {
+        if (_relay.stage == Stage::Reload && _d.resources->sending()) return;
+        const auto admission = _d.store->requestPrepared(key(*value), _d.ourDestHash);
+        if (admission.accepted()) hold(*value, admission, Operation::LoadPrepared);
+        return;
+    }
+    if (_relay.stage == Stage::Read || _relay.stage == Stage::Encrypt) {
+        if (value->phase == Phase::Reading) { prepareRelay(ticket); return; }
+        if (_body.slot != UINT8_MAX) return;
+        const auto admission = _d.store->requestRecord(key(*value));
+        if (admission.accepted()) {
+            _body.slot = ticket.slot; _body.generation = ticket.generation;
+            hold(*value, admission, Operation::ReadRecord); value->phase = Phase::Reading;
+        }
+        return;
+    }
+    if (_relay.stage == Stage::RecipientStamp || _relay.stage == Stage::NodeStamp) {
+        const bool recipient = _relay.stage == Stage::RecipientStamp;
+        if (_relay.work.state() == RustStampWork::State::Idle &&
+            !_relay.work.start(recipient ? value->messageId : _relay.transient, recipient ? 0 : 1,
+                               recipient ? _relay.recipientCost : _relay.nodeCost, now)) {
+            finishRelay(ticket, LXMFStatus::STAMP_FAILED); return;
+        }
+        if (_relay.work.busy()) return;
+        if (_relay.work.state() != RustStampWork::State::Complete) { finishRelay(ticket, LXMFStatus::STAMP_FAILED); return; }
+        memcpy(recipient ? _relay.recipientStamp : _relay.nodeStamp, _relay.work.progress().stamp, 32);
+        if (recipient) {
+            _relay.haveRecipientStamp = true;
+            _relay.stampedCost = uint8_t(std::min<uint16_t>(255, _relay.work.progress().value));
+            memcpy(_relay.preparedId, value->messageId, 32);
+        }
+        _relay.work.reset();
+        _relay.stage = recipient ? Stage::Encrypt : Stage::Link;
+        _relay.born = now; _relay.requestAt = 0;
+        return;
+    }
+    if (_relay.stage == Stage::Link) {
+        const auto* node = _d.propagation->find(_relay.node);
+        // One bounded PN stamp job per attempt. An authenticated policy rise
+        // cannot repeatedly restart CPU work while a packet waits for a Link.
+        if (node && node->cost > _relay.nodeCost) {
+            finishRelay(ticket, node->cost > RustStampWork::MaxCost ? LXMFStatus::STAMP_COST_HIGH : LXMFStatus::STAMP_FAILED);
+            return;
+        }
+        rs_handheld_route_t route{};
+        const bool usable = node && handheld::propagation::Nodes::usable(*node, now) &&
+            !memcmp(node->publicKey, _relay.nodeKey, 64) &&
+            rs_handheld_rns_route(_d.ctx, _relay.node, now, &route) == RS_HANDHELD_OK &&
+            route.kind == RS_HANDHELD_ROUTE_DIRECT && _d.pump->interfaceGeneration(route.interface_id);
+        if (!usable) {
+            if (now - _relay.born >= LINK_WAIT_TIMEOUT_MS) { finishRelay(ticket, LXMFStatus::PROP_UNAVAILABLE, true); return; }
+            if (now >= _relay.requestAt) { requestPath(_relay.node); _relay.requestAt = now + DISCOVERY_RETRY_MS; }
+            return;
+        }
+        _relay.born = now; // Local contention cannot age a future path-discovery window.
+        // ensureLink owns the admitted-handshake deadline. Local pool or driver
+        // refusal has no peer-failure deadline and consumes no stamp retry.
+        const bool active = _d.links->ensureLink(_relay.node, _relay.nodeKey, route);
+        if (_relay.ticket != ticket) return; // Failed setup may synchronously retire us.
+        if (!active && _d.links->linkEstablishing(_relay.node)) {
+            if (!_relay.linkSince) _relay.linkSince = now + 1;
+            else if (now >= _relay.linkSince && now - _relay.linkSince > LINK_WAIT_TIMEOUT_MS +
+                     _d.pump->interfaceTxWaitMs(route.interface_id, 4)) {
+                finishRelay(ticket, LXMFStatus::PROP_UNAVAILABLE, true); return;
+            }
+        }
+        if (!active || _d.resources->sending()) { value->nextAttempt = now + TX_RETRY_MS; return; }
+        _relay.linkSince = 0;
+        _relay.stage = Stage::Reload;
+        return;
+    }
+    if (_relay.stage == Stage::Await && _relay.packet && now - _relay.sentAt > _relay.waitMs)
+        finishRelay(ticket, _relay.emitted ? LXMFStatus::PROP_UNCONFIRMED : LXMFStatus::PROP_UNAVAILABLE, true);
+}
+
+rs_handheld_status_t RustLxmfEngine::buildBody(const uint8_t publicKey[64], double timestamp,
+    uint8_t* output, size_t capacity, size_t& length, uint8_t destination[16], uint8_t id[32]) {
+    const auto& header = _body.header;
+    if (!_body.audioReady) return RS_HANDHELD_ERR_NOT_READY;
+    if (header.audio.state == 1)
+        return rs_handheld_rns_lxmf_build_audio(_d.ctx, publicKey, timestamp,
+            _body.bytes, header.titleLength, _body.bytes + header.titleLength, header.contentLength,
+            header.audio.mode, _body.bytes + header.titleLength + header.contentLength, header.audio.length,
+            output, capacity, &length, destination, id);
+    return rs_handheld_rns_lxmf_build_link(_d.ctx, publicKey, timestamp,
+        _body.bytes, header.titleLength, _body.bytes + header.titleLength, header.contentLength,
+        output, capacity, &length, destination, id);
+}
+
+void RustLxmfEngine::prepareRelay(Ticket ticket) {
+    using Stage = RelayWork::Stage;
+    auto* value = row(ticket);
+    if (!value || _relay.ticket != ticket || _body.slot != ticket.slot || _body.generation != ticket.generation) return;
+    auto& packed = _d.resources->_codec;
+    const auto& header = _body.header;
+    uint8_t destination[16], messageId[32]; size_t length = 0, entrySize = 0, uploadSize = 0;
+    const bool valid = buildBody(value->publicKey, value->timestamp,
+        packed, RS_HANDHELD_RESOURCE_DATA_MAX, length, destination, messageId) == RS_HANDHELD_OK &&
+        !memcmp(destination, value->peer, 16) &&
+        (!header.hasMessageId || !memcmp(header.messageId, messageId, 32)) &&
+        (!_relay.prepared || !memcmp(_relay.preparedId, messageId, 32)) &&
+        (_relay.stage != Stage::Encrypt || !memcmp(value->messageId, messageId, 32));
+    releaseBody(ticket); value->phase = Phase::Relay;
+    if (!valid) { finishRelay(ticket, LXMFStatus::PROP_INVALID); return; }
+    if (rs_handheld_lxmf_relay_size(length, _relay.recipientCost != 0, &entrySize, &uploadSize) != RS_HANDHELD_OK) {
+        finishRelay(ticket, LXMFStatus::PROP_TOO_LARGE); return;
+    }
+    const auto* node = _d.propagation->find(_relay.node);
+    if (!node || uploadSize > node->transferBytes) { finishRelay(ticket, LXMFStatus::PROP_TOO_LARGE); return; }
+    memcpy(value->messageId, messageId, 32);
+    if (_relay.prepared) { _relay.verified = true; _relay.stage = Stage::NodeStamp; return; }
+    if (_relay.stage == Stage::Read && _relay.recipientCost &&
+        !(_relay.haveRecipientStamp && _relay.stampedCost >= _relay.recipientCost &&
+          !memcmp(_relay.preparedId, messageId, 32))) {
+        _relay.stage = Stage::RecipientStamp; return;
+    }
+    if (_relay.recipientCost && rs_handheld_lxmf_append_stamp(packed, length, RS_HANDHELD_RESOURCE_DATA_MAX,
+            _relay.recipientStamp, &length) != RS_HANDHELD_OK) { finishRelay(ticket, LXMFStatus::PROP_INVALID); return; }
+    uint8_t ephemeral[32], iv[16], transient[32];
+    RustEntropy::fill(ephemeral, sizeof ephemeral); RustEntropy::fill(iv, sizeof iv);
+    const auto result = rs_handheld_lxmf_relay_encrypt(_d.ctx, value->publicKey,
+        RustClock::synchronizedEpochSecs(), _d.clock->nowMs(), ephemeral, iv,
+        packed, length, RS_HANDHELD_RESOURCE_DATA_MAX, &length, transient);
+    secureZero(ephemeral, sizeof ephemeral); secureZero(iv, sizeof iv);
+    if (result != RS_HANDHELD_OK) { finishRelay(ticket, LXMFStatus::PROP_INVALID); return; }
+    const auto admission = _d.store->requestPrepare(key(*value), _d.ourDestHash, value->messageId,
+        transient, packed, length, _relay.recipientCost);
+    if (admission.accepted()) {
+        _relay.verified = true; hold(*value, admission, Operation::WritePrepared);
+    } else {
+        _relay.stage = Stage::Encrypt; value->nextAttempt = _d.clock->nowMs() + TX_RETRY_MS;
+    }
+}
+
+bool RustLxmfEngine::settleRelayStorage(Ticket ticket) {
+    using Stage = RelayWork::Stage;
+    namespace prepared = handheld::storage::prepared;
+    auto* value = row(ticket);
+    if (!value || (value->storageOperation != Operation::LoadPrepared && value->storageOperation != Operation::WritePrepared)) return false;
+    handheld::storage::Result result;
+    const auto held = storageTicket(*value);
+    if (!_d.store->peekResult(held, result)) return true;
+    const auto operation = value->storageOperation;
+    const bool live = _relay.ticket == ticket && !(value->flags & Suppressed) && value->desired != LXMFStatus::DELIVERED;
+    bool valid = result.outcome == Outcome::Committed;
+    uint8_t header[prepared::Header], transient[32]; size_t length = 0;
+    if (live && valid && result.length) {
+        auto& entry = _d.resources->_codec;
+        valid = result.length >= prepared::Header + 112 && result.length <= prepared::Max;
+        if (valid) {
+            length = result.length - prepared::Header;
+            valid = _d.store->readPayload(held, header, sizeof header) &&
+                _d.store->readPayload(held, entry, length, sizeof header) &&
+                prepared::validParts(header, entry, length, key(*value), _d.ourDestHash) &&
+                rs_handheld_lxmf_transient_id(entry, length, transient) == RS_HANDHELD_OK &&
+                !memcmp(transient, header + 72, 32) && header[106] >= _relay.recipientCost &&
+                (!_relay.verified || !memcmp(header + 40, value->messageId, 32));
+            if (valid && _relay.prepared) valid = !memcmp(transient, _relay.transient, 32);
+        }
+    }
+    _d.store->releaseResult(held);
+    value->storageSequence = 0; value->storageSlot = UINT8_MAX;
+    if (!live) return true;
+    if (!valid || (!length && (operation == Operation::WritePrepared || _relay.prepared))) {
+        value->error = result.error == Error::None ? Error::InvalidRecord : result.error;
+        finishRelay(ticket, LXMFStatus::PROP_INVALID); return true;
+    }
+    value->revision = result.revision;
+    if (!length) { _relay.stage = Stage::Read; return true; }
+    memcpy(_relay.transient, transient, 32); memcpy(_relay.preparedId, header + 40, 32);
+    _relay.prepared = true;
+    if (_relay.stage == Stage::Reload) sendRelay(ticket, length);
+    else _relay.stage = _relay.verified ? Stage::NodeStamp : Stage::Read;
+    return true;
+}
+
+void RustLxmfEngine::sendRelay(Ticket ticket, size_t entryLength) {
+    auto* value = row(ticket);
+    if (!value || _relay.ticket != ticket || !relayAllowed()) return;
+    const uint64_t now = _d.clock->nowMs();
+    const auto* node = _d.propagation->find(_relay.node);
+    rs_handheld_route_t route{};
+    uint8_t recipientCost = 0;
+    if (!_d.keymap->recallCost(value->peer, RustClock::synchronizedEpochSecs(), now, recipientCost) ||
+        recipientCost > _relay.recipientCost) { finishRelay(ticket, LXMFStatus::STAMP_FAILED); return; }
+    if (!node || !handheld::propagation::Nodes::usable(*node, now) || node->cost > _relay.nodeCost ||
+        rs_handheld_rns_route(_d.ctx, _relay.node, now, &route) != RS_HANDHELD_OK ||
+        !_d.links->linkOnRoute(_relay.node, route) || _d.resources->sending()) {
+        _relay.stage = RelayWork::Stage::Link; return;
+    }
+    auto& packed = _d.resources->_codec; size_t length = 0;
+    const double timestamp = RustClock::epochSecs() ? double(RustClock::epochSecs()) : double(now) / 1000.0;
+    if (rs_handheld_lxmf_relay_upload(packed, entryLength, RS_HANDHELD_RESOURCE_DATA_MAX, timestamp,
+            _relay.nodeStamp, &length) != RS_HANDHELD_OK || length > node->transferBytes) {
+        finishRelay(ticket, LXMFStatus::PROP_TOO_LARGE); return;
+    }
+    const uint8_t iface = _d.links->activeLinkIface(_relay.node);
+    _relay.stage = RelayWork::Stage::Await; _relay.sentAt = now;
+    if (length <= RS_HANDHELD_LINK_MDU) {
+        uint8_t raw[500]; size_t rawLength = 0;
+        handheld::TxLease lease;
+        if (!_d.links->buildLinkDataPacket(_relay.node, packed, length, raw, sizeof raw, rawLength) ||
+            !_d.pump->captureLeaseAt(iface, raw, rawLength, now, 120000, lease) ||
+            rs_handheld_rns_packet_hash(raw, rawLength, raw[0] & 0x40 ? 1 : 0, _relay.packetHash) != RS_HANDHELD_OK) {
+            _relay.stage = RelayWork::Stage::Link; value->nextAttempt = now + TX_RETRY_MS; return;
+        }
+        _relay.packet = true;
+        _relay.waitMs = PROOF_TIMEOUT_MS + proofJitterMs() + _d.pump->interfaceTxWaitMs(iface, 2);
+        lease.setReceipt({ticket.generation, uint8_t(ReceiptBase + ticket.slot * 4 + 3)});
+        value->receiptMask |= 8; ++value->queuedReceipts;
+        const auto offer = _d.pump->offerReceipt(raw, rawLength, lease);
+        value = row(ticket);
+        if (!value) return;
+        if (offer == handheld::TxOffer::Blocked) --value->queuedReceipts;
+        if (_relay.ticket != ticket) return;
+        if (offer != handheld::TxOffer::Started && offer != handheld::TxOffer::Queued) {
+            value->receiptMask &= ~8; _relay.stage = RelayWork::Stage::Link;
+            value->nextAttempt = now + TX_RETRY_MS;
+        }
+    } else {
+        const auto* link = _d.links->activeLinkId(_relay.node);
+        const auto* session = _d.links->activeLinkKey(_relay.node);
+        _relay.packet = false; value->phase = Phase::Resource;
+        const bool started = link && session && _d.resources->startSend(ticket, _relay.node, link, session, iface, packed, length);
+        value = row(ticket);
+        if (value && !started && _relay.ticket == ticket && value->phase == Phase::Resource) {
+            value->phase = Phase::Relay; _relay.stage = RelayWork::Stage::Link;
+            value->nextAttempt = now + TX_RETRY_MS;
+        }
+    }
+}
+
+bool RustLxmfEngine::directStamp(Ticket ticket, uint8_t cost) {
+    auto* value = row(ticket);
+    if (!value) return false;
+    const uint64_t now = _d.clock->nowMs();
+    if (_relay.ticket.valid() && _relay.ticket != ticket) {
+        releaseBody(ticket); value->phase = Phase::Ready; value->nextAttempt = now + TX_RETRY_MS; return false;
+    }
+    if (!_relay.ticket.valid()) {
+        _relay.ticket = ticket; _relay.direct = true; _relay.born = now; _relay.recipientCost = cost;
+        memcpy(_relay.preparedId, value->messageId, 32);
+        if (!_relay.work.start(value->messageId, 0, cost, now)) {
+            releaseBody(ticket); value->phase = Phase::Settled; setStatus(ticket, LXMFStatus::STAMP_FAILED); return false;
+        }
+    }
+    if (!_relay.direct || memcmp(_relay.preparedId, value->messageId, 32) || cost > _relay.recipientCost) {
+        releaseBody(ticket); value->phase = Phase::Settled; setStatus(ticket, LXMFStatus::STAMP_FAILED); return false;
+    }
+    if (_relay.work.busy()) {
+        releaseBody(ticket); value->phase = Phase::Stamp; return false;
+    }
+    if (_relay.work.state() != RustStampWork::State::Complete) {
+        releaseBody(ticket); value->phase = Phase::Settled; setStatus(ticket, LXMFStatus::STAMP_FAILED); return false;
+    }
+    memcpy(_relay.recipientStamp, _relay.work.progress().stamp, 32);
+    _relay.stampedCost = uint8_t(std::min<uint16_t>(255, _relay.work.progress().value));
+    _relay.haveRecipientStamp = true;
+    return true;
 }

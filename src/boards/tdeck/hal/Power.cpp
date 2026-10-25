@@ -79,7 +79,8 @@ int Power::batteryPercent() const {
         return (int)((v - 3.0f) / 1.2f * 100.0f);
     }
 
-    // LiPo: interpolate between nearest table entries.
+    // LiPo: interpolate between nearest table entries; the curve tops out at 100%.
+    if (v >= LIPO_CURVE[0].v) return LIPO_CURVE[0].pct;
     for (int i = 0; i < LIPO_CURVE_N - 1; i++) {
         if (v >= LIPO_CURVE[i + 1].v) {
             float t = (v - LIPO_CURVE[i + 1].v) / (LIPO_CURVE[i].v - LIPO_CURVE[i + 1].v);

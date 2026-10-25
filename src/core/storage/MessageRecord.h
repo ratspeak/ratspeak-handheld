@@ -1,10 +1,12 @@
 #pragma once
 
 #include "AtomicStream.h"
+#include "Hex.h"
 #include "StorageJson.h"
 #include "StorageJsonAllocator.h"
 #include "StorageJsonArena.h"
 #include "LegacyMessageArena.h"
+#include "AudioRecord.h"
 #include <Arduino.h>
 #include <cmath>
 #include <cstdlib>
@@ -12,31 +14,6 @@
 #include <optional>
 
 namespace handheld::storage {
-
-inline bool decodeHex(const char* source, size_t length, uint8_t* destination, size_t bytes) {
-    if (!source || length != bytes * 2) return false;
-    auto digit = [](char c) -> int {
-        if (c >= '0' && c <= '9') return c - '0';
-        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-        return -1;
-    };
-    for (size_t i = 0; i < bytes; ++i) {
-        const int hi = digit(source[2 * i]), lo = digit(source[2 * i + 1]);
-        if (hi < 0 || lo < 0) return false;
-        destination[i] = uint8_t(hi * 16 + lo);
-    }
-    return true;
-}
-
-inline void encodeHex(const uint8_t* source, size_t bytes, char* destination) {
-    constexpr char hex[] = "0123456789abcdef";
-    for (size_t i = 0; i < bytes; ++i) {
-        destination[2 * i] = hex[source[i] >> 4];
-        destination[2 * i + 1] = hex[source[i] & 15];
-    }
-    destination[2 * bytes] = 0;
-}
 
 inline bool recordHeader(JsonVariantConst document, StoredRecordHeader& header) {
     if (!document.is<JsonObjectConst>() || !document["src"].is<const char*>() ||
@@ -47,23 +24,64 @@ inline bool recordHeader(JsonVariantConst document, StoredRecordHeader& header) 
         !decodeHex(dst.c_str(), dst.size(), header.destination, 16)) return false;
     if (!document["store_revision"].isNull() && !document["store_revision"].is<uint32_t>()) return false;
     if (!document["status"].isNull() && (!document["status"].is<uint8_t>() ||
-        document["status"].as<uint8_t>() > 6)) return false;
+        document["status"].as<uint8_t>() > messaging::LastStatus)) return false;
+    if (!document["delivery_policy"].isNull() &&
+        (!document["delivery_policy"].is<uint8_t>() || document["delivery_policy"].as<uint8_t>() > 2)) return false;
     if (!document["incoming"].isNull() && !document["incoming"].is<bool>()) return false;
     if (!document["read"].isNull() && !document["read"].is<bool>()) return false;
+    if (!document["prop_prepared"].isNull() && !document["prop_prepared"].is<bool>()) return false;
     header.revision = document["store_revision"] | uint32_t(0);
     header.status = document["status"] | uint8_t(0);
     header.timestamp = document["ts"] | 0.0;
     if (!std::isfinite(header.timestamp)) return false;
     header.incoming = document["incoming"] | false;
+    header.deliveryPolicy = messaging::DeliveryPolicy(document["delivery_policy"] | uint8_t(0));
+    if (!messaging::validDelivery(header.status, header.deliveryPolicy, header.incoming)) return false;
     header.read = document["read"] | false;
     header.titleLength = document["title"].as<JsonString>().size();
     header.contentLength = document["content"].as<JsonString>().size();
     header.hasMessageId = !document["msgid"].isNull();
+    header.prepared = document["prop_prepared"] | false;
+    header.audio = {};
+    if (!document["audio"].isNull()) {
+        const auto media = document["audio"].as<JsonArrayConst>();
+        if (media.size() != 4 || !media[0].is<uint8_t>() || !media[1].is<uint8_t>() ||
+            !media[2].is<uint16_t>() || !media[3].is<uint32_t>()) return false;
+        header.audio = {media[3].as<uint32_t>(), media[2].as<uint16_t>(),
+                        media[1].as<uint8_t>(), media[0].as<uint8_t>()};
+        if (!audio::valid(header.audio)) return false;
+    }
+    if(!document["audio_removed"].isNull()) {
+        const auto removed=document["audio_removed"].as<JsonArrayConst>();
+        if(header.audio.state!=2 || removed.size()!=3 || !removed[0].is<uint8_t>() ||
+           !removed[1].is<uint16_t>() || !removed[2].is<uint32_t>()) return false;
+        header.audio={removed[2].as<uint32_t>(),removed[1].as<uint16_t>(),removed[0].as<uint8_t>(),3};
+        if(!audio::valid(header.audio)) return false;
+    }
+    if (header.prepared && (header.incoming || !header.hasMessageId ||
+                            header.deliveryPolicy == messaging::DeliveryPolicy::DirectOnly)) return false;
     if (header.hasMessageId) {
         const auto id = document["msgid"].as<JsonString>();
         if (!decodeHex(id.c_str(), id.size(), header.messageId, 32)) return false;
     }
     return true;
+}
+
+inline bool recordAudio(JsonDocument& document, const AudioMetadata& media) {
+    if (!audio::valid(media)) return false;
+    document.remove("audio_removed");
+    if (!media.state) { document.remove("audio"); return true; }
+    auto value = document["audio"].to<JsonArray>();
+    if(media.state==3) {
+        // Older firmware still reads this message as unavailable audio. The
+        // local-only extension keeps the original descriptor for MID dedup.
+        value.add(2);value.add(0);value.add(0);value.add(0);
+        auto removed=document["audio_removed"].to<JsonArray>();
+        removed.add(media.mode);removed.add(media.length);removed.add(media.checksum);
+    } else {
+        value.add(media.state);value.add(media.mode);value.add(media.length);value.add(media.checksum);
+    }
+    return !document.overflowed();
 }
 
 // The pinned JsonDeserializer resolves keys/nesting before invoking its filter.
@@ -165,9 +183,9 @@ private:
     bool _failed = false;
 };
 
-// One bounded document at a time. Normal records first try the approved owned
-// JSON allocation cap. Exceptional existing records may retry by streaming into
-// the reserved legacy arena. The input/output file is never retained as String.
+// One bounded document at a time. Reserved storage supplies both the normal
+// logical JSON cap and exceptional legacy retry, without a second heap arena.
+// Boards without a reservation retain the owned allocation path.
 class MessageDocument {
 public:
     MessageDocument() : _normal(0) { normal(); }
@@ -177,6 +195,7 @@ public:
     JsonDocument& document() { return *_document; }
     const TimestampToken& timestampToken() const { return _timestamp; }
     bool exceptional() const { return _exceptional; }
+    bool available() const { return _memory != nullptr; }
     void reset() {
         _document.reset(); _arena.reset();
         if (_borrowed) legacyMessageArena().release();
@@ -186,13 +205,17 @@ public:
     void normal() {
         _timestamp = {};
         _document.reset(); _arena.reset();
-        if (_exceptional) {
-            if (_borrowed) legacyMessageArena().release();
-            else freeAlignedStorage(_memory);
-            _memory = nullptr; _borrowed = false;
+        if (_exceptional && !_borrowed) {
+            freeAlignedStorage(_memory);
+            _memory = nullptr;
         }
         _exceptional = false;
-        if (!_memory) _memory = allocateAlignedStorage(Budget::JsonAllocator);
+        if (!_memory) {
+            if (legacyMessageArena().available()) {
+                _memory = legacyMessageArena().borrow();
+                _borrowed = _memory != nullptr;
+            } else _memory = allocateAlignedStorage(Budget::JsonAllocator);
+        }
         if (_memory) {
             _arena.emplace(_memory, Budget::JsonAllocator); _document.emplace(&*_arena);
         } else _document.emplace(&_normal); // zero-budget allocator reports failure
@@ -209,13 +232,20 @@ public:
         }
         if (reader.failed()) return Error::Read;
         if (error != DeserializationError::NoMemory) return Error::InvalidRecord;
-        reset();
-        if (legacyMessageArena().available()) {
-            // Already reserved before networking/worker startup. Do not charge
-            // the same block to a second free-heap admission check.
-            _memory = legacyMessageArena().borrow();
-            _borrowed = _memory != nullptr;
+        // Keep exclusive ownership while rebuilding the allocator with the
+        // larger legacy capacity. No live document/source may alias this reset.
+        _document.reset(); _arena.reset();
+        size_t capacity = Budget::LegacyScratch;
+        if (_borrowed) {
+            legacyMessageArena().noteLegacy(); // Boot census: keep the full reserve.
+            capacity = legacyMessageArena().capacity();
         } else {
+            freeAlignedStorage(_memory); _memory = nullptr;
+            // A reserved block denied to this document is still owned by its
+            // caller; never allocate around or wait on that contention.
+            if (legacyMessageArena().available()) {
+                _document.emplace(&_normal); return Error::Allocation;
+            }
             if (!Budget::canReserveLegacy(ESP.getFreeHeap(), ESP.getMaxAllocHeap())) {
                 _document.emplace(&_normal); return Error::Allocation;
             }
@@ -223,14 +253,17 @@ public:
         }
         if (!_memory) { _document.emplace(&_normal); return Error::Allocation; }
         _exceptional = true;
-        _arena.emplace(_memory, Budget::LegacyScratch);
+        _arena.emplace(_memory, capacity);
         _document.emplace(&*_arena);
         if (!file.seek(0)) return Error::Read;
         reader.reset(); _timestamp = {};
         const auto retry = deserializeJson(*_document, reader, TimestampFilter{&_timestamp});
         // The exceptional arena was successfully reserved. Exhausting this
         // fixed schema envelope is a preserved recovery error, not transient
-        // heap backpressure that could retry forever.
+        // heap backpressure that could retry forever. A reduced reserve is not
+        // that envelope: restart restores the legacy capacity for the record.
+        if (retry == DeserializationError::NoMemory && capacity < Budget::LegacyScratch && !reader.failed())
+            return Error::Allocation;
         const bool ended = !retry && reader.ended();
         return reader.failed() ? Error::Read : ended ? Error::None : Error::InvalidRecord;
     }
@@ -317,6 +350,11 @@ public:
         measure();
     }
     explicit JsonSource(MessageDocument& document) : _document(document.document()), _retained(&document.timestampToken()) {
+        // Direct marker writers also use this source, without commit()'s
+        // schema check. Never persist a partial/null marker after refusal.
+        if (!document.available() || document.document().overflowed()) {
+            _error = Error::Allocation; return;
+        }
         measure();
     }
     Error error() const { return _error; }
@@ -353,6 +391,7 @@ inline bool createRecord(JsonDocument& document, const Request& request, const u
     document["incoming"] = request.operation == Operation::CreateIncoming;
     document["read"] = request.operation == Operation::CreateOutgoing || request.read;
     document["status"] = request.status;
+    document["delivery_policy"] = uint8_t(request.deliveryPolicy);
     document["store_revision"] = uint32_t(1);
     if (request.hasMessageId) {
         encodeHex(request.messageId, 32, hash);

@@ -67,18 +67,27 @@ pub(super) const INGEST_LOCAL_FRAME: i32 = 9;
 /// dests stay `Dropped`. This is the trusted `local_destinations` branch (rns-transport
 /// outbound.rs::handle_inbound_path_request) expressed where the FFI already knows our own dest.
 pub(super) const INGEST_PATH_REQUEST_SELF: i32 = 10;
-/// A validated inbound announce for an aspect OTHER than `lxmf.delivery` (e.g. `lxst.telephony`,
-/// `lxmf.propagation`, NomadNet). Its path is still learned, but it is NOT surfaced as a contact —
+/// A validated inbound announce for an aspect OTHER than delivery/propagation (e.g. `lxst.telephony`,
+/// NomadNet). Its path is still learned, but it is NOT surfaced as a contact —
 /// this LXMF endpoint neither routes nor lists other aspects (the
 /// AnnounceManager filters to `lxmf.delivery`, else one identity shows as several phantom peers).
 pub(super) const INGEST_ANNOUNCE_OTHER: i32 = 11;
+/// An accepted `lxmf.propagation` announce, surfaced separately from contacts.
+pub(super) const INGEST_ANNOUNCE_PROPAGATION: i32 = 13;
+/// Accepted RRC hub announcement; never learned as an LXMF contact.
+pub(super) const INGEST_ANNOUNCE_RRC: i32 = 14;
+pub(super) const INGEST_ANNOUNCE_VOICE: i32 = 15;
 
 /// True iff the announce payload is for the `lxmf.delivery` aspect (name_hash match). Cheap parse;
 /// no signature check (the caller already validated for path-learning).
 pub(super) fn is_lxmf_delivery_announce(payload: &[u8], context_flag: bool) -> bool {
+    is_named_announce(payload, context_flag, LXMF_DELIVERY_NAME)
+}
+
+fn is_named_announce(payload: &[u8], context_flag: bool, name: &str) -> bool {
     matches!(
         AnnounceView::parse(payload, context_flag, RS_HANDHELD_ANNOUNCE_MAX_APP_DATA),
-        Ok(v) if v.name_hash == name_hash(LXMF_DELIVERY_NAME)
+        Ok(v) if v.name_hash == name_hash(name)
     )
 }
 
@@ -117,10 +126,13 @@ pub(super) fn classify_local_frame(
     let is_local = match h.flags.packet_type {
         PacketType::Proof => true, // C++ matches against its pending (hash, key) set
         PacketType::Data | PacketType::LinkRequest => {
-            let to_our_dest = ctx
-                .identity
-                .as_ref()
-                .is_some_and(|id| id.lxmf_delivery_hash() == h.destination_hash);
+            let to_our_dest = ctx.identity.as_ref().is_some_and(|id| {
+                h.flags.destination_type == DestinationType::Single
+                    && (id.lxmf_delivery_hash() == h.destination_hash
+                        || (ctx.voice_enabled
+                            && h.flags.packet_type == PacketType::LinkRequest
+                            && id.destination_hash(VOICE_DESTINATION_NAME) == h.destination_hash))
+            });
             let to_our_link = h.flags.destination_type == DestinationType::Link
                 && ctx
                     .link_ids
@@ -176,16 +188,15 @@ pub(super) fn classify_own_path_request(ctx: &RsHandheldRns, raw: &[u8]) -> Opti
     if tag.is_empty() {
         return None;
     }
-    if ctx
-        .identity
-        .as_ref()
-        .is_none_or(|id| id.lxmf_delivery_hash() != payload[..16])
-    {
+    let id = ctx.identity.as_ref()?;
+    let voice = ctx.voice_enabled && id.destination_hash(VOICE_DESTINATION_NAME) == payload[..16];
+    if !voice && id.lxmf_delivery_hash() != payload[..16] {
         return None;
     }
     let mut tag_bytes = [0u8; DESTINATION_LENGTH];
     tag_bytes[..tag.len()].copy_from_slice(tag);
     Some(OwnPathRequest {
+        voice,
         tag: tag_bytes,
         tag_len: tag.len(),
     })
@@ -387,6 +398,10 @@ pub unsafe extern "C" fn rs_handheld_rns_open_transport(
                 // Own-announce guard (see load_identity): cover the open-after-load order too.
                 if let Some(id) = &ctx.identity {
                     let _ = node.register_own_destination(id.lxmf_delivery_hash());
+                    if ctx.voice_enabled {
+                        let _ = node
+                            .register_own_destination(id.destination_hash(VOICE_DESTINATION_NAME));
+                    }
                 }
                 ctx.node = Some(NonNull::from(node));
                 RsHandheldStatus::Ok
@@ -474,7 +489,30 @@ pub unsafe extern "C" fn rs_handheld_rns_packet_ingest_with_mode(
         {
             if let Ok(view) = PacketView::parse(raw) {
                 if view.header.flags.packet_type == PacketType::Announce {
-                    if is_lxmf_delivery_announce(view.payload, view.header.flags.context_flag) {
+                    let propagation = is_named_announce(
+                        view.payload,
+                        view.header.flags.context_flag,
+                        "lxmf.propagation",
+                    );
+                    let rrc =
+                        is_named_announce(view.payload, view.header.flags.context_flag, "rrc.hub");
+                    let voice = is_named_announce(
+                        view.payload,
+                        view.header.flags.context_flag,
+                        VOICE_DESTINATION_NAME,
+                    );
+                    if propagation
+                        || voice
+                        || rrc
+                        || is_lxmf_delivery_announce(view.payload, view.header.flags.context_flag)
+                    {
+                        if propagation {
+                            action_code = INGEST_ANNOUNCE_PROPAGATION;
+                        } else if rrc {
+                            action_code = INGEST_ANNOUNCE_RRC;
+                        } else if voice {
+                            action_code = INGEST_ANNOUNCE_VOICE;
+                        }
                         if !out_event.is_null() {
                             let ev = unsafe { &mut *out_event };
                             let status = fill_announce_event(
@@ -573,6 +611,39 @@ pub unsafe extern "C" fn rs_handheld_rns_update_interface(
     })
 }
 
+/// Publish an interface's actual clear-packet capacity after framing and IFAC.
+/// The generation must match the facts published by `rs_handheld_rns_update_interface`.
+/// Stale or unavailable owners return `ErrNotReady`; no replacement owner is changed.
+/// Capacity changes retire existing transit Links. This firmware's drivers currently
+/// support 500 bytes; lower budgets remain valid for packets but cannot carry a Link.
+///
+/// # Safety
+/// `ctx` is live and exclusively owned with an open transport node.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rs_handheld_rns_update_interface_capacity(
+    ctx: *mut RsHandheldRns,
+    interface_id: u8,
+    generation: u32,
+    clear_mtu: u16,
+) -> RsHandheldStatus {
+    guard(|| {
+        if ctx.is_null() || interface_id >= 7 || clear_mtu > 500 {
+            return RsHandheldStatus::ErrInvalidArg;
+        }
+        // SAFETY: exclusive live context and caller-owned open node per contract.
+        let ctx = unsafe { &mut *ctx };
+        let Some(mut pointer) = ctx.node else {
+            return RsHandheldStatus::ErrNotReady;
+        };
+        let node = unsafe { pointer.as_mut() };
+        if node.update_interface_packet_capacity(interface_id, generation, usize::from(clear_mtu)) {
+            RsHandheldStatus::Ok
+        } else {
+            RsHandheldStatus::ErrNotReady
+        }
+    })
+}
+
 /// Compatibility ingest entry point for hosts without interface-mode metadata. Learned paths use
 /// the active profile's node-wide mode, matching the pre-interface-scoped API.
 ///
@@ -628,6 +699,9 @@ pub unsafe extern "C" fn rs_handheld_rns_take_own_path_request_tag(
             return RsHandheldStatus::ErrInvalidArg;
         }
         let ctx = unsafe { &mut *ctx };
+        if ctx.own_path_request.is_some_and(|request| request.voice) {
+            return RsHandheldStatus::ErrUnsupported;
+        }
         let Some(request) = ctx.own_path_request.take() else {
             return RsHandheldStatus::ErrNotReady;
         };

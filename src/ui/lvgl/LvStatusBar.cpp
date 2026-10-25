@@ -1,6 +1,7 @@
 #include "LvStatusBar.h"
 #include "Theme.h"
 #include "LvTheme.h"
+#include "ClockText.h"
 #include <Arduino.h>
 #include <cstdio>
 #include <time.h>
@@ -138,13 +139,7 @@ void LvStatusBar::updateTime() {
     _lastHour = local->tm_hour;
     _lastMinute = local->tm_min;
     char buf[8];
-    if (_use24h) {
-        snprintf(buf, sizeof(buf), "%02d:%02d", local->tm_hour, local->tm_min);
-    } else {
-        int h = local->tm_hour % 12;
-        if (h == 0) h = 12;
-        snprintf(buf, sizeof(buf), "%d:%02d", h, local->tm_min);
-    }
+    formatClockText(buf, sizeof(buf), *local, _use24h);
     lv_label_set_text(_lblTime, buf);
     refreshTimeColor();
 }

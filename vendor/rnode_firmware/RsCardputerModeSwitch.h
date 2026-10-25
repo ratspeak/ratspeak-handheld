@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include <string.h>
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
 
@@ -33,8 +34,7 @@ inline const esp_partition_t *mode_partition(FirmwareMode mode) {
   return esp_partition_find_first(ESP_PARTITION_TYPE_APP, mode_subtype(mode), nullptr);
 }
 
-inline SwitchResult set_next_boot(FirmwareMode mode) {
-  const esp_partition_t *target = mode_partition(mode);
+inline SwitchResult set_boot_partition(const esp_partition_t *target) {
   if (target == nullptr) {
     return {false, "target partition not found"};
   }
@@ -47,8 +47,18 @@ inline SwitchResult set_next_boot(FirmwareMode mode) {
   return {true, "boot partition updated"};
 }
 
+inline SwitchResult set_next_boot(FirmwareMode mode) {
+  return set_boot_partition(mode_partition(mode));
+}
+
+// Other layouts (a single-app image, bmorcelli's Launcher) can hold another app
+// in ota_0, so only re-arm a slot labelled as our launcher.
 inline SwitchResult return_to_launcher_next_boot() {
-  return set_next_boot(FirmwareMode::Launcher);
+  const esp_partition_t *launcher = mode_partition(FirmwareMode::Launcher);
+  if (launcher != nullptr && strcmp(launcher->label, "launcher") != 0) {
+    return {true, "no launcher slot"};
+  }
+  return set_boot_partition(launcher);
 }
 
 } // namespace rs_cardputer_adv

@@ -55,9 +55,10 @@ class Board:
             raise ValueError(f"unsupported package: {mode}")
         return f"{self.artifact_prefix}-{mode}"
 
-    def app_name(self, mode: str) -> str:
+    def image_name(self, mode: str) -> str:
+        """Single-mode factory image published beside its ZIP, byte-identical to the ZIP's image."""
         if mode not in APPLICATIONS:
-            raise ValueError(f"unsupported application: {mode}")
+            raise ValueError(f"unsupported single-mode image: {mode}")
         return f"{self.package_name(mode)}.bin"
 
     def partitions(self, root: Path = ROOT, *, standalone: bool = False) -> dict[str, Partition]:
@@ -190,7 +191,7 @@ def load_boards(path: Path = ROOT / "tools/release_boards.json") -> dict[str, Bo
 
 def board_assets(board: Board) -> set[str]:
     return {f"{board.package_name(mode)}.zip" for mode in board.modes} | {
-        board.app_name(mode) for mode in APPLICATIONS if mode in board.modes
+        board.image_name(mode) for mode in APPLICATIONS if mode in board.modes
     }
 
 
@@ -246,7 +247,6 @@ def make_settings(device: str) -> dict[str, str]:
         "BRAND": board.artifact_prefix,
         "FLASH_SIZE": board.flash_size,
         "HAS_RNODE": "1" if "rnode" in board.modes else "0",
-        "APP_STANDALONE_NAME": board.app_name("standalone").removesuffix(".bin"),
         "POST_BUILD_IMAGE": board.post_build_image,
         "STANDALONE_FLASH_FREQ": board.standalone_flash_freq or "",
         "STANDALONE_FACTORY_OFFSET": hex(board.factory_app_offset("standalone")),
@@ -259,7 +259,6 @@ def make_settings(device: str) -> dict[str, str]:
             "PARTITIONS_BASENAME": f"partitions-{board.flash_size.lower()}.bin",
             "RNODE_TARGET": board.rnode_target,
             "RNODE_PREP_TARGET": board.rnode_prep_target,
-            "APP_RNODE_NAME": board.app_name("rnode").removesuffix(".bin"),
             "RNODE_FACTORY_OFFSET": hex(board.factory_app_offset("rnode")),
         })
         for name in ("launcher", *APPLICATIONS):

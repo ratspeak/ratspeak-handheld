@@ -1,5 +1,6 @@
+#include "hal/PagerBattery.h"
 #include "../../../src/core/config/FirmwareVersion.h"
-// rsPager boot launcher — picks Standalone or RNode at power-on.
+// Ratspeak boot launcher — picks Standalone or RNode at power-on.
 // Runs from ota_0; writes the choice to otadata and restarts. Both target
 // firmwares re-arm this launcher on boot, so any reset returns here.
 // Input reuses the standalone HAL (Scrollwheel encoder, TCA8418 Keyboard) via
@@ -204,7 +205,7 @@ void drawScreen() {
   display.setTextSize(3);
   display.setTextColor(kText, kBg);
   display.setCursor(24, 12);
-  display.print("rsPager");
+  display.print("Ratspeak");
 
   display.setTextSize(1);
   display.setTextColor(kMuted, kBg);
@@ -364,6 +365,10 @@ void setup() {
   // Rails sit behind the XL9555 expander, so I2C must come up first.
   Wire.begin(I2C_SDA, I2C_SCL, 400000);
   Wire.setTimeOut(20);
+  pager::Battery<TwoWire> battery(Wire);
+  const auto initialized = battery.begin();
+  Serial.printf("[POWER] BQ25896 %s\n", battery.initName(initialized));
+  battery.printDiagnostics(Serial);
   enablePeripheralRails();
   delay(50);
 
@@ -381,7 +386,7 @@ void setup() {
   display.setBrightness(200);
 
   selection.begin(loadLastChoice(), millis());
-  Serial.printf("[LAUNCHER] rsPager launcher up, last choice: %s\n",
+  Serial.printf("[LAUNCHER] Ratspeak launcher up, last choice: %s\n",
                 selection.selected() == Choice::RNode ? "RNode" : "Standalone");
   drawScreen();
 }

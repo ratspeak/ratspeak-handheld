@@ -6,6 +6,16 @@ void PowerManager::begin() {
     M5.Display.setBrightness(_fullBrightness);
 }
 
+void PowerManager::setBrightness(uint8_t pct) {
+    if (pct > 100) pct = 100;
+    const uint8_t level = uint8_t(uint16_t(pct) * 255 / 100);
+    if (level == _fullBrightness) return;
+    _fullBrightness = level;
+    if (_state == ACTIVE) M5.Display.setBrightness(_fullBrightness);
+    else if (_state == DIMMED) M5.Display.setBrightness(dimBrightness());
+    Serial.printf("[POWER] Brightness %u%%\n", unsigned(pct));
+}
+
 void PowerManager::activity() {
     _lastActivity = millis();
     if (_state != ACTIVE) {
@@ -47,7 +57,7 @@ void PowerManager::setState(State newState) {
             M5.Display.setBrightness(_fullBrightness);
             break;
         case DIMMED:
-            M5.Display.setBrightness(DIM_BRIGHTNESS);
+            M5.Display.setBrightness(dimBrightness());
             break;
         case SCREEN_OFF:
             M5.Display.setBrightness(0);

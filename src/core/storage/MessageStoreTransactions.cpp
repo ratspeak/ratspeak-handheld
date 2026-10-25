@@ -1,5 +1,6 @@
 #include "MessageStore.h"
 #include "MessageTransactions.h"
+#include "PreparedEnvelope.h"
 #include "runtime/TaskOwner.h"
 #include <algorithm>
 #include <cmath>
@@ -22,7 +23,7 @@ MessageTransactions& MessageStore::transactions() const {
 MessageStore::Submission MessageStore::submit(Request request, const WriteQueue::PayloadPart* parts,
                                               size_t count, size_t capacity) {
     handheld::assertDeviceOwner();
-    if (_deleteFence.valid() && !memcmp(_fencedPeer, request.key.peer, 16))
+    if (!rrc::operation(request.operation) && _deleteFence.valid() && !memcmp(_fencedPeer, request.key.peer, 16))
         return {{}, Rejection::Fenced};
     const auto submission = _writeQueue.submit(request, parts, count, capacity);
     if (submission.accepted() && request.operation == Operation::DeleteConversation) {
@@ -36,7 +37,9 @@ MessageStore::Submission MessageStore::requestSave(const LXMFMessage& message,
     if (!Budget::validBody(message.title.size(), message.content.size())) return {{}, Rejection::TooLarge};
     if (message.sourceHash.size() != 16 || message.destHash.size() != 16 ||
         (message.messageId.size() != 0 && message.messageId.size() != 32) ||
-        !std::isfinite(message.timestamp) || uint8_t(message.status) > 6) return {{}, Rejection::Invalid};
+        !std::isfinite(message.timestamp) ||
+        !handheld::messaging::validDelivery(uint8_t(message.status), message.deliveryPolicy, message.incoming))
+        return {{}, Rejection::Invalid};
     Request request;
     request.operation = message.incoming ? Operation::CreateIncoming : Operation::CreateOutgoing;
     request.key.incoming = message.incoming;
@@ -45,25 +48,30 @@ MessageStore::Submission MessageStore::requestSave(const LXMFMessage& message,
     request.hasMessageId = message.messageId.size() == 32;
     if (request.hasMessageId) memcpy(request.messageId, message.messageId.data(), 32);
     request.timestamp = message.timestamp; request.status = uint8_t(message.status); request.read = message.read;
+    request.deliveryPolicy = message.deliveryPolicy;
     request.titleLength = uint16_t(message.title.size()); request.contentLength = uint16_t(message.content.size());
     request.identityGeneration = identityGeneration; request.peerGeneration = peerGeneration;
     return requestSave(request, message.title.data(), message.content.data());
 }
 
-MessageStore::Submission MessageStore::requestSave(const Request& request, const void* title, const void* content) {
-    if (!Budget::validBody(request.titleLength, request.contentLength)) return {{}, Rejection::TooLarge};
+MessageStore::Submission MessageStore::requestSave(const Request& request, const void* title, const void* content,
+                                                  const void* media) {
+    if (!audio::validBody(request.titleLength, request.contentLength, request.audio)) return {{}, Rejection::TooLarge};
     if ((request.operation != Operation::CreateIncoming && request.operation != Operation::CreateOutgoing) ||
         request.key.counter || request.key.incoming != (request.operation == Operation::CreateIncoming) ||
         memcmp(request.key.peer, request.key.incoming ? request.source : request.destination, 16) ||
-        !std::isfinite(request.timestamp) || request.status > 6 ||
-        (request.titleLength && !title) || (request.contentLength && !content)) return {{}, Rejection::Invalid};
-    const WriteQueue::PayloadPart parts[] = {{title, request.titleLength}, {content, request.contentLength}};
-    return submit(request, parts, 2);
+        !std::isfinite(request.timestamp) ||
+        !handheld::messaging::validDelivery(request.status, request.deliveryPolicy, request.key.incoming) ||
+        (request.titleLength && !title) || (request.contentLength && !content) ||
+        (request.audio.length && !media) || request.audio.checksum) return {{}, Rejection::Invalid};
+    const WriteQueue::PayloadPart parts[] = {{title, request.titleLength}, {content, request.contentLength},
+                                           {media, request.audio.length}};
+    return submit(request, parts, 3);
 }
 
 MessageStore::Submission MessageStore::requestStatus(const RecordKey& key, LXMFStatus status,
                                                      uint32_t identityGeneration, uint32_t peerGeneration) {
-    if (!key.counter || uint8_t(status) > 6) return {{}, Rejection::Invalid};
+    if (!key.counter || uint8_t(status) > handheld::messaging::LastStatus) return {{}, Rejection::Invalid};
     Request request; request.operation = Operation::UpdateStatus; request.key = key; request.status = uint8_t(status);
     request.identityGeneration = identityGeneration; request.peerGeneration = peerGeneration;
     return submit(request);
@@ -77,6 +85,17 @@ MessageStore::Submission MessageStore::requestMarkRead(const std::string& peer,
     return submit(request);
 }
 
+MessageStore::Submission MessageStore::requestRetry(const RecordKey& key,const uint8_t local[16],uint32_t revision) {
+    if(!key.counter || key.incoming || !local || !revision) return {{},Rejection::Invalid};
+    Request request;request.operation=Operation::RetryOutgoing;request.key=key;request.offset=revision;
+    memcpy(request.source,local,16);return submit(request);
+}
+
+MessageStore::Submission MessageStore::requestDeleteRecord(const RecordKey& key,const uint8_t local[16],uint32_t revision) {
+    if(!key.counter || !revision || !local) return {{},Rejection::Invalid};
+    Request request;request.operation=Operation::DeleteRecord;request.key=key;request.offset=revision;
+    memcpy(request.source,local,16);return submit(request);
+}
 MessageStore::Submission MessageStore::requestDelete(const std::string& peer,
                                                     uint32_t identityGeneration, uint32_t peerGeneration) {
     Request request; request.operation = Operation::DeleteConversation;
@@ -91,10 +110,99 @@ MessageStore::Submission MessageStore::requestRecord(const RecordKey& key, uint3
     return submit(request, nullptr, 0, capacity);
 }
 
+MessageStore::Submission MessageStore::requestAudio(const RecordKey& key, uint32_t offset, uint16_t capacity) {
+    if (!key.counter || capacity <= sizeof(StoredRecordHeader)) return {{}, Rejection::Invalid};
+    Request request; request.operation = Operation::ReadAudio; request.key = key; request.offset = offset;
+    return submit(request, nullptr, 0, capacity);
+}
+
+MessageStore::Submission MessageStore::requestMemo(Operation op, const memo::Command& command,
+    const uint8_t* chunk, size_t length, uint16_t capacity) {
+    if (!memo::operation(op) || length > memo::ChunkBytes || length % memo::FrameBytes ||
+        (length && (!chunk || op != Operation::MemoAppend)) ||
+        (op == Operation::MemoAppend && !length) || capacity < sizeof(memo::Snapshot) ||
+        !std::isfinite(command.timestamp) || command.policy > handheld::messaging::DeliveryPolicy::Always)
+        return {{}, Rejection::Invalid};
+    Request request; request.operation = op;
+    memcpy(request.source, command.local, 16); memcpy(request.key.peer, command.peer, 16);
+    request.offset = command.revision; request.peerGeneration = command.offset;
+    request.timestamp = command.timestamp; request.deliveryPolicy = command.policy;
+    const WriteQueue::PayloadPart part{chunk, length};
+    // Promotion reuses the queue's existing large credit to construct the
+    // message body; no permanent full-clip buffer is added to any owner.
+    return submit(request, &part, 1, op == Operation::MemoPromote ? Budget::LargePayload : capacity);
+}
+
 MessageStore::Submission MessageStore::requestPending(const RecordKey& after) {
     if (after.incoming) return {{}, Rejection::Invalid};
     Request request; request.operation = Operation::ReadPending; request.key = after;
     return submit(request, nullptr, 0, sizeof(StoredRecordHeader));
+}
+
+MessageStore::Submission MessageStore::requestPrepared(const RecordKey& key, const uint8_t source[16]) {
+    if (!key.counter || key.incoming || !source) return {{}, Rejection::Invalid};
+    Request request; request.operation = Operation::LoadPrepared; request.key = key;
+    memcpy(request.source, source, 16);
+    return submit(request, nullptr, 0, prepared::Max);
+}
+
+MessageStore::Submission MessageStore::requestPrepare(const RecordKey& key, const uint8_t source[16],
+    const uint8_t messageId[32], const uint8_t transientId[32], const uint8_t* entry, size_t length,
+    uint8_t recipientCost) {
+    uint8_t header[prepared::Header];
+    if (!prepared::make(header, key, source, messageId, transientId, entry, length, recipientCost)) return {{}, Rejection::Invalid};
+    Request request; request.operation = Operation::WritePrepared; request.key = key;
+    memcpy(request.source, source, 16); memcpy(request.messageId, messageId, 32); request.hasMessageId = true;
+    const WriteQueue::PayloadPart parts[] = {{header, sizeof(header)}, {entry, length}};
+    return submit(request, parts, 2, prepared::Max);
+}
+
+MessageStore::Submission MessageStore::requestPurgeJournal(const uint8_t local[16]) {
+    if (!local) return {{}, Rejection::Invalid};
+    Request request; request.operation = Operation::LoadPurge;
+    memcpy(request.destination, local, 16);
+    return submit(request, nullptr, 0, purge::Size);
+}
+
+MessageStore::Submission MessageStore::requestRrc(Operation operation, const rrc::Record& record,
+    const uint8_t fileKey[16], uint32_t cursor, uint32_t expectedRevision, HistoryDirection direction,
+    const uint8_t privateParticipant[16], const uint8_t observation[16]) {
+    if (!rrc::operation(operation) || !record.valid(record.length()) ||
+        (direction != HistoryDirection::Before && direction != HistoryDirection::After) ||
+        ((operation == Operation::RrcAppend || operation == Operation::RrcStatus ||
+          (operation == Operation::RrcRead && record.kind() == rrc::Kind::Message && !cursor)) && !fileKey))
+        return {{}, Rejection::Invalid};
+    Request request; request.operation = operation; request.key.counter = cursor;
+    if (privateParticipant) {
+        if (operation!=Operation::RrcAppend && (operation!=Operation::RrcWrite || record.kind()!=rrc::Kind::Draft))
+            return {{},Rejection::Invalid};
+        memcpy(request.source,privateParticipant,16);
+    }
+    if (observation) {
+        if (operation!=Operation::RrcAppend && operation!=Operation::RrcObserve) return {{},Rejection::Invalid};
+        memcpy(request.destination,observation,16);
+    }
+    request.offset = expectedRevision;
+    request.hasMessageId = fileKey != nullptr; request.historyDirection = direction;
+    if (fileKey) memcpy(request.messageId, fileKey, 16);
+    const WriteQueue::PayloadPart part{record.bytes, record.length()};
+    return submit(request, &part, 1, Budget::SmallPayload);
+}
+
+MessageStore::Submission MessageStore::requestWritePurge(const purge::Journal& journal) {
+    if (!journal.valid()) return {{}, Rejection::Invalid};
+    Request request; request.operation = Operation::WritePurge; request.key = journal.key();
+    memcpy(request.destination, journal.local(), 16);
+    const WriteQueue::PayloadPart part{journal.bytes, sizeof(journal.bytes)};
+    return submit(request, &part, 1, purge::Size);
+}
+
+MessageStore::Submission MessageStore::requestClearPurge(const purge::Journal& journal) {
+    if (!journal.valid()) return {{}, Rejection::Invalid};
+    Request request; request.operation = Operation::ClearPurge; request.key = journal.key();
+    memcpy(request.destination, journal.local(), 16);
+    const WriteQueue::PayloadPart part{journal.bytes, sizeof(journal.bytes)};
+    return submit(request, &part, 1, purge::Size);
 }
 
 MessageStore::Submission MessageStore::requestHistoryPage(const std::string& peer, HistoryEntry cursor, uint8_t limit,
@@ -134,7 +242,7 @@ MessageStore::Submission MessageStore::requestConversation(const ConversationSel
     return submit(request, nullptr, 0, sizeof(ConversationView));
 }
 
-void MessageStore::poll() {
+void MessageStore::poll(bool allowMaintenanceIo) {
     handheld::assertDeviceOwner();
     for (;;) {
         const Ticket ticket = _writeQueue.nextReady(_settledThrough);
@@ -146,6 +254,8 @@ void MessageStore::poll() {
         _settledThrough = ticket.sequence;
         if (_deleteFence == ticket) _deleteFence = {};
     }
+    pollVoiceRetention(allowMaintenanceIo);
+    pollSpaceReclaim(allowMaintenanceIo);
 }
 
 bool MessageStore::peekResult(Ticket ticket, Result& result, Request* request) const {
@@ -165,22 +275,107 @@ bool MessageStore::finishStop() {
 bool MessageStore::setExternalStorageEnabled(bool enabled) {
     handheld::assertDeviceOwner();
     if (_writeQueue.drainCount() != 0) return false;
-    _externalStorageEnabled = enabled; transactions().setExternal(enabled); return true;
+    _externalStorageEnabled = enabled; transactions().setExternal(enabled);_audioRetentionDirty=true;
+    _reclaimDue=true;_reclaimContinue=false;_reclaimCursor={};
+    _audioExternalReady = enabled && _sd && _sd->isReady();
+    if (_historyRevision < UINT32_MAX) ++_historyRevision;
+    bumpRevision(); return true;
+}
+
+void MessageStore::configureVoiceRetention(uint8_t limit) {
+    handheld::assertDeviceOwner();
+    if(limit<1 || limit>50) return;
+    if(!_audioRetentionConfigured || limit!=_maxVoiceMessages) {
+        _maxVoiceMessages=limit;_audioRetentionConfigured=true;_audioRetentionDirty=true;
+    }
+}
+void MessageStore::protectVoiceRecord(const RecordKey& key) {
+    handheld::assertDeviceOwner();
+    if(_protectedVoiceRecord.counter==key.counter && _protectedVoiceRecord.incoming==key.incoming &&
+       !memcmp(_protectedVoiceRecord.peer,key.peer,16)) return;
+    _protectedVoiceRecord=key;_audioRetentionDirty=true;
+}
+void MessageStore::pollVoiceRetention(bool allowIo) {
+    const uint32_t now=millis();
+    const bool externalReady=_externalStorageEnabled && _sd && _sd->isReady();
+    if(externalReady!=_audioExternalReady) {
+        _audioExternalReady=externalReady;_audioRetentionDirty=true;
+        if (_historyRevision < UINT32_MAX) ++_historyRevision;
+        bumpRevision(); // Hidden banks must not survive a changed storage medium.
+    }
+    if(_audioRetentionTicket.valid()) {
+        Result result;
+        if(!peekResult(_audioRetentionTicket,result)) return;
+        _audioRetentionDirty|=result.more || result.error!=Error::None || result.outcome!=Outcome::Committed;
+        _audioRetentionRetry=now+(result.error!=Error::None?1000:0);
+        releaseResult(_audioRetentionTicket);_audioRetentionTicket={};
+    }
+    // An unloaded card may still hold audio that a flash-only pass would mark removed.
+    if((!_writeQueue.deferred() && !allowIo) || _cardPending || !_audioRetentionConfigured || !_audioRetentionDirty ||
+       !_writeQueue.accepting() || int32_t(now-_audioRetentionRetry)<0) return;
+    Request request;request.operation=Operation::RetainAudio;request.offset=_maxVoiceMessages;request.key=_protectedVoiceRecord;
+    const auto accepted=submit(request);
+    if(accepted.accepted()) {_audioRetentionTicket=accepted.ticket;_audioRetentionDirty=false;}
+}
+
+HistoryMode MessageStore::historyMode() const {
+    if (_cardPending) return HistoryMode::CardNotLoaded;
+    return _externalStorageEnabled && _sd && _sd->isReady() ? HistoryMode::Card : HistoryMode::Rolling;
+}
+
+void MessageStore::pollSpaceReclaim(bool allowIo) {
+    if (_reclaimTicket.valid()) {
+        Result result;
+        if (!peekResult(_reclaimTicket, result)) return;
+        // A pass may stop short of the goal; the next one resumes past its cursor.
+        _reclaimContinue = result.outcome == Outcome::Committed && result.more;
+        _reclaimCursor = _reclaimContinue ? HistoryEntry{result.key.counter, result.key.incoming} : HistoryEntry{};
+        _reclaimDue |= _reclaimContinue;
+        releaseResult(_reclaimTicket); _reclaimTicket = {};
+    }
+    // The internal-only fallback keeps the card's history; nothing rolls off then.
+    if (!_reclaimEnabled || (!_writeQueue.deferred() && !allowIo) || _cardPending || !_reclaimDue ||
+        !_writeQueue.accepting()) return;
+    Request request; request.operation = Operation::Reclaim; request.key = _protectedVoiceRecord;
+    request.offset = _reclaimContinue ? 1 : 0;
+    request.peerGeneration = _reclaimCursor.counter; request.read = _reclaimCursor.incoming;
+    const auto accepted = submit(request);
+    if (accepted.accepted()) { _reclaimTicket = accepted.ticket; _reclaimDue = false; }
 }
 
 void MessageStore::settle(const Request& request, const Result& result) noexcept {
+    // Any failed internal write may mean a full partition.
+    if (request.operation != Operation::Reclaim &&
+        (result.error == Error::Write || (result.flash.attempted && (result.flash.error == Error::Write ||
+         result.flash.error == Error::Verify || result.flash.error == Error::Rename)))) _reclaimDue = true;
     if (result.outcome != Outcome::Committed) return;
-    if (request.operation == Operation::ReadRecord || request.operation == Operation::ReadHistoryPage ||
+    if ((request.operation == Operation::CreateIncoming || request.operation == Operation::CreateOutgoing) &&
+        !result.duplicate && ++_createsSinceReclaim >= 8) { _createsSinceReclaim = 0; _reclaimDue = true; }
+    if(request.operation==Operation::Reclaim && !result.total) return;
+    if (request.operation == Operation::Reclaim && result.countDelta < 0) _historyRolledOff = true;
+    if(request.operation==Operation::RetainAudio && !result.total) return;
+    if(request.operation==Operation::MarkRead && !result.total) return;
+    if(((request.operation==Operation::CreateIncoming || request.operation==Operation::CreateOutgoing) && request.audio.state==1) ||
+       request.operation==Operation::MemoPromote || result.audioBecameRetainable) _audioRetentionDirty=true;
+    if (rrc::operation(request.operation)) return; // RRC owner publishes its own revision/unread.
+    if (memo::operation(request.operation) && request.operation != Operation::MemoPromote) return;
+    if (request.operation == Operation::ReadRecord || request.operation == Operation::ReadAudio || request.operation == Operation::ReadHistoryPage ||
         request.operation == Operation::ReadConversationPage || request.operation == Operation::ReadConversation ||
-        request.operation == Operation::ReadPending) return;
-    if (result.duplicate) return;
+        request.operation == Operation::ReadPending || request.operation == Operation::LoadPurge ||
+        request.operation == Operation::WritePurge || request.operation == Operation::ClearPurge) return;
+    if (result.duplicate && !result.enriched) return;
     // Only committed aggregate deltas and invalidation live here. There is no
     // presentation cache or allocation between persistence and result visibility.
     if ((request.operation == Operation::CreateIncoming || request.operation == Operation::CreateOutgoing ||
-         request.operation == Operation::DeleteConversation || request.operation == Operation::Trim) &&
+         request.operation == Operation::DeleteConversation || request.operation == Operation::DeleteRecord || request.operation == Operation::Trim ||
+         request.operation == Operation::MemoPromote || request.operation==Operation::RetainAudio ||
+         request.operation == Operation::Reclaim) &&
         _historyRevision < UINT32_MAX) ++_historyRevision;
-    if (result.conversationDelta > 0 && _totalConversations < UINT32_MAX) ++_totalConversations;
-    if (result.conversationDelta < 0 && _totalConversations) --_totalConversations;
+    // A reclaim pass can retire several conversations at once.
+    if (result.conversationDelta > 0)
+        _totalConversations += std::min<uint32_t>(uint32_t(result.conversationDelta), UINT32_MAX - _totalConversations);
+    if (result.conversationDelta < 0)
+        _totalConversations -= std::min<uint32_t>(uint32_t(-int(result.conversationDelta)), _totalConversations);
     _totalUnread = result.unreadDelta > 0 && result.unreadDelta > INT_MAX - _totalUnread ? INT_MAX :
         std::max(0, _totalUnread + result.unreadDelta);
     bumpRevision();

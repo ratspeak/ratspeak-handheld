@@ -1,5 +1,8 @@
 #pragma once
 
+#include "RrcRecord.h"
+#include "MemoDraft.h"
+
 #include <Arduino.h>
 #include "config/Config.h"
 #include "storage/FlashStore.h"
@@ -12,6 +15,7 @@
 #include <array>
 #include "storage/WriteQueue.h"
 #include "storage/ConversationView.h"
+#include "storage/PurgeJournal.h"
 namespace handheld::storage { class MessageTransactions; }
 
 class MessageStore {
@@ -27,19 +31,48 @@ public:
     using HistoryEntry = handheld::storage::HistoryEntry;
     using HistoryDirection = handheld::storage::HistoryDirection;
     static constexpr size_t ConversationPageCapacity = STORAGE_ASYNC_WRITES ? 16 : 64;
-    bool begin(FlashStore* flash, SDStore* sd = nullptr, bool externalStorageEnabled = false);
+    bool begin(FlashStore* flash, SDStore* sd = nullptr, bool externalStorageEnabled = false, bool migrate = true);
+    // Startup entry: a card that cannot be served falls back to internal storage
+    // for this boot, leaving the card's messages in place for the next boot.
+    // Legacy import and voice retention wait for a boot that can read the card.
+    enum class BootResult : uint8_t { Ready, InternalOnly, Failed };
+    BootResult beginForBoot(FlashStore* flash, SDStore* sd, bool externalStorageEnabled);
     bool setExternalStorageEnabled(bool enabled);
     bool externalStorageEnabled() const { return _externalStorageEnabled; }
 
     Submission requestSave(const LXMFMessage&, uint32_t identityGeneration = 0, uint32_t peerGeneration = 0);
     // Validated create metadata plus borrowed spans, copied into the owned slot
     // before return. No title/content allocation is required by the producer.
-    Submission requestSave(const Request&, const void* title, const void* content);
+    Submission requestSave(const Request&, const void* title, const void* content, const void* audio = nullptr);
     Submission requestStatus(const RecordKey&, LXMFStatus, uint32_t identityGeneration = 0, uint32_t peerGeneration = 0);
+    // Exact author/revision CAS; never creates a record or changes frozen policy.
+    Submission requestRetry(const RecordKey&, const uint8_t local[16], uint32_t revision);
     Submission requestMarkRead(const std::string& peer, uint32_t identityGeneration = 0, uint32_t peerGeneration = 0);
+    Submission requestDeleteRecord(const handheld::storage::RecordKey&, const uint8_t local[16], uint32_t revision);
     Submission requestDelete(const std::string& peer, uint32_t identityGeneration = 0, uint32_t peerGeneration = 0);
     Submission requestRecord(const RecordKey&, uint32_t offset = 0, uint16_t capacity = 4096);
+    // Same fixed header followed by a verified slice of the raw audio sidecar.
+    Submission requestAudio(const RecordKey&, uint32_t offset = 0, uint16_t capacity = 512);
+    Submission requestMemo(handheld::storage::Operation, const handheld::storage::memo::Command&,
+        const uint8_t* chunk = nullptr, size_t length = 0, uint16_t capacity = 512);
     Submission requestPending(const RecordKey& after = {});
+    // Immutable recipient-encrypted entry bound to this original outgoing record.
+    // Load: committed length zero means never prepared; a missing committed file
+    // fails closed. Completes an interrupted ready-marker write before returning.
+    // Write: an existing valid entry wins. Always consume the returned owned bytes.
+    Submission requestPrepared(const RecordKey&, const uint8_t source[16]);
+    Submission requestPrepare(const RecordKey&, const uint8_t source[16], const uint8_t messageId[32],
+                              const uint8_t transientId[32], const uint8_t* entry, size_t length,
+                              uint8_t recipientCost = 0);
+    // Load rechecks the durable message. Failed/Stale may still return a valid
+    // journal for exact-match local abandonment, never remote purge permission.
+    Submission requestPurgeJournal(const uint8_t local[16]);
+    // Shared ordered executor, distinct RRC schema/namespace and result owner.
+    Submission requestRrc(handheld::storage::Operation, const handheld::storage::rrc::Record&,
+        const uint8_t fileKey[16] = nullptr, uint32_t cursor = 0, uint32_t expectedRevision = 0,
+        HistoryDirection direction = HistoryDirection::Before, const uint8_t privateParticipant[16] = nullptr, const uint8_t observation[16] = nullptr);
+    Submission requestWritePurge(const handheld::storage::purge::Journal&);
+    Submission requestClearPurge(const handheld::storage::purge::Journal&);
     Submission requestHistoryPage(const std::string& peer, HistoryEntry cursor = {}, uint8_t limit = 48,
                                   HistoryDirection direction = HistoryDirection::Before);
     Submission requestConversationPage(handheld::storage::ConversationCursor cursor = {}, bool hasCursor = false,
@@ -48,7 +81,14 @@ public:
         uint8_t limit = ConversationPageCapacity);
     Submission requestConversation(const handheld::storage::ConversationSelector&);
     Submission requestTrim(const std::string& peer);
-    void poll();
+    handheld::storage::HistoryMode historyMode() const;
+    // The oldest history rolled off for space during this boot.
+    bool historyRolledOff() const { return _historyRolledOff; }
+    // The running owner arms it after any setup handoff; its first poll is the boot check.
+    void enableSpaceReclaim() { _reclaimEnabled = true; }
+    void configureVoiceRetention(uint8_t limit);
+    void protectVoiceRecord(const RecordKey&); // Memo owner; ordered before opening any audio read.
+    void poll(bool allowMaintenanceIo=false);
     bool peekResult(Ticket, Result&, Request* request = nullptr) const;
     bool readPayload(Ticket, void*, size_t length, size_t offset = 0) const;
     bool releaseResult(Ticket);
@@ -85,6 +125,8 @@ public:
     WriteQueue& writeQueue() { return _writeQueue; }
 
 private:
+    void pollVoiceRetention(bool allowIo);
+    void pollSpaceReclaim(bool allowIo);
     bool loadStartupMetadata();
     void bumpRevision();
     Submission submit(Request, const WriteQueue::PayloadPart* = nullptr, size_t count = 0, size_t capacity = 0);
@@ -101,6 +143,15 @@ private:
     handheld::storage::MessageTransactions& transactions() const;
     alignas(std::max_align_t) mutable uint8_t _transactionState[64 +
         handheld::storage::Budget::conversationSummaryBytes(WriteQueue::CompactProfile)];
+    RecordKey _protectedVoiceRecord;
+    Ticket _audioRetentionTicket;
+    uint32_t _audioRetentionRetry=0;
+    uint8_t _maxVoiceMessages=2;
+    bool _audioRetentionConfigured=false,_audioRetentionDirty=true,_audioExternalReady=false,_cardPending=false;
+    Ticket _reclaimTicket;
+    HistoryEntry _reclaimCursor;
+    uint8_t _createsSinceReclaim = 0;
+    bool _reclaimEnabled = false, _reclaimDue = true, _reclaimContinue = false, _historyRolledOff = false;
     Ticket _deleteFence;
     uint8_t _fencedPeer[16] = {};
     uint64_t _settledThrough = 0;

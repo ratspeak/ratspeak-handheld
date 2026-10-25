@@ -29,8 +29,8 @@ Keyboard::Gesture Keyboard::track(Button& button, bool down, uint32_t now) {
 void Keyboard::emit(bool boot, Gesture gesture) {
     if (gesture == Gesture::None) return;
     KeyEvent event{};
-    if (_recovery) {
-        if (gesture == Gesture::Tap) event.character = boot ? 'x' : 'r';
+    if (_recoveryTop) {
+        if (gesture == Gesture::Tap) event.character = boot ? 'x' : _recoveryTop;
         else if (boot) event.character = 'b';
         else event.enter = true;
     } else if (gesture == Gesture::Hold) {

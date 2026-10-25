@@ -6,7 +6,10 @@
 class AudioNotify {
 public:
     void begin();
+    void end();
     void loop();
+    // Blocks until queued sounds have left the speaker; false on timeout.
+    bool drain(uint32_t timeoutMs);
 
     // Notification sounds
     void playMessage();     // Double-beep: 50ms 1kHz × 2
@@ -27,20 +30,14 @@ private:
         uint16_t gapMs;
     };
 
-    static constexpr uint8_t MAX_NOTES = 8;
+    static constexpr uint8_t MAX_NOTES = 8;  // M5 virtual channels; one per note
 
     void tone(uint16_t freq, uint16_t durationMs);
     void playSequence(const Note* notes, uint8_t count);
-    void startCurrent(unsigned long now);
+    void prime();
     void stop();
 
     bool _enabled = true;
     uint8_t _volume = 80;  // 0-100
-    Note _notes[MAX_NOTES] = {};
-    uint8_t _noteCount = 0;
-    uint8_t _noteIndex = 0;
-    unsigned long _nextAt = 0;
-    bool _playingTone = false;
-    bool _inGap = false;
     bool _begun = false;
 };

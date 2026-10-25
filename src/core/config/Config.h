@@ -61,8 +61,8 @@ inline constexpr char RATSPEAK_HUB_HOST[] = "rns.ratspeak.org";
 // immediate executor available to host tests and explicit diagnostic builds.
 #define STORAGE_DEFERRED_IO          STORAGE_ASYNC_WRITES
 #endif
-#ifndef USERCONFIG_NVS_BACKUP
-#define USERCONFIG_NVS_BACKUP        0     // 1 = mirror full user config JSON to NVS (ns NVS_NS_CFG)
+#ifndef USERCONFIG_NVS_LEGACY_READ
+#define USERCONFIG_NVS_LEGACY_READ   0     // 1 = read settings left in NVS by older firmware
 #endif
 #ifndef BOARD_DEFAULT_SD_STORAGE
 #define BOARD_DEFAULT_SD_STORAGE     0     // UserSettings.sdStorageEnabled default

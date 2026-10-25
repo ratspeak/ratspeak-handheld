@@ -36,13 +36,23 @@ void ScrollList::setItems(const std::vector<std::string>& items) {
 }
 
 void ScrollList::addItem(const std::string& item) {
-    _items.push_back(item);
-    _itemColors.push_back(0);
+    addItem(item, 0);
 }
 
 void ScrollList::addItem(const std::string& item, uint16_t color) {
+    // A refused row allocation must leave the text/color arrays aligned so
+    // callers can show an error and continue navigating the existing rows.
+    const size_t next = _items.size() + 1;
+    if (_items.capacity() < next) _items.reserve(std::max(next, _items.capacity() * 2));
+    if (_itemColors.capacity() < next) _itemColors.reserve(std::max(next, _itemColors.capacity() * 2));
     _items.push_back(item);
     _itemColors.push_back(color);
+}
+
+void ScrollList::updateItem(size_t index, const std::string& item, uint16_t color) {
+    if (index >= _items.size()) return;
+    if (_items[index] != item) _items[index] = item;
+    _itemColors[index] = color;
 }
 
 void ScrollList::clear() {
@@ -109,17 +119,18 @@ void ScrollList::renderRow(M5Canvas& canvas, const std::string& label, int x, in
     drawFitted(canvas, label, x + (selected ? 16 : 9), y + 1, width - (selected ? 23 : 16));
 }
 
-void ScrollList::render(M5Canvas& canvas, int x, int y, int w, int h) {
+void ScrollList::render(M5Canvas& canvas, int x, int y, int w, int h, bool showSelection, bool compact) {
     int rowH = Theme::LIST_ROW_H;
     _visibleRows = h / rowH;
     if (_visibleRows < 1) _visibleRows = 1;
 
-    Theme::useUiFont(canvas);
+    if (compact) Theme::useSmallFont(canvas);
+    else Theme::useUiFont(canvas);
 
     for (int i = 0; i < _visibleRows && (i + _scrollOffset) < (int)_items.size(); i++) {
         int idx = i + _scrollOffset;
         int ry = y + i * rowH;
-        bool selected = (idx == _selected);
+        bool selected = showSelection && (idx == _selected);
 
         if (!selected && (i + 1 < _visibleRows) && (idx + 1 < (int)_items.size())) {
             canvas.drawFastHLine(x + 8, ry + rowH - 1, w - 12, Theme::DIVIDER);

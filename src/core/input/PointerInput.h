@@ -9,7 +9,7 @@
 class PointerInput {
 public:
     void update(int dx, int dy, bool down, bool screenOn, uint32_t now,
-                uint8_t speed, bool encoder) {
+                uint8_t speed, bool encoder, bool clickEnabled=true) {
         _now = now;
         _encoder = encoder;
         _threshold = encoder ? 1 : 6 - speed;
@@ -25,7 +25,10 @@ public:
             _x = _y = 0;
             _clicks = 0;
         }
-        if (down) {
+        if (!clickEnabled || _waitClickRelease) {
+            _down=false;_fired=false;_clicks=0;
+            _waitClickRelease=!clickEnabled || down;
+        } else if (down) {
             _lastDown = now;
             if (!_down) {
                 _down = true;
@@ -69,7 +72,7 @@ public:
             if (_encoder) axis += axis < 0 ? 1 : -1;
             else _x = _y = 0;
         } else return false;
-        event.encoder = _encoder;
+        event.source = _encoder ? InputSource::Wheel : InputSource::Trackball;
         _lastNav = _now;
         _keyboardLast = false;
         return true;
@@ -91,7 +94,7 @@ private:
     int8_t _x = 0, _y = 0;
     uint8_t _clicks = 0, _threshold = 3;
     bool _down = false, _fired = false, _fromScreenOn = true;
-    bool _keyboardLast = false, _encoder = false;
+    bool _keyboardLast = false, _encoder = false, _waitClickRelease = false;
     uint32_t _started = 0, _lastDown = 0, _lastNav = 0, _now = 0, _rate = 180;
 };
 static_assert(sizeof(PointerInput) <= 40, "Pointer arbitration exceeds its input budget");

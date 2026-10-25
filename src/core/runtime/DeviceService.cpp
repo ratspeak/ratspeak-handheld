@@ -1,9 +1,13 @@
 #include "DeviceService.h"
 #include "MaintenanceOperation.h"
 #include "config/SettingsTransaction.h"
+#include "config/NetworkSettings.h"
 #include "util/AnnounceData.h"
 #include "history/HistoryWindow.h"
 #include "history/ConversationWindow.h"
+#include "history/RrcHistory.h"
+#include "history/RrcCatalog.h"
+#include "protocol/RrcPreferences.h"
 #include "TaskOwner.h"
 #if !defined(RSCARDPUTER)
 #include "util/Bytes.h"
@@ -17,6 +21,18 @@
 namespace handheld {
 
 namespace {
+bool rrcCatalog(Operation operation) { return operation==Operation::RrcChannels || operation==Operation::RrcSavedRooms; }
+bool rrcMetadata(Operation operation) { return rrcCatalog(operation) || operation==Operation::RrcInbox || operation==Operation::RrcRoom; }
+bool rrcRead(Operation operation) { return rrcMetadata(operation) || (operation >= Operation::RrcHistoryPage && operation <= Operation::RrcDetail); }
+history::HistoryWindow::Query rrcHistoryQuery(const Request& request, const storage::rrc::Context& context) {
+    history::HistoryWindow::Query query;
+    query.kind = request.operation == Operation::RrcHistoryPage ? history::HistoryWindow::Kind::Page :
+        request.operation == Operation::RrcHistoryStatus ? history::HistoryWindow::Kind::Status : history::HistoryWindow::Kind::Record;
+    memcpy(query.peer, context.conversation, 16); query.nonce = request.query;
+    query.cursor = {request.argument, request.incoming}; query.direction = request.historyDirection;
+    query.offset = request.offset; query.statusRevision = request.statusRevision;
+    return query;
+}
 bool summaryQuery(Operation operation) {
     return operation == Operation::ConversationPage || operation == Operation::ConversationDetail;
 }
@@ -24,9 +40,14 @@ size_t queryCapacity(Operation operation) {
     switch (operation) {
         case Operation::ConversationPage: return history::ConversationList::PageSize * sizeof(storage::ConversationSelector);
         case Operation::ConversationDetail: return sizeof(storage::ConversationView);
-        case Operation::HistoryPage: return 48 * sizeof(storage::HistoryEntry);
-        case Operation::ReadRecord: return 512;
-        case Operation::HistoryStatus: return sizeof(history::HistoryWindow::StatusProjection);
+        case Operation::RrcHistoryPage: case Operation::HistoryPage: return 48 * sizeof(storage::HistoryEntry);
+        case Operation::RrcHistoryRecord: case Operation::ReadRecord: return 512;
+        case Operation::RrcHistoryStatus: case Operation::HistoryStatus: return sizeof(history::HistoryWindow::StatusProjection);
+        case Operation::RrcDraft: return sizeof(rrc::DraftView);
+        case Operation::RrcDetail: return sizeof(rrc::MessageDetail);
+        case Operation::RrcChannels: case Operation::RrcSavedRooms: return 4*sizeof(rrc::RoomView);
+        case Operation::RrcInbox: return 4*sizeof(rrc::PrivateView);
+        case Operation::RrcRoom: return sizeof(rrc::RoomView);
         default: return 0;
     }
 }
@@ -108,11 +129,20 @@ void DeviceService::notice(const char* text) {
 bool DeviceService::readyForCommand() {
     if (!_storageOwnerBound || _backend.pollRadioBeforeBlockingWork()) return true;
     const auto* request = _mailbox.nextRequest();
-    if (!request || !_messages.deferredIO()) return false;
+    if (!request) return false;
+    // These commands only inspect owner memory or submit asynchronous audio
+    // work. Deferring them behind radio TX stalls every later FIFO history read.
+    if (request->operation == Operation::VoiceCommand || request->operation == Operation::MemoCommand ||
+        request->operation == Operation::PeerName || request->operation == Operation::Nodes ||
+        request->operation == Operation::PropagationNodes || request->operation == Operation::PropagationSync ||
+        (request->operation >= Operation::RrcHubs && request->operation <= Operation::RrcContext && !rrcCatalog(request->operation))) return true;
+    if (!_messages.deferredIO()) return false;
     switch (request->operation) {
-        case Operation::Send: case Operation::MarkRead: case Operation::DeleteConversation:
+        case Operation::Send: case Operation::MarkRead: case Operation::DeleteConversation: case Operation::DeleteRecord:
         case Operation::ConversationPage: case Operation::ConversationDetail:
         case Operation::HistoryPage: case Operation::ReadRecord: case Operation::HistoryStatus:
+        case Operation::RrcHistoryPage: case Operation::RrcHistoryRecord: case Operation::RrcHistoryStatus:
+        case Operation::RrcDraft: case Operation::RrcDetail: case Operation::RrcCommand: case Operation::RrcChannels: case Operation::RrcSavedRooms: case Operation::RrcInbox: case Operation::RrcRoom:
             return true; // Typed worker submissions and result copies only.
         default: return false; // Settings, contacts and callbacks may write inline.
     }
@@ -132,22 +162,25 @@ void DeviceService::poll() {
     // Only the reserved explicit recovery result is ours after refusal. The
     // setup owner retains every storage/engine/driver and outstanding credit.
     if (!_storageOwnerBound) return;
-    _backend.pollRadioBeforeBlockingWork();
-    // Settlement only publishes completed worker results; it never performs I/O.
-    // Keep it and network polling live while an independent radio is busy.
-    _messages.poll();
+    const bool maintenanceIo=_backend.pollRadioBeforeBlockingWork();
+    // Deferred maintenance uses the storage worker. Immediate diagnostic builds
+    // may perform maintenance only when the radio owner permits blocking I/O.
+    _messages.configureVoiceRetention(_config.settings().voice.maxMessages);
+    _messages.enableSpaceReclaim();
+    _messages.poll(maintenanceIo);
     // Observe UI cancellation before the pump can start another queued frame.
     pollSends();
+    if (_status.state == ServiceState::Running) { _backend.configureVoice(_config.settings().voice);_backend.configurePropagation(_config.settings().propagation); }
     if (_status.state == ServiceState::Running && pollNetwork) pollNetwork();
     else if (!_maintenance.accepting() && pollSettlements) pollSettlements();
     pollSends();
     pollStorageWrites();
+    pollRrcCommands();
     if (_backend.pollRadioBeforeBlockingWork()) pollSettings();
     if (_status.state == ServiceState::Running && millis() - _lastIdentityRetry >= 30000 &&
         _backend.pollRadioBeforeBlockingWork()) {
         _lastIdentityRetry = millis();
         if (!_identities.flushPending()) notice("Identity metadata save failed; retry pending");
-        if (!_config.flushPending(_sd, _flash)) notice("Settings saved on device; backup retry pending");
     }
     if (_backend.pollRadioBeforeBlockingWork() || _messages.deferredIO()) pollHistory();
     if (_scanSlot != ServiceMailbox::NoSlot && finishScan) {
@@ -156,11 +189,13 @@ void DeviceService::poll() {
         if (scan != ScanResult::Pending) {
             Result result;
             result.outcome = scan == ScanResult::Cancelled ? Outcome::Cancelled : Outcome::Failed;
+            if (scan == ScanResult::NoMemory) result.outcome = Outcome::NoMemory;
             if (scan == ScanResult::Ready && !json.isEmpty() &&
                 json.length() <= _mailbox.capacity(_scanSlot) &&
                 _mailbox.write(_scanSlot, json.c_str(), json.length())) {
                 result.length = json.length(); result.outcome = Outcome::Ok;
-            } else strlcpy(result.detail, scan == ScanResult::Cancelled ? "Scan cancelled" : "Scan failed",
+            } else strlcpy(result.detail, scan == ScanResult::Cancelled ? "Scan cancelled" :
+                           scan == ScanResult::NoMemory ? "Not enough memory" : "Scan failed",
                            sizeof(result.detail));
             _mailbox.complete(_scanSlot, result);
             _scanSlot = ServiceMailbox::NoSlot;
@@ -183,12 +218,16 @@ void DeviceService::finishSettings(uint8_t slot) {
     ++_status.configRevision;
     ++_status.identityRevision;
     if (_maintenance.accepting()) {
+        _backend.configureVoice(_config.settings().voice);
+        _backend.configurePropagation(_config.settings().propagation);
         if (_config.settings().timezoneIdx < TIMEZONE_COUNT) {
             setenv("TZ", TIMEZONE_TABLE[_config.settings().timezoneIdx].posixTZ, 1);
             tzset();
         }
         if (applyPeripherals) applyPeripherals(_config.settings());
+        if (networkCommitted) networkCommitted(_config.settings(), _networkChanges);
     }
+    _networkChanges = network_settings::None;
     // During maintenance the records may settle, but UI callbacks must not
     // reopen onboarding or perform hardware actions after shutdown admission.
     Result result;
@@ -202,7 +241,7 @@ void DeviceService::finishSettings(uint8_t slot) {
     strlcpy(result.detail, !_maintenance.accepting() ? "Settings saved; shutdown in progress" :
         radio == RadioApply::RebootRequired ? "Settings saved; radio enable needs reboot" :
         radio == RadioApply::Unavailable ? "Settings saved; radio unavailable" :
-        _config.mirrorPending() ? "Settings saved on device; backup pending" : "Settings saved", sizeof result.detail);
+        "Settings saved", sizeof result.detail);
     _settingsSlot = ServiceMailbox::NoSlot;
     _mailbox.complete(slot, result);
 }
@@ -223,7 +262,7 @@ void DeviceService::pollMaintenance() {
     if (_maintenance.accepting()) return;
     MaintenanceBarrier::Snapshot snapshot;
     snapshot.normalPending = _mailbox.normalWorkPending() || _config.settingsPending();
-    snapshot.applicationPending = !_backend.lxmfDrained();
+    snapshot.applicationPending = !_backend.voiceDrained() || !_backend.lxmfDrained() || !_backend.rrcDrained() || _rrcCommands;
     snapshot.helpersPending = !_maintenance.helpersStarted() || (quiescent && !quiescent());
     snapshot.storageStopped = _maintenance.storageStopStarted() && _messages.finishStop();
     snapshot.error = _backend.lxmfDrainError();
@@ -280,13 +319,19 @@ void DeviceService::refreshStatus() {
     _status.links = _backend.linkCount();
     _status.queued = _backend.lxmfQueuedCount();
     _status.resources = _backend.activeResourceTransfers();
+    _status.propagation = _backend.propagationStatus();
     _status.lastAnnounce = _backend.lastAnnounceTime();
     _status.unread = _messages.totalUnreadCount();
     _status.storeRevision = _messages.revision();
     _status.historyRevision = _messages.historyRevision();
     _status.statusRevision = _backend.lxmfStatusRevision();
+    _status.rrc = _backend.rrcStatus();
+    _status.voice = _backend.voiceStatus();
+    _status.memo = _backend.memoStatus();
     _status.flash = _flash.isReady();
     _status.sd = _sd.isReady();
+    _status.history = _messages.historyMode();
+    _status.historyRolledOff = _messages.historyRolledOff();
     if ((!_lastStorageStatus || _lastStatus - _lastStorageStatus >= 5000) &&
         _backend.pollRadioBeforeBlockingWork()) {
         storage::StorageLease lease;
@@ -304,10 +349,19 @@ void DeviceService::refreshStatus() {
     strlcpy(_status.destination, _backend.destinationHashHex().c_str(), sizeof(_status.destination));
     strlcpy(_status.publicKey, _backend.publicKeyHex().c_str(), sizeof(_status.publicKey));
     uint32_t fingerprint = 2166136261u;
+    auto fingerprintBytes = [&](const void* data, size_t length) {
+        const auto* bytes = static_cast<const uint8_t*>(data);
+        for (size_t i = 0; i < length; ++i) fingerprint = (fingerprint ^ bytes[i]) * 16777619u;
+    };
     if (_nodes) for (const auto& node : _nodes->nodes()) {
-        for (size_t i = 0; i < node.hash.size(); ++i) fingerprint = (fingerprint ^ node.hash.data()[i]) * 16777619u;
-        for (auto ch : node.name) fingerprint = (fingerprint ^ uint8_t(ch)) * 16777619u;
-        fingerprint = (fingerprint ^ node.lastSeen ^ uint32_t(node.rssi) ^ node.saved) * 16777619u;
+        fingerprintBytes(node.hash.data(), node.hash.size());
+        fingerprintBytes(node.name.c_str(), node.name.size() + 1);
+        fingerprintBytes(node.identityHex.c_str(), node.identityHex.size() + 1);
+        fingerprintBytes(&node.lastSeen, sizeof(node.lastSeen));
+        fingerprintBytes(&node.rssi, sizeof(node.rssi));
+        fingerprintBytes(&node.snr, sizeof(node.snr));
+        fingerprintBytes(&node.hops, sizeof(node.hops));
+        fingerprintBytes(&node.saved, sizeof(node.saved));
     }
     if (fingerprint != _nodeFingerprint) { _nodeFingerprint = fingerprint; ++_status.nodeRevision; }
     if (networkStatus) networkStatus(_status);
@@ -367,17 +421,21 @@ void DeviceService::pollStorageWrites() {
         if (!_messages.peekResult(ticket, stored)) continue;
         uint8_t peer[16];
         const auto& request = _mailbox.request(slot);
-        const bool deleting = request.operation == Operation::DeleteConversation;
+        const bool recordDelete=request.operation==Operation::DeleteRecord;
+        const bool deleting = request.operation == Operation::DeleteConversation || recordDelete;
         const bool validPeer = deleting && storage::decodeHex(request.peer,
             strnlen(request.peer, sizeof(request.peer)), peer, 16);
         _storageWrites[slot] = {};
         _messages.releaseResult(ticket);
-        if (validPeer) _backend.lxmfFinishPeerDelete(peer, stored);
+        if(validPeer && recordDelete) {
+            storage::RecordKey key;memcpy(key.peer,peer,16);key.counter=request.argument;key.incoming=request.incoming;
+            _backend.lxmfFinishRecordDelete(key,stored);
+        } else if (validPeer) _backend.lxmfFinishPeerDelete(peer, stored);
         Result result;
         result.key = stored.key; result.revision = stored.revision; result.storageError = stored.error;
         result.outcome = stored.outcome == storage::Outcome::Committed ? Outcome::Ok : Outcome::Failed;
         if (result.outcome != Outcome::Ok) strlcpy(result.detail,
-            deleting ? "Conversation not deleted" : "Couldn't mark messages as read", sizeof(result.detail));
+            recordDelete?"Message not deleted":deleting ? "Conversation not deleted" : "Couldn't mark messages as read", sizeof(result.detail));
         _mailbox.complete(slot, result);
     }
 }
@@ -423,6 +481,8 @@ void DeviceService::execute(uint8_t slot) {
         _lifecycleSlot = slot;
         _outgoingPaused = true;
         _backend.lxmfStopAdmissions();
+        _backend.rrcStopAdmissions();
+        _backend.voiceStop();
         if (closeAdmissions) closeAdmissions();
         notice("Finishing pending work");
         refreshStatus();
@@ -430,13 +490,33 @@ void DeviceService::execute(uint8_t slot) {
     }
     if (!_maintenance.accepting() && (request.operation == Operation::Announce ||
         request.operation == Operation::Diagnostics || request.operation == Operation::HomeReady ||
-        request.operation == Operation::Scan)) {
+        request.operation == Operation::Scan || request.operation == Operation::PropagationSync || request.operation == Operation::RrcCommand || request.operation == Operation::VoiceCommand || request.operation == Operation::MemoCommand)) {
         complete(slot, Outcome::Cancelled, "Cancelled for maintenance"); return;
     }
     const auto length = _mailbox.length(slot);
     if (!_mailbox.read(slot, _scratch, length)) { complete(slot, Outcome::Invalid); return; }
     _scratch[length] = 0;
     switch (request.operation) {
+    case Operation::RrcHubs: case Operation::RrcRooms: case Operation::RrcPeople: case Operation::RrcDirectory:
+    case Operation::RrcContext: case Operation::RrcCommand:
+        executeRrc(slot); break;
+    case Operation::VoiceCommand: {
+        voice::Command command;
+        if (length!=sizeof command || _mailbox.cancellationRequested(slot)) {complete(slot,Outcome::Invalid);break;}
+        memcpy(&command,_scratch,sizeof command);
+        if(command.action>voice::Action::Volume || command.volume>100) {complete(slot,Outcome::Invalid);break;}
+        const auto code=_backend.voiceCommand(command);
+        Result result;result.outcome=code==voice::Code::Ok?Outcome::Ok:Outcome::Failed;
+        result.next=uint32_t(code);_mailbox.complete(slot,result);break;
+    }
+    case Operation::MemoCommand: {
+        memo::Command command;
+        if(length!=sizeof command || _mailbox.cancellationRequested(slot)) {complete(slot,Outcome::Invalid);break;}
+        memcpy(&command,_scratch,sizeof command);
+        const auto code=_backend.memoCommand(command);
+        Result result;result.outcome=code==memo::Code::Ok?Outcome::Ok:Outcome::Failed;
+        result.next=uint32_t(code);_mailbox.complete(slot,result);break;
+    }
     case Operation::Send: {
         if (_outgoingPaused || _mailbox.cancellationRequested(slot)) {
             complete(slot, Outcome::Cancelled, "Sending cancelled"); break;
@@ -455,6 +535,19 @@ void DeviceService::execute(uint8_t slot) {
         const auto submitted = _messages.requestMarkRead(request.peer, request.generation);
         if (submitted.accepted()) _storageWrites[slot] = submitted.ticket;
         else complete(slot, Outcome::Failed, "Couldn't mark messages as read");
+        break;
+    }
+    case Operation::DeleteRecord: {
+        storage::RecordKey key;key.counter=request.argument;key.incoming=request.incoming;
+        uint8_t local[16];
+        if(!key.counter || !request.revision || !storage::decodeHex(request.peer,strnlen(request.peer,sizeof request.peer),key.peer,16) ||
+           !storage::decodeHex(_status.destination,strnlen(_status.destination,sizeof _status.destination),local,16)) {
+            complete(slot,Outcome::Invalid);break;
+        }
+        if(!_backend.lxmfBeginRecordDelete(key)) {complete(slot,Outcome::Failed,"Deletion busy; try again");break;}
+        const auto submitted=_messages.requestDeleteRecord(key,local,request.revision);
+        if(submitted.accepted()) _storageWrites[slot]=submitted.ticket;
+        else {storage::Result failure;_backend.lxmfFinishRecordDelete(key,failure);complete(slot,Outcome::Failed,"Message not deleted");}
         break;
     }
     case Operation::DeleteConversation: {
@@ -489,7 +582,7 @@ void DeviceService::execute(uint8_t slot) {
                  ""); break;
     case Operation::Announce: {
         if (settingsApplyPending()) { complete(slot, Outcome::NotReady, "Settings apply pending"); break; }
-        const auto bytes = encodeAnnounceName(_config.settings().displayName);
+        const auto bytes = encodeAnnounceName(_config.settings().displayName, _backend.destinationHashHex().c_str());
         const auto sent = _backend.announce(bytes.data(), bytes.size());
         complete(slot, sent == ProtocolBackend::AnnounceResult::Failed ? Outcome::Failed : Outcome::Ok,
                  sent == ProtocolBackend::AnnounceResult::Sent ? "Announce sent" :
@@ -499,16 +592,19 @@ void DeviceService::execute(uint8_t slot) {
     case Operation::ApplySettings: {
         if (_settingsSlot != ServiceMailbox::NoSlot || _config.settingsPending()) { complete(slot, Outcome::NotReady, "Settings recovery pending"); break; }
         if (request.revision != _status.configRevision) { complete(slot, Outcome::Stale, "Settings changed; try again"); break; }
+        // Decoding replaces every value; the transaction rebinds name metadata.
         UserConfig candidate;
-        if (!candidate.tryAssign(_config)) { complete(slot, Outcome::NotReady, "Settings memory unavailable; retry"); break; }
+        candidate.settings().sdStorageEnabled = _config.settings().sdStorageEnabled;
         if (!candidate.decode(_scratch, strlen(_scratch))) { complete(slot, Outcome::Invalid, "Invalid settings"); break; }
         {
-            const String encoded = candidate.encode();
-            if (encoded.isEmpty() || encoded.length() > _mailbox.capacity(slot)) {
+            const size_t encoded = candidate.snapshotLength();
+            if (!encoded || encoded > _mailbox.capacity(slot)) {
                 complete(slot, Outcome::Invalid, "Settings exceed transfer budget"); break;
             }
         }
+        _networkChanges = network_settings::changes(_config.settings(), candidate.settings());
         const auto saved = SettingsTransaction::apply(_config, candidate, _identities, _sd, _flash);
+        if (!saved.complete() && saved.state != SettingsTransaction::State::Pending) _networkChanges = network_settings::None;
         if (saved.state == SettingsTransaction::State::Pending) {
             _settingsSlot = slot;
             _lastIdentityRetry = millis();
@@ -516,6 +612,22 @@ void DeviceService::execute(uint8_t slot) {
         } else if (saved.complete()) { _settingsSlot = slot; finishSettings(slot); }
         else complete(slot, Outcome::Failed, saved.detail);
         break;
+    }
+    case Operation::PropagationSync: {
+        const bool requested = _backend.propagationSync();
+        complete(slot, requested ? Outcome::Ok : Outcome::Failed,
+                 requested ? "Sync requested" : !_config.settings().propagation.enabled ? "Enable propagation to sync" :
+                 _backend.propagationStatus().busy ? "Inbox sync already running" : "Wait 30s, then sync again");
+        break;
+    }
+    case Operation::PropagationNodes: {
+        propagation::NodeView nodes[propagation::NodeViewCapacity]{};
+        const size_t count = _backend.propagationNodes(nodes, propagation::NodeViewCapacity);
+        if (count > propagation::NodeViewCapacity || !_mailbox.write(slot, nodes, count * sizeof(nodes[0]))) {
+            complete(slot, Outcome::Failed, "Propagation list unavailable"); break;
+        }
+        Result result; result.outcome = Outcome::Ok; result.total = count; result.length = count * sizeof(nodes[0]);
+        _mailbox.complete(slot, result); break;
     }
     case Operation::Settings: {
         const String json = _config.encode();
@@ -543,21 +655,43 @@ void DeviceService::execute(uint8_t slot) {
     }
     case Operation::Nodes: {
         refreshStatus();
-        if (request.offset && request.revision != _status.nodeRevision) { complete(slot, Outcome::Stale); break; }
+        if (!request.offset) {
+            _nodeCopyCount = 0;
+            if (_nodes) for (const auto& node : _nodes->nodes()) {
+                if (_nodeCopyCount == ANNOUNCE_MAX_NODES) break;
+                if (node.hash.size() == 16) memcpy(_nodeCopyKeys[_nodeCopyCount++], node.hash.data(), 16);
+            }
+            _nodeCopyRevision = _status.nodeRevision;
+            _nodeCopyGeneration = _status.generation;
+        } else if (request.revision != _nodeCopyRevision || _nodeCopyGeneration != _status.generation ||
+                   request.offset >= _nodeCopyCount) {
+            complete(slot, Outcome::Stale); break;
+        }
         JsonDocument doc; auto rows = doc.to<JsonArray>();
-        const size_t count = _nodes ? _nodes->nodes().size() : 0;
-        const size_t end = std::min(count, size_t(request.offset) + 8);
-        for (size_t i = request.offset; i < end; ++i) {
-            const auto& node = _nodes->nodes()[i]; auto row = rows.add<JsonObject>();
+        const size_t end = std::min(_nodeCopyCount, size_t(request.offset) + 8);
+        for (size_t i = request.offset; _nodes && i < end; ++i) {
+            // A compacted/evicted entry must never resolve to another peer.
+            // Missing keys are omitted; new keys arrive on the next transfer.
+            const auto& nodes = _nodes->nodes();
+            auto found = std::find_if(nodes.begin(), nodes.end(), [&](const DiscoveredNode& node) {
+                return node.hash.size() == 16 && !memcmp(node.hash.data(), _nodeCopyKeys[i], 16);
+            });
+            if (found == nodes.end()) continue;
+            const auto& node = *found; auto row = rows.add<JsonObject>();
             row["hash"] = node.hash.toHex(); row["name"] = node.name; row["identity"] = node.identityHex;
             row["rssi"] = node.rssi; row["snr"] = node.snr; row["hops"] = node.hops;
             row["seen"] = node.lastSeen; row["saved"] = node.saved;
         }
-        Result result; result.revision = _status.nodeRevision; result.next = end; result.total = count; result.more = end < count;
+        // Publish every completed pass even under continuous traffic. If the
+        // live revision advanced, ServiceClient immediately schedules another.
+        Result result; result.revision = _nodeCopyRevision; result.next = end;
+        result.total = _nodeCopyCount; result.more = end < _nodeCopyCount;
         jsonResult(slot, doc, result); break;
     }
     case Operation::ConversationPage: case Operation::ConversationDetail:
     case Operation::HistoryPage: case Operation::ReadRecord: case Operation::HistoryStatus:
+    case Operation::RrcHistoryPage: case Operation::RrcHistoryRecord: case Operation::RrcHistoryStatus:
+    case Operation::RrcDraft: case Operation::RrcDetail: case Operation::RrcChannels: case Operation::RrcSavedRooms: case Operation::RrcInbox: case Operation::RrcRoom:
         history(slot); break;
     case Operation::Identities: {
         JsonDocument doc; auto rows = doc.to<JsonArray>();
@@ -578,7 +712,8 @@ void DeviceService::execute(uint8_t slot) {
     }
     case Operation::Scan:
         if (_scanSlot != ServiceMailbox::NoSlot || !startScan || !finishScan) { complete(slot, Outcome::Failed, "Scan unavailable"); break; }
-        _scanSlot = slot; _status.scanRunning = true; startScan(); break;
+        if (!startScan()) { complete(slot, Outcome::NotReady, "Scan unavailable; retry"); break; }
+        _scanSlot = slot; _status.scanRunning = true; break;
     case Operation::HomeReady:
         if (homeReady) homeReady(); complete(slot, Outcome::Ok); break;
     case Operation::Diagnostics:
@@ -593,7 +728,17 @@ void DeviceService::history(uint8_t slot) {
     if (_querySlot != ServiceMailbox::NoSlot) {
         complete(slot, Outcome::NotReady, "History reader busy"); return;
     }
-    if (summaryQuery(request.operation)) {
+    if (rrcRead(request.operation)) {
+        storage::rrc::Context context;
+        if (!readRrcContext(slot, context) ||
+            (!rrcMetadata(request.operation) && request.operation != Operation::RrcDraft && (!storage::decodeHex(request.peer, strnlen(request.peer, sizeof request.peer), peer, 16) ||
+             memcmp(peer, context.conversation, 16))) ||
+            (!rrcMetadata(request.operation) && request.operation != Operation::RrcHistoryPage && request.operation != Operation::RrcDraft && !request.argument) ||
+            (request.operation == Operation::RrcHistoryStatus && request.incoming) ||
+            (request.historyDirection != storage::HistoryDirection::Before && request.historyDirection != storage::HistoryDirection::After)) {
+            complete(slot, Outcome::Invalid); return;
+        }
+    } else if (summaryQuery(request.operation)) {
         ConversationQuery query;
         if (!readConversationQuery(_mailbox, slot, query)) { complete(slot, Outcome::Invalid); return; }
     } else if (!storage::decodeHex(request.peer, strnlen(request.peer, sizeof(request.peer)), peer, 16) ||
@@ -618,14 +763,16 @@ void DeviceService::finishHistory(const storage::Result& stored) {
     result.next = stored.nextOffset; result.total = stored.total; result.more = stored.more;
     result.storageError = stored.error;
     result.outcome = stored.outcome == storage::Outcome::Committed ? Outcome::Ok : Outcome::Failed;
-    if (request.operation == Operation::HistoryStatus) {
+    if (rrcRead(request.operation)) {
+        result = projectRrcRead(stored);
+    } else if (request.operation == Operation::HistoryStatus) {
         handheld::history::HistoryWindow::StatusProjection row;
         row.counter = request.argument; row.error = stored.error;
         storage::StoredRecordHeader header;
         if (stored.outcome == storage::Outcome::Committed && stored.error == storage::Error::None &&
             stored.length == sizeof(header) && _messages.readPayload(_queryTicket, &header, sizeof(header)) &&
             header.counter == request.argument && !header.incoming &&
-            !memcmp(header.destination, stored.key.peer, 16) && header.status <= uint8_t(LXMFStatus::UNCONFIRMED)) {
+            !memcmp(header.destination, stored.key.peer, 16) && header.status <= handheld::messaging::LastStatus) {
             row.desired = row.durable = header.status;
             row.flags = handheld::history::HistoryWindow::StatusProjection::Available;
         } else if (row.error == storage::Error::None) row.error = storage::Error::InvalidRecord;
@@ -690,7 +837,9 @@ void DeviceService::pollHistory() {
         }
     }
     storage::Submission submitted;
-    if (summaryQuery(request.operation)) {
+    if (rrcRead(request.operation)) {
+        submitted = submitRrcRead(_querySlot);
+    } else if (summaryQuery(request.operation)) {
         ConversationQuery query;
         if (!readConversationQuery(_mailbox, _querySlot, query)) {
             const auto slot = _querySlot; _querySlot = ServiceMailbox::NoSlot;
@@ -715,8 +864,11 @@ void DeviceService::pollHistory() {
     }
     const auto slot = _querySlot; _querySlot = ServiceMailbox::NoSlot;
     Result result; result.outcome = Outcome::Failed; result.storageError = storage::Error::Unavailable;
+    if (submitted.rejection==storage::Rejection::Fenced) { result.outcome=Outcome::Stale;result.storageError=storage::Error::Stale; }
     result.key = key; _mailbox.complete(slot, result);
 }
+
+#include "RrcService.inc"
 
 void DeviceService::runLifecycle(uint8_t slot) {
     const auto request = _mailbox.request(slot);

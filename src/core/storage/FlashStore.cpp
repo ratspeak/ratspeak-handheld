@@ -50,15 +50,40 @@ const esp_partition_t* dataPartition() {
     return nullptr;
 }
 
-bool isBlankPartition(const esp_partition_t* partition) {
+enum class Contents : uint8_t { Blank, LittleFs, Other, Unreadable };
+
+// LittleFS keeps two superblock copies, each naming itself at byte 8 of
+// blocks 0 and 1. Without either, nothing in the partition was ever ours.
+Contents unmountedContents(const esp_partition_t* partition) {
     uint8_t bytes[512];
+    for (size_t block : {size_t(0), size_t(4096)}) {
+        if (block + 16 > partition->size) break;
+        if (esp_partition_read(partition, block, bytes, 16) != ESP_OK) return Contents::Unreadable;
+        if (!memcmp(bytes + 8, "littlefs", 8)) return Contents::LittleFs;
+    }
     for (size_t offset = 0; offset < partition->size; offset += sizeof(bytes)) {
         const size_t size = std::min(sizeof(bytes), size_t(partition->size - offset));
-        if (esp_partition_read(partition, offset, bytes, size) != ESP_OK) return false;
-        for (size_t i = 0; i < size; ++i) if (bytes[i] != 0xff) return false;
+        if (esp_partition_read(partition, offset, bytes, size) != ESP_OK) return Contents::Unreadable;
+        for (size_t i = 0; i < size; ++i) if (bytes[i] != 0xff) return Contents::Other;
         yield();
     }
-    return true;
+    return Contents::Blank;
+}
+
+// A mounted filesystem with entries but none of ours (shared with another
+// Launcher app) is never adopted silently.
+bool holdsOtherFiles() {
+    static const char* ours[] = {"identity", "transport", "config", "contacts", "messages",
+                                 ".factory-reset", ".factory-reset.tmp", ".factory-reset.bak"};
+    File root = LittleFS.open("/");
+    if (!root || !root.isDirectory()) return false;
+    bool any = false;
+    for (File entry = root.openNextFile(); entry; entry = root.openNextFile()) {
+        const char* name = entry.name(); if (name[0] == '/') ++name;
+        any = true;
+        for (const char* known : ours) if (!strcmp(name, known)) return false;
+    }
+    return any;
 }
 
 bool ensureDirLocked(const char* path) {
@@ -148,19 +173,33 @@ bool FlashStore::begin() {
     FSLock lock;
     _ready = false;
     _resetState = ResetState::Unavailable;
+    _startup = Startup::Failed;
 
     const auto* partition = dataPartition();
-    if (!partition) return false;
+    if (!partition) { _startup = Startup::Missing; return false; }
     if (!LittleFS.begin(false, FLASH_BASE_PATH, 10, partition->label)) {
-        // Only positively identified, completely erased factory media may be
-        // initialized automatically. Existing or unreadable data stays intact.
-        if (!isBlankPartition(partition)) {
+        // Only completely erased factory media initializes here. Everything
+        // else is classified and stays intact until startup decides.
+        switch (unmountedContents(partition)) {
+        case Contents::Blank:
+            if (!LittleFS.begin(true, FLASH_BASE_PATH, 10, partition->label)) return false;
+            break;
+        case Contents::LittleFs:
             Serial.println("[FLASH] Mount failed; existing data preserved for recovery");
+            _startup = Startup::Damaged; return false;
+        case Contents::Other:
+            // Launcher allocates our partition over removed apps without erasing it.
+            _startup = strcmp(partition->label, FLASH_PARTITION_LABELS[0]) ? Startup::Foreign : Startup::Unprepared;
+            return false;
+        case Contents::Unreadable:
             return false;
         }
-        if (!LittleFS.begin(true, FLASH_BASE_PATH, 10, partition->label)) return false;
+    } else if (holdsOtherFiles()) {
+        LittleFS.end();
+        Serial.println("[FLASH] Storage holds another app's files; left unchanged");
+        _startup = Startup::Foreign; return false;
     }
-    _ready = true;
+    _ready = true; _startup = Startup::Ready;
 
     // Never restore backups or initialize application directories while a
     // destructive operation is incomplete (including an unreadable probe).
@@ -443,6 +482,27 @@ bool FlashStore::format() {
     // Re-mount with fresh filesystem (begin() takes its own lock)
     if (ok) ok = begin();
     return ok;
+}
+
+bool FlashStore::prepare() {
+    handheld::storage::assertOwner();
+    handheld::storage::StorageLease lease;
+    if (!lease.held() || _ready) return false;
+    {
+        FSLock lock;
+        const auto* partition = dataPartition();
+        if (!partition) return false;
+        Serial.printf("[FLASH] Preparing internal storage (%s, %lu bytes)\n", partition->label,
+                      (unsigned long)partition->size);
+        LittleFS.end();
+        // Format-on-fail covers an unmountable partition; a mountable one that
+        // holds another app's files must be formatted explicitly.
+        bool ok = LittleFS.begin(true, FLASH_BASE_PATH, 10, partition->label);
+        if (ok && holdsOtherFiles()) ok = LittleFS.format();
+        LittleFS.end();
+        if (!ok) return false;
+    }
+    return begin();
 }
 
 bool FlashStore::resetScope(bool& includesSD) {

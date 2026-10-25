@@ -17,7 +17,7 @@ from pathlib import Path
 from package_merged_zip import NOTICES, firmware_version, make_manifest, source_identity
 from release_catalog import APPLICATIONS, BOARDS, PACKAGES, ROOT, firmware_assets
 from release_identity import check_workspace, load_identity, source_pins, validate_version
-from release_images import verify_application, verify_component, verify_factory
+from release_images import verify_factory
 
 
 RELEASE_BOARDS = tuple(BOARDS)
@@ -84,16 +84,13 @@ def verify_firmware(dist: Path, revision: str, root: Path) -> list[dict]:
         for mode in APPLICATIONS:
             if mode not in capability.modes:
                 continue
-            slot = (partitions[mode] if partitions else capability.partitions(root, standalone=True)["app0"]).size
-            app = (dist / capability.app_name(mode)).read_bytes()
-            if not 24 <= len(app) <= slot or app[0] != 0xE9:
-                raise ValueError(f"{board} {mode}: invalid application image or slot overflow")
-            verify_component(app, board, mode, firmware_version(root, board), revision, False, slot)
+            # One complete image per mode: esptool at 0x0 and Launcher both read its
+            # embedded partition table, so it must be exactly the ZIP's image.
+            if (dist / capability.image_name(mode)).read_bytes() != images[mode]:
+                raise ValueError(f"{board} {mode}: image differs from its factory package")
+            app = verify_factory(images[mode], board, mode, firmware_version(root, board), revision, False, root)[mode]
             if mode == "standalone" and capability.runtime == "dedicated" and SERVICE_MARKER not in app:
                 raise ValueError(f"{board}: release application does not use the dedicated service task")
-            factory_offset = capability.factory_app_offset(mode, root)
-            if images[mode][factory_offset:factory_offset + len(app)] != app:
-                raise ValueError(f"{board} {mode}: application differs from factory package")
             if partitions and images["full"][partitions[mode].offset:partitions[mode].offset + len(app)] != app:
                 raise ValueError(f"{board} {mode}: application differs from dual-boot package")
     if len({manifest["version"] for manifest in manifests}) != 1:
@@ -178,7 +175,7 @@ def prepare(dist: Path, root: Path) -> None:
     (dist / CHECKSUM_NAME).write_text("".join(checksums))
     print(f"release assets verified: {len(BOARDS)} boards, "
           f"{sum(len(board.modes) for board in BOARDS.values())} factory ZIPs, "
-          f"{sum(len(set(board.modes) & set(APPLICATIONS)) for board in BOARDS.values())} app images; source {revision}")
+          f"{sum(len(set(board.modes) & set(APPLICATIONS)) for board in BOARDS.values())} single-mode images; source {revision}")
 
 
 def main() -> int:

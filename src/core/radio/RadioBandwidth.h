@@ -5,14 +5,14 @@
 // The SX1262 driver's established bandwidth values and rounding policy. Keep
 // saved values and editors aligned with the value actually sent to the modem.
 namespace RadioBandwidth {
-struct Value { uint32_t hz; uint8_t code; };
+struct Value { uint32_t hz; uint8_t code; const char* label; };
 inline constexpr Value values[] = {
 #if !defined(RSM9)
-    {7800, 0x00}, {10400, 0x08}, {15600, 0x01}, {20800, 0x09},
-    {31250, 0x02}, {41700, 0x0a},
+    {7800, 0x00, "7.8k"}, {10400, 0x08, "10.4k"}, {15600, 0x01, "15.6k"}, {20800, 0x09, "20.8k"},
+    {31250, 0x02, "31.25k"}, {41700, 0x0a, "41.7k"},
 #endif
-    {62500, 0x03}, {125000, 0x04},
-    {250000, 0x05}, {500000, 0x06}
+    {62500, 0x03, "62.5k"}, {125000, 0x04, "125k"},
+    {250000, 0x05, "250k"}, {500000, 0x06, "500k"}
 };
 inline constexpr int count = sizeof(values) / sizeof(values[0]);
 

@@ -20,7 +20,7 @@ inline bool prepareDiscovery(ProtocolRuntime& runtime, SDStore& sd, FlashStore& 
         candidate->loadContacts();
         candidate->loadNameCache();
         // The first path response uses the same name/capabilities as an announce.
-        const auto seed = encodeAnnounceName(name);
+        const auto seed = encodeAnnounceName(name, rs::Bytes(runtime.localDestHash(), 16).toHex().c_str());
         runtime.seedAnnounceAppData(seed.data(), seed.size());
         runtime.setAnnounceManager(candidate.get());
         output = candidate.release();

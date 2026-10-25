@@ -40,6 +40,8 @@ public:
     // false cancels only the live continuation after maintenance closes admission.
     std::function<RadioApply(const UserSettings&, bool)> applyRadio;
     std::function<void(const UserSettings&)> applyPeripherals;
+    // TCP endpoints and hotspot credentials apply live (network_settings::Change bits).
+    std::function<void(const UserSettings&, uint8_t)> networkCommitted;
     std::function<void()> homeReady;
     std::function<void(uint32_t)> diagnostics;
     std::function<void()> closeAdmissions;
@@ -47,7 +49,7 @@ public:
     std::function<bool()> settlementFailed;
     std::function<void()> beginQuiesce;
     std::function<bool()> quiescent;
-    std::function<void()> startScan;
+    std::function<bool()> startScan;
     std::function<ScanResult(String&)> finishScan;
 
 private:
@@ -58,6 +60,11 @@ private:
     void history(uint8_t slot);
     void pollHistory();
     void finishHistory(const storage::Result&);
+    void executeRrc(uint8_t slot);
+    void pollRrcCommands();
+    bool readRrcContext(uint8_t slot, storage::rrc::Context&) const;
+    storage::Submission submitRrcRead(uint8_t slot);
+    Result projectRrcRead(const storage::Result&);
     void pollSends();
     void pollStorageWrites();
     void pollMaintenance();
@@ -79,6 +86,11 @@ private:
     uint32_t _lastStatus = 0, _lastStorageStatus = 0;
     uint32_t _lastIdentityRetry = 0;
     uint32_t _nodeFingerprint = 0;
+    // Freeze membership, not string-heavy node records, for one bounded copy.
+    // Live announces may update metadata without restarting the UI's transfer.
+    uint8_t _nodeCopyKeys[ANNOUNCE_MAX_NODES][16] = {};
+    size_t _nodeCopyCount = 0;
+    uint32_t _nodeCopyRevision = 0, _nodeCopyGeneration = 0;
     // One retained storage query; normal mailbox work owns its terminal until
     // consumed, including peer/mode changes and lifecycle settlement.
     storage::Ticket _queryTicket;
@@ -86,6 +98,7 @@ private:
     uint8_t _querySlot = ServiceMailbox::NoSlot;
     uint8_t _scanSlot = ServiceMailbox::NoSlot;
     uint8_t _settingsSlot = ServiceMailbox::NoSlot;
+    uint8_t _networkChanges = 0;
     uint8_t _lifecycleSlot = ServiceMailbox::NoSlot;
     MaintenanceBarrier _maintenance;
     bool _storageOwnerBound = false;
@@ -95,6 +108,7 @@ private:
     };
     PendingSend _sends[ServiceMailbox::NormalSlots];
     storage::Ticket _storageWrites[ServiceMailbox::NormalSlots];
+    uint16_t _rrcCommands = 0; // Existing mailbox slots retain their own immutable command.
     bool _outgoingPaused = false;
 };
 

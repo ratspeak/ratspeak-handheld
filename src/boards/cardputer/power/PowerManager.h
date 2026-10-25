@@ -16,17 +16,17 @@ public:
     // Configuration (seconds)
     void setDimTimeout(uint16_t seconds) { _dimTimeout = seconds * 1000UL; }
     void setOffTimeout(uint16_t seconds) { _offTimeout = seconds * 1000UL; }
-    // Core UserConfig stores brightness as percent 1-100; hardware wants 0-255
-    void setBrightness(uint8_t pct) {
-        if (pct > 100) pct = 100;
-        _fullBrightness = (uint8_t)(((uint16_t)pct * 255) / 100);
-    }
+    // Core UserConfig stores brightness as percent 1-100; hardware wants 0-255.
+    // A visible screen takes a new level at once.
+    void setBrightness(uint8_t pct);
 
     State state() const { return _state; }
     bool isScreenOn() const { return _state != SCREEN_OFF; }
 
 private:
     void setState(State newState);
+    // Dimming never makes a low brightness setting brighter.
+    uint8_t dimBrightness() const { return _fullBrightness < DIM_BRIGHTNESS ? _fullBrightness : DIM_BRIGHTNESS; }
 
     State _state = ACTIVE;
     unsigned long _lastActivity = 0;

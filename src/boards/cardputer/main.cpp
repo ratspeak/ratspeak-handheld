@@ -1,4 +1,5 @@
 #include "runtime/FactoryResetRecovery.h"
+#include "runtime/StorageStartup.h"
 #include "runtime/DiscoveryStartup.h"
 #include "hal/NetworkTime.h"
 #include "radio/RadioSettings.h"
@@ -27,6 +28,7 @@
 #include "storage/SDStore.h"
 #include "storage/MessageStore.h"
 #include "storage/LegacyMessageArena.h"
+#include "storage/StorageLease.h"
 #include "reticulum/AnnounceManager.h"
 #include "reticulum/LXMFManager.h"
 #include "reticulum/IdentityManager.h"
@@ -38,14 +40,18 @@
 #include "transport/RnsAutoInterface.h"
 #include "config/UserConfig.h"
 #include "config/SettingsTransaction.h"
+#include "config/NetworkSettings.h"
 #include "screens/NodesScreen.h"
 #include "screens/MessagesScreen.h"
 #include "screens/MessageView.h"
+#include "VoicePanel.h"
 #include "screens/SettingsScreen.h"
 #include "screens/NameInputScreen.h"
 #include "screens/MaintenanceScreen.h"
 #include "runtime/MaintenanceOperation.h"
 #include "screens/HelpOverlay.h"
+#include "screens/NoticeOverlay.h"
+#include "ui/RollOffNotice.h"
 #include "screens/TimezoneScreen.h"
 #include "power/PowerManager.h"
 #include "audio/AudioNotify.h"
@@ -105,6 +111,7 @@ HomeScreen homeScreen;
 NodesScreen nodesScreen;
 MessagesScreen messagesScreen;
 MessageView messageView;
+VoicePanel voicePanel;
 NameInputScreen nameInputScreen;
 MaintenanceScreen maintenanceScreen;
 handheld::MaintenanceBarrier maintenance;
@@ -113,10 +120,13 @@ uint32_t maintenanceNextId = 0;
 bool maintenanceRestart = false;
 enum class CardSettingsStep : uint8_t { Settings, Name, Timezone };
 CardSettingsStep pendingSettingsStep = CardSettingsStep::Settings;
+uint8_t pendingNetworkChanges = handheld::network_settings::None;
 uint32_t lastSettingsRetry = 0;
 SettingsScreen settingsScreen;
 TimezoneScreen timezoneScreen;
 HelpOverlay helpOverlay;
+NoticeOverlay noticeOverlay;
+static bool rollOffChecked = false;
 
 // Tab-screen mapping
 Screen* tabScreens[4] = {nullptr, nullptr, nullptr, nullptr};
@@ -185,7 +195,7 @@ static ProtocolBackend::AnnounceResult announceWithName(bool silent = false);
 static void pollScheduledAnnounces() {
     using Scheduler = handheld::AnnounceScheduler;
     const auto event = announceScheduler.poll(uint32_t(millis()), userConfig.settings().announceInterval,
-        rustLoraIface.isOnline() && rustLoraIface.airtimeUtilization() > LoRaInterface::AIRTIME_THROTTLE,
+        rustLoraIface.isOnline() && rustLoraIface.airtimeLimited(),
         [](Scheduler::Action action, uint8_t) {
             const auto result = announceWithName(action == Scheduler::Action::Periodic && !power.isScreenOn());
             return result == ProtocolBackend::AnnounceResult::Sent ? Scheduler::Result::Sent :
@@ -225,7 +235,7 @@ static void finishCardSettings(CardSettingsStep step) {
         if (gps.isRunning()) gps.setPosixTZ(TIMEZONE_TABLE[settings.timezoneIdx].posixTZ);
 #endif
     }
-    const auto data = encodeAnnounceName(settings.displayName);
+    const auto data = encodeAnnounceName(settings.displayName, backend->destinationHashHex().c_str());
     protocolRuntime.seedAnnounceAppData(data.data(), data.size());
     nameInputScreen.setSaveStatus(nullptr, false);
     timezoneScreen.setSaveStatus(nullptr, false);
@@ -238,16 +248,18 @@ static void finishCardSettings(CardSettingsStep step) {
     ui.markAllDirty();
 }
 
-static SettingsTransaction::Result saveCardSettings(UserConfig& candidate, CardSettingsStep step) {
-    if (!maintenance.accepting()) return {SettingsTransaction::State::Invalid, "Shutdown in progress"};
-    if (settingsScreen.radioApplyPending()) return {SettingsTransaction::State::Invalid, "Waiting for radio"};
-    const auto result = SettingsTransaction::apply(userConfig, candidate, identityMgr, sdStore, flash);
+static SettingsTransaction::Result finishCardSave(SettingsTransaction::Result result, bool alreadyPending,
+                                                  uint8_t networkChanges, CardSettingsStep step) {
     const bool pending = result.state == SettingsTransaction::State::Pending;
-    if (pending) { pendingSettingsStep = step; lastSettingsRetry = millis(); }
+    if (pending && !alreadyPending) {
+        pendingSettingsStep = step; pendingNetworkChanges = networkChanges;
+        lastSettingsRetry = millis();
+    }
     const char* caption = pending ? "Save pending; please wait" : result.complete() ? nullptr : "Save failed; Enter retries";
     if (step == CardSettingsStep::Name) nameInputScreen.setSaveStatus(caption, pending);
     if (step == CardSettingsStep::Timezone) timezoneScreen.setSaveStatus(caption, pending);
     if (result.complete()) {
+        network.settingsCommitted(userConfig.settings(), networkChanges);
         if (step != CardSettingsStep::Settings) settingsScreen.applyCommitted();
         if (settingsScreen.radioApplyPending()) pendingSettingsStep = step;
         else finishCardSettings(step);
@@ -256,13 +268,35 @@ static SettingsTransaction::Result saveCardSettings(UserConfig& candidate, CardS
     return result;
 }
 
+static SettingsTransaction::Result saveCardSettings(UserConfig& candidate, CardSettingsStep step) {
+    if (!maintenance.accepting()) return {SettingsTransaction::State::Invalid, "Shutdown in progress"};
+    if (settingsScreen.radioApplyPending()) return {SettingsTransaction::State::Invalid, "Waiting for radio"};
+    const bool alreadyPending = userConfig.settingsPending();
+    const uint8_t networkChanges = alreadyPending ? handheld::network_settings::None :
+        handheld::network_settings::changes(userConfig.settings(), candidate.settings());
+    return finishCardSave(SettingsTransaction::apply(userConfig, candidate, identityMgr, sdStore, flash),
+                          alreadyPending, networkChanges, step);
+}
+
+// AP credentials and TCP endpoints are strings/lists, never scalar edits.
+static SettingsTransaction::Result saveCardScalars(const UserScalars& scalars, CardSettingsStep step) {
+    if (!maintenance.accepting()) return {SettingsTransaction::State::Invalid, "Shutdown in progress"};
+    if (settingsScreen.radioApplyPending()) return {SettingsTransaction::State::Invalid, "Waiting for radio"};
+    const bool alreadyPending = userConfig.settingsPending();
+    return finishCardSave(SettingsTransaction::applyScalars(userConfig, scalars, identityMgr, sdStore, flash),
+                          alreadyPending, handheld::network_settings::None, step);
+}
+
 static void pollCardSettings() {
     if (!userConfig.settingsPending() || millis() - lastSettingsRetry < 1000) return;
     lastSettingsRetry = millis();
     const auto result = SettingsTransaction::recover(userConfig, identityMgr, sdStore, flash);
     if (!result.complete()) return;
     // Failed maintenance can finish cleanup, never invoke an old UI/hardware continuation.
+    const uint8_t networkChanges = pendingNetworkChanges;
+    pendingNetworkChanges = handheld::network_settings::None;
     if (maintenance.accepting()) {
+        network.settingsCommitted(userConfig.settings(), networkChanges);
         settingsScreen.applyCommitted();
         if (settingsScreen.radioApplyPending()) return;
         finishCardSettings(pendingSettingsStep);
@@ -306,6 +340,9 @@ static bool requestMaintenance(handheld::Operation operation) {
         return true;
     }
     if (!maintenance.accepting()) return false;
+    if (operation!=handheld::Operation::FactoryReset && !messageView.prepareMaintenance()) {
+        settingsScreen.setMaintenanceBlockReason("Channel draft not saved; retry");return false;
+    }
     handheld::Request request;
     request.id = ++maintenanceNextId; request.generation = 1;
     request.operation = operation; request.admittedAt = millis();
@@ -331,7 +368,7 @@ static void pollMaintenance() {
     network.pollSettlements();
     handheld::MaintenanceBarrier::Snapshot snapshot;
     snapshot.normalPending = wifiConnection.scanning() || userConfig.settingsPending() || settingsScreen.radioApplyPending();
-    snapshot.applicationPending = !backend->lxmfDrained() || !diagnostics.resultsDrained() ||
+    snapshot.applicationPending = !backend->lxmfDrained() || !backend->rrcDrained() || !backend->voiceDrained() || !diagnostics.resultsDrained() ||
         messageStore.writeQueue().drainCount() != 0;
     snapshot.helpersPending = snapshot.normalPending || !protocolRuntime.maintenanceDrained() ||
         !network.quiescent();
@@ -388,7 +425,7 @@ static ProtocolBackend::AnnounceResult announceWithName(bool silent) {
         Serial.println("[ANNOUNCE-TX] skipped: rust backend protocol not ready");
         return ProtocolBackend::AnnounceResult::Failed;
     }
-    rs::Bytes appData = encodeAnnounceName(userConfig.settings().displayName);
+    rs::Bytes appData = encodeAnnounceName(userConfig.settings().displayName, backend->destinationHashHex().c_str());
     Serial.printf("[ANNOUNCE-TX] name=\"%s\" appData=%d bytes silent=%s\n",
         userConfig.settings().displayName.c_str(), (int)appData.size(),
         silent ? "yes" : "no");
@@ -522,12 +559,9 @@ void setup() {
     bootScreen.setProgress(0.25f, "Mounting flash...");
     ui.render();
     const bool flashReady = flash.begin();
-    if (!flashReady) {
-        Serial.println("[BOOT] Flash startup blocked; preserving reset/data recovery");
-        bootScreen.setProgress(0.25f, "Storage recovery pending");
-        ui.render();
-    }
-    bootScreen.setProgress(0.3f, "Storage ready");
+    handheld::storageStartup(flash, keyboard, M5Cardputer.Display, []() { ESP.restart(); });
+    if (!flashReady) Serial.println("[BOOT] Flash startup blocked; preserving reset/data recovery");
+    bootScreen.setProgress(0.3f, flashReady ? "Storage ready" : "Storage recovery pending");
     ui.render();
 
     // Boot loop detection (NVS — separate from LittleFS)
@@ -628,11 +662,26 @@ void setup() {
     // Initialize message store + LXMF
     bootScreen.setProgress(0.91f, "Starting messaging...");
     ui.render();
-    if (!handheld::storage::legacyMessageArena().reserve() ||
-        !messageStore.begin(&flash, &sdStore, userConfig.settings().sdStorageEnabled)) {
+    const auto messages = handheld::storage::legacyMessageArena().reserve()
+        ? messageStore.beginForBoot(&flash, &sdStore, userConfig.settings().sdStorageEnabled)
+        : MessageStore::BootResult::Failed;
+    if (messages == MessageStore::BootResult::Failed) {
         bootScreen.setProgress(0.91f, "Storage error - data preserved");
         ui.render();
         for (;;) delay(20);
+    }
+    if (messages == MessageStore::BootResult::InternalOnly) {
+        bootScreen.setProgress(0.91f, "SD messages not loaded");
+        ui.render(); delay(3000);
+    }
+    // Boot summaries parsed every retained record copy: return the unneeded
+    // legacy reserve whole, before the protocol node and networking allocate.
+    {
+        handheld::storage::StorageLease lease;
+        auto& arena = handheld::storage::legacyMessageArena();
+        const bool reduced = lease.held() && arena.reduce();
+        Serial.printf("[STORAGE] Legacy reserve %s: %u bytes\n", reduced ? "reduced" : "retained",
+                      unsigned(arena.capacity()));
     }
     // Protocol runtime lifecycle: init -> identity -> boot-seed ->
     // placement open_transport (MICRO node in internal heap) -> pump. LXMF
@@ -715,19 +764,17 @@ void setup() {
         Serial.println("[CONFIG] Default TCP hubs seeded (off by default)");
     }
 
-    // Boot loop recovery: force WiFi OFF to break crash cycle
-    if (bootLoopRecovery) {
-        userConfig.settings().wifiMode = RAT_WIFI_OFF;
-        Serial.println("[BOOT] WiFi forced OFF (boot loop recovery)");
-    }
+    // Boot loop recovery: force WiFi OFF for this boot only, so a later save
+    // cannot persist it.
+    if (bootLoopRecovery) Serial.println("[BOOT] WiFi forced OFF (boot loop recovery)");
 
     // Mode-based WiFi startup
-    RatWiFiMode wifiMode = userConfig.settings().wifiMode;
+    const RatWiFiMode wifiMode = bootLoopRecovery ? RAT_WIFI_OFF : userConfig.settings().wifiMode;
 
     bootScreen.setProgress(0.95f, wifiMode == RAT_WIFI_AP ? "Starting WiFi AP..." :
         wifiMode == RAT_WIFI_STA ? "WiFi STA starting..." : "WiFi disabled");
     ui.render();
-    if (!network.begin(userConfig.settings())) Serial.println("[WIFI] Selected mode could not start");
+    if (!network.begin(userConfig.settings(), wifiMode)) Serial.println("[WIFI] Selected mode could not start");
 
     // BLE disabled
     Serial.println("[BLE] Disabled (stub — v1.1)");
@@ -745,11 +792,11 @@ void setup() {
     }
 #endif
 
-    // Initialize power manager + audio
-    power.begin();
+    // Initialize power manager + audio; begin() lights the saved brightness.
     power.setDimTimeout(userConfig.settings().screenDimTimeout);
     power.setOffTimeout(userConfig.settings().screenOffTimeout);
     power.setBrightness(userConfig.settings().brightness);
+    power.begin();
 
     audio.setEnabled(userConfig.settings().audioEnabled);
     audio.setVolume(userConfig.settings().audioVolume);
@@ -760,6 +807,8 @@ void setup() {
     bootScreen.setProgress(1.0f, "Ready");
     ui.render();
     audio.playBoot();
+    // The boot announce's flash writes stall the speaker; finish the chime first.
+    audio.drain(1000);
 
     bootComplete = true;
     ui.statusBar().setTransportMode("Ratspeak.org");
@@ -773,7 +822,7 @@ void setup() {
     });
     nodesScreen.setAnnounceManager(announceManager);
     nodesScreen.setNodeSelectedCallback([](const std::string& peerHex) {
-        messageView.setPeerHex(peerHex);
+        if (!messageView.setPeerHex(peerHex)) return;
         ui.tabBar().setActiveTab(TabBar::TAB_MSGS);
         ui.setScreen(&messageView);
     });
@@ -784,15 +833,26 @@ void setup() {
     messagesScreen.setLXMFManager(&lxmf);
     messagesScreen.setAnnounceManager(announceManager);
     messagesScreen.setBackend(backend);
+    messagesScreen.setMessageStore(&messageStore);
     messagesScreen.setOpenCallback([](const std::string& peerHex) {
-        messageView.setPeerHex(peerHex);
+        if (!messageView.setPeerHex(peerHex)) return;
         ui.setScreen(&messageView);
     });
     messagesScreen.setAddContactCallback([](const std::string& peerHex) {
         if (announceManager) announceManager->saveNode(peerHex);
     });
+#if HANDHELD_RRC_UI_ENABLED
+    messagesScreen.setRrcOpenCallback([](const handheld::rrc::Conversation& binding,const char* insert) {
+        if (messageView.setRrcConversation(binding,insert)) ui.setScreen(&messageView);
+    });
+#endif
+    messageView.setMessageStore(&messageStore);
     messageView.setLXMFManager(&lxmf);
     messageView.setBackend(backend);
+    voicePanel.begin(backend,announceManager);ui.setVoicePanel(&voicePanel);
+    messageView.setMemoUi(&voicePanel.model());
+    messageView.setVoiceCallback([](const char* peer,uint32_t counter,bool incoming) {voicePanel.startMessage(peer,counter,incoming);});
+    messageView.setVoiceCloseCallback([] {voicePanel.closeConversation();});
     messageView.setAnnounceManager(announceManager);
     messageView.setBackCallback([]() {
         ui.setScreen(&messagesScreen);
@@ -803,8 +863,13 @@ void setup() {
     });
 
     settingsScreen.setUserConfig(&userConfig);
+    settingsScreen.setBackCallback([]() {
+        ui.tabBar().setActiveTab(TabBar::TAB_HOME);
+        ui.setScreen(&homeScreen);
+    });
     settingsScreen.setFlashStore(&flash);
     settingsScreen.setSDStore(&sdStore);
+    settingsScreen.setMessageStore(&messageStore);
     settingsScreen.setRadioApply([](const UserSettings& settings, bool accepting) {
         return applyLiveRadioSettings(radio, rustLoraIface, settings, accepting);
     });
@@ -822,6 +887,9 @@ void setup() {
     settingsScreen.setIdentityHash(backend->destinationHashHex());
     settingsScreen.setSaveCallback([](UserConfig& candidate) {
         return saveCardSettings(candidate, CardSettingsStep::Settings);
+    });
+    settingsScreen.setScalarSaveCallback([](const UserScalars& scalars) {
+        return saveCardScalars(scalars, CardSettingsStep::Settings);
     });
 
     tabScreens[TabBar::TAB_HOME]  = &homeScreen;
@@ -846,20 +914,17 @@ void setup() {
     });
     timezoneScreen.setDoneCallback([](int tzIdx) {
         if (userConfig.settingsPending() || tzIdx < 0 || tzIdx >= TIMEZONE_COUNT) return;
-        UserConfig candidate;
-        if (!candidate.tryAssign(userConfig)) {
-            timezoneScreen.setSaveStatus("Memory unavailable; Enter retries", false); return;
-        }
-        candidate.settings().timezoneIdx = uint8_t(tzIdx);
+        UserScalars next = userConfig.settings();
+        next.timezoneIdx = uint8_t(tzIdx);
         // Region suggestion is only this explicit first-setup choice. A later
         // timezone edit/recovery preserves the established manual frequency.
-        if (!candidate.settings().timezoneSet) {
+        if (!next.timezoneSet) {
             const uint8_t region = TIMEZONE_TABLE[tzIdx].radioRegion;
-            candidate.settings().radioRegion = region;
-            candidate.settings().loraFrequency = REGION_FREQ[region];
+            next.radioRegion = region;
+            next.loraFrequency = REGION_FREQ[region];
         }
-        candidate.settings().timezoneSet = true;
-        saveCardSettings(candidate, CardSettingsStep::Timezone);
+        next.timezoneSet = true;
+        saveCardScalars(next, CardSettingsStep::Timezone);
     });
 
     Serial.printf("[BOOT] displayName='%s' tzSet=%d wifiMode=%d\n",
@@ -915,7 +980,17 @@ void loop() {
     // Keep the cooperative UI running, but service TX completion before
     // background storage/settings work can occupy the radio owner.
     const bool radioReady = backend->pollRadioBeforeBlockingWork();
-    messageStore.poll(); // Completed result settlement never performs storage I/O.
+    messageStore.configureVoiceRetention(userConfig.settings().voice.maxMessages);
+    messageStore.enableSpaceReclaim();
+    messageStore.poll(radioReady); // Deferred cleanup stays on the existing storage worker.
+    if (messageStore.historyRolledOff() && !rollOffChecked && !ui.isBootMode()) {
+        rollOffChecked = true;
+        namespace text = handheld::ui::storage_history;
+        if (!text::rollOffSeen()) {
+            helpOverlay.hide(); noticeOverlay.show(text::RollOffTitle, text::RollOffNotice, text::markRollOffSeen);
+            ui.setOverlay(&noticeOverlay); ui.markAllDirty();
+        }
+    }
     M5.update();
     if (radioReady) { pollCardSettings(); pollCardRadioSettings(); }
     if (maintenance.accepting() && radioReady) {
@@ -930,7 +1005,6 @@ void loop() {
         backend->pollRadioBeforeBlockingWork()) {
         lastMetadataRetry = now;
         if (!identityMgr.flushPending()) Serial.println("[STORAGE] Identity metadata retry pending");
-        if (!userConfig.flushPending(sdStore, flash)) Serial.println("[STORAGE] Settings backup retry pending");
     }
 
     // 1. Input (keyboard refresh is INT-gated, with fallback polling)
@@ -947,6 +1021,11 @@ void loop() {
             maintenanceScreen.handleKey(evt);
         } else if (ui.isBootMode()) {
             ui.handleKey(evt);
+        }
+        else if (voicePanel.handleKey(evt)) {ui.markAllDirty();}
+        else if (noticeOverlay.handleKey(evt)) {
+            if (!noticeOverlay.isVisible()) ui.setOverlay(nullptr);
+            ui.markAllDirty();
         }
         else if (helpOverlay.isVisible()) {
             helpOverlay.handleKey(evt);
@@ -977,10 +1056,15 @@ void loop() {
     if (maintenance.accepting() && now - lastRNS >= rnsInterval) {
         lastRNS = now;
         unsigned long rnsStart = millis();
+        backend->configureVoice(userConfig.settings().voice);
+        backend->configurePropagation(userConfig.settings().propagation);
         backend->loop();
         rnsDuration = millis() - rnsStart;
     }
     if (backend->pollRadioBeforeBlockingWork() || messageStore.deferredIO()) {
+#if HANDHELD_RRC_UI_ENABLED
+        if (messageView.pollRrc(maintenance.accepting())) ui.markContentDirty();
+#endif
         if (messageView.pollSubmission()) ui.markContentDirty();
         if (messageView.pollReadMarker()) ui.markContentDirty();
         if (settingsScreen.pollNetworkResults()) ui.markContentDirty();
@@ -995,7 +1079,18 @@ void loop() {
 
     if (maintenance.accepting()) {
         const auto events = network.poll(userConfig.settings(), rnsDuration,
-            handheld::NetworkCoordinator::CardBudget);
+            handheld::NetworkCoordinator::CardBudget, []() {
+                return maintenance.accepting() && !settingsScreen.radioApplyPending() &&
+                    !handheld::memo::busy(backend->memoStatus().phase) &&
+                    backend->pollRadioBeforeBlockingWork();
+            });
+        if (events & handheld::NetworkCoordinator::HotspotChanged) {
+            using Result = handheld::NetworkCoordinator::HotspotResult;
+            const auto result = network.hotspotResult();
+            settingsScreen.notifyNetworkOutcome(result == Result::Applied ? "Hotspot updated" :
+                result == Result::NeedsRestart ? "Saved; restart to apply hotspot" :
+                "Saved; hotspot unavailable; restart");
+        }
         if (events & handheld::NetworkCoordinator::Connected) {
             Serial.printf("[WIFI] STA connected: %s\n", WiFi.localIP().toString().c_str());
             static bool ntpStarted = false;
@@ -1029,11 +1124,26 @@ void loop() {
     if (maintenance.accepting() && gps.isRunning()) gps.loop();
 #endif
 
+#if HANDHELD_RRC_UI_ENABLED
+    // RRC publishes an alert only after a policy-eligible message commits.
+    // Keep Direct's callback and the two histories independent.
+    static uint32_t rrcAlertRevision=0;
+    const auto rrcAlert=backend->rrcStatus().alertRevision;
+    if(rrcAlertRevision!=rrcAlert) {rrcAlertRevision=rrcAlert;if(rrcAlert) pendingMessageSound=true;}
+#endif
     // 9. Deferred audio (from packet callbacks — delay() can't run in callbacks)
     if (pendingMessageSound) {
         pendingMessageSound = false;
         audio.playMessage();
     }
+    const bool voiceWasVisible=voicePanel.visible();
+    const auto voicePhase=voicePanel.model().status().phase;
+    const auto voiceSeconds=voicePanel.model().elapsedFrames()/25;
+    const auto voiceError=voicePanel.model().error();
+    voicePanel.poll(power.isScreenOn() && maintenance.accepting() && !helpOverlay.isVisible() && !noticeOverlay.isVisible());
+    if(voiceWasVisible || voicePanel.visible() || voicePhase!=voicePanel.model().status().phase ||
+       voiceSeconds!=voicePanel.model().elapsedFrames()/25 || voiceError!=voicePanel.model().error()) ui.markAllDirty();
+    if(voicePanel.active() && power.isScreenOn()) power.activity();
     audio.loop();
 
     // 10. Power management
@@ -1120,5 +1230,8 @@ void loop() {
     }
     loopCycleStart = now;
 
-    yield();
+    // M5's microphone/speaker tasks self-delete; their stacks are reclaimed by
+    // the idle task. yield() only offers this core to equally/higher-priority
+    // ready work and can retain those stacks across repeated previews.
+    vTaskDelay(1);
 }

@@ -17,6 +17,7 @@ namespace handheld::storage {
 class MessageTransactions final : public WriteQueue::Executor {
 public:
     bool begin(FlashStore* flash, SDStore* sd, bool external, bool deferred);
+    bool expireTemporaryMemos(); // boot owner, before queue admission; never message records
     void execute(const Request&, uint8_t*, size_t length, size_t capacity, Result&) override;
     void setExternal(bool enabled) { _external = enabled; clearSummaries(); } // owner, quiescent only
     bool external() const { return _external; }
@@ -26,7 +27,7 @@ public:
         uint8_t peer[16] = {};
         uint32_t cutoff = 0;
         uint8_t medium = 0;
-        bool opened = false;
+        bool opened = false, includeDeleted = false, audioOnly = false, flashOnly = false;
         Error error = Error::None;
     };
     // Caller holds an explicit filesystem lease. No retained filename vector.
@@ -34,7 +35,7 @@ public:
     bool nextRecord(Cursor&, RecordKey&);
     bool nextPeer(Cursor&, char peerHex[33]); // unordered unique peers, one pass per root
     bool nextPeer(const char* afterHex, char peerHex[33], Error&);
-    Error load(const RecordKey&, MessageDocument&, StoredRecordHeader&);
+    Error load(const RecordKey&, MessageDocument&, StoredRecordHeader&, uint8_t* selectedMedium = nullptr);
     uint32_t deletedThrough(const uint8_t peer[16]);
     uint32_t nextCounter() const { return _nextCounter; }
     uint64_t mutationEpoch() const { return _mutationEpoch; } // caller holds lease
@@ -75,18 +76,37 @@ private:
     static bool filename(const char*, uint32_t&, bool&);
     Error inspect(const RecordKey&, unsigned medium, const char* suffix, MessageDocument&, StoredRecordHeader&,
                   bool* parsed = nullptr);
-    Error commit(const RecordKey&, MessageDocument&, bool creating, Result&);
-    void create(const Request&, uint8_t*, Result&);
+    Error commit(const RecordKey&, MessageDocument&, bool creating, Result&, const uint8_t* audio = nullptr,
+                 uint8_t referenceOnlyMedium = UINT8_MAX, bool requireFlash = false, bool existingOnly = false);
+    File openAudio(const RecordKey&, unsigned medium, const StoredRecordHeader&,
+                   uint8_t* output = nullptr, size_t offset = 0, size_t length = 0);
+    Error ensureAudio(const RecordKey&, unsigned medium, const StoredRecordHeader&, const uint8_t* bytes);
+    bool removeAudio(const RecordKey&, unsigned medium);
+    void readAudio(const Request&, uint8_t*, size_t, Result&);
+    void create(const Request&, uint8_t*, Result&, uint32_t reservedCounter = 0);
     void update(const Request&, Result&);
     void markRead(const Request&, Result&);
     void erase(const Request&, Result&);
+    void eraseRecord(const Request&, Result&);
+    Error recordDeletion(const RecordKey&, bool&, StoredRecordHeader* = nullptr);
     void read(const Request&, uint8_t*, size_t, Result&);
     void history(const Request&, uint8_t*, size_t, Result&);
     void pending(const Request&, uint8_t*, size_t, Result&);
+    void prepared(const Request&, uint8_t*, size_t length, size_t capacity, Result&);
+    void purgeJournal(const Request&, uint8_t*, size_t length, size_t capacity, Result&);
+    void rrcTransaction(const Request&, uint8_t*, size_t length, size_t capacity, Result&);
+    void memoTransaction(const Request&, uint8_t*, size_t length, size_t capacity, Result&);
+    bool memoRetains(const RecordKey&, const StoredRecordHeader&, uint32_t revision);
     void conversationPage(const Request&, uint8_t*, size_t, Result&);
     void conversation(const Request&, uint8_t*, size_t, Result&);
     void trim(const Request&, Result&);
+    void retainAudio(const Request&, Result&);
+    void reclaim(const Request&, Result&);
+    bool removable(const RecordKey&, const StoredRecordHeader&, MessageDocument&);
+    bool mirrorVerified(const RecordKey&, MessageDocument&, const StoredRecordHeader&, Result&);
+    bool evictInternal(const RecordKey&, MessageDocument&, const StoredRecordHeader&, bool cached, Result&);
     bool reserveCounter(uint32_t&);
+    bool reserveRrcCounter(uint32_t& counter, uint32_t minimum);
     bool retainedCopy(const RecordKey&, unsigned medium, MessageDocument&);
     bool initializeCounter();
     uint32_t deletedThrough(const uint8_t peer[16], MessageDocument&, uint8_t* markerState = nullptr,
@@ -96,6 +116,7 @@ private:
     bool _external = false, _deferred = false;
     uint8_t _blockedMedia = 0, _preferBackup = 0;
     uint32_t _nextCounter = 1, _reservedThrough = 0;
+    uint32_t _rrcNextCounter = 1, _rrcReservedThrough = 0;
     uint64_t _mutationEpoch = 1;
     uint32_t _summaryClock = 0;
     uint8_t _summaryMedia = 0;

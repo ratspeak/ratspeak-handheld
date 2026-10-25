@@ -60,9 +60,63 @@ uint32_t ServiceClient::submit(Request request, const void* body, size_t length,
     return id;
 }
 
+uint32_t ServiceClient::deleteRecord(const storage::RecordKey& key,uint32_t revision,Completion completion) {
+    Request request;request.operation=Operation::DeleteRecord;request.argument=key.counter;request.incoming=key.incoming;request.revision=revision;
+    storage::encodeHex(key.peer,16,request.peer);
+    return submit(request,nullptr,0,0,[completion=std::move(completion)](const Result& result,const char*) {if(completion) completion(result);});
+}
+uint32_t ServiceClient::copyRecord(const storage::RecordKey& key,RecordCompletion completion) {
+    Request request;request.operation=Operation::ReadRecord;request.argument=key.counter;request.incoming=key.incoming;
+    storage::encodeHex(key.peer,16,request.peer);
+    return submit(request,nullptr,0,512,[completion=std::move(completion)](const Result& result,const char* bytes) {
+        storage::StoredRecordHeader header;
+        if(result.outcome==Outcome::Ok && result.length>=sizeof header) {
+            memcpy(&header,bytes,sizeof header);
+            if(completion) completion(result,header,reinterpret_cast<const uint8_t*>(bytes)+sizeof header,result.length-sizeof header);
+        } else if(completion) completion(result,header,nullptr,0);
+    });
+}
+uint32_t ServiceClient::voiceCommand(const voice::Command& command, Completion completion) {
+    Request request;request.operation=Operation::VoiceCommand;
+    return submit(request,&command,sizeof command,0,[completion=std::move(completion)](const Result& result,const char*) {
+        if(completion) completion(result);
+    });
+}
+
+uint32_t ServiceClient::memoCommand(const memo::Command& command, Completion completion) {
+    Request request;request.operation=Operation::MemoCommand;
+    return submit(request,&command,sizeof command,0,[completion=std::move(completion)](const Result& result,const char*) {
+        if(completion) completion(result);
+    });
+}
+
+uint32_t ServiceClient::requestPropagationNodes(PropagationCompletion completion) {
+    if (!completion) return 0;
+    Request request; request.operation = Operation::PropagationNodes;
+    constexpr size_t capacity = propagation::NodeViewCapacity * sizeof(propagation::NodeView);
+    return submit(request, nullptr, 0, capacity,
+        [completion = std::move(completion)](const Result& result, const char* data) {
+            propagation::NodeView nodes[propagation::NodeViewCapacity]{};
+            Result checked = result; size_t count = 0;
+            if (result.outcome == Outcome::Ok) {
+                if (result.total > propagation::NodeViewCapacity || result.length != result.total * sizeof(nodes[0])) {
+                    checked.outcome = Outcome::Invalid; checked.length = 0;
+                } else {
+                    count = result.total; memcpy(nodes, data, result.length);
+                    for (size_t i = 0; i < count; ++i) nodes[i].name[sizeof nodes[i].name - 1] = 0;
+                }
+            }
+            completion(checked, nodes, count); // Borrow ends on return, no retained cache.
+        });
+}
+
 uint32_t ServiceClient::action(Operation op, const std::string& peer, const std::string& body,
                               uint32_t argument, Completion completion) {
     if (peer.size() > 32) { tell("Invalid destination"); return 0; }
+    // Factory reset explicitly discards local data. Failed-maintenance recovery
+    // already has its own rendered data-loss warning and fresh restart request.
+    if (lifecycleOperation(op) && op!=Operation::FactoryReset && _mailbox.accepting() &&
+        beforeLifecycle && !beforeLifecycle()) return 0;
     Request request; request.operation = op; request.argument = argument;
     strlcpy(request.peer, peer.c_str(), sizeof(request.peer));
     return submit(request, body, 0, [this, completion](const Result& result, const char*) {
@@ -78,6 +132,18 @@ uint32_t ServiceClient::requestPeerName(const std::string& peer, TextCompletion 
     Request request; request.operation = Operation::PeerName;
     strlcpy(request.peer, peer.c_str(), sizeof(request.peer));
     return submit(request, "", ServiceMailbox::MaxPayload, std::move(completion));
+}
+
+bool ServiceClient::discardSettingsEdit() {
+    if (settingsPending()) return false;
+    UserConfig restored;
+    if (_configReady && restored.tryAssign(_committed)) {
+        config.swap(restored);
+        return true;
+    }
+    _settingsRefresh = true;
+    tell("Settings refresh pending");
+    return false;
 }
 
 bool ServiceClient::applySettings(Completion completion, bool applyRadio) {
@@ -132,12 +198,14 @@ void ServiceClient::poll() {
         // publication immediately, but retain any accepted request until its
         // stale callback retires below.
         nodes._nodes.clear(); nodes._revision = 0;
+        _rrcAlertRevision=_status.rrc.alertRevision;
+        closeHistory();
         _nodeStaging.clear(); _nodeOffset = 0; _nodeCursorRevision = 0;
     }
     if (_history.mode() != history::HistoryWindow::Mode::Closed &&
         _history.identityGeneration() != _status.generation) _history.close();
-    _history.observeStatusRevision(_status.statusRevision);
-    _history.observeHistoryRevision(_status.historyRevision);
+    _history.observeStatusRevision(_rrcHistory ? _status.rrc.revision : _status.statusRevision);
+    _history.observeHistoryRevision(_rrcHistory ? _status.rrc.revision : _status.historyRevision);
     if (_conversationWindow.identityGeneration() != _status.generation &&
         _conversationWindow.state() != history::ConversationList::State::Closed) _conversationWindow.close();
     _conversationWindow.observeRevision(_status.storeRevision);
@@ -167,6 +235,10 @@ void ServiceClient::poll() {
     if (_noticeRevision != _status.noticeRevision) { _noticeRevision = _status.noticeRevision; tell(_status.notice); }
     if (_incomingRevision != _status.incomingRevision) {
         _incomingRevision = _status.incomingRevision; tell("New message");
+    }
+    if(_rrcAlertRevision!=_status.rrc.alertRevision) {
+        _rrcAlertRevision=_status.rrc.alertRevision;
+        if(_rrcAlertRevision) tell("New hub message");
     }
     if (!_mailbox.accepting() || _unhealthy) return;
     if (!_settingsPending && !_settingsQuery &&
@@ -198,16 +270,22 @@ void ServiceClient::requestNodes() {
 }
 
 void ServiceClient::watchHistory(const std::string& peer) {
+    if (_rrcHistory) closeHistory();
     uint8_t decoded[16];
     if (!storage::decodeHex(peer.data(), peer.size(), decoded, 16)) { closeHistory(); return; }
     if (_history.mode() != history::HistoryWindow::Mode::Closed &&
         _history.identityGeneration() == _status.generation && !memcmp(_history.peer(), decoded, 16)) return;
-    _history.open(decoded, _status.generation);
+    _history.observeHistoryRevision(_status.historyRevision);
+    _history.observeStatusRevision(_status.statusRevision);
+    _history.resume(decoded, _status.generation);
 }
 void ServiceClient::closeHistory() {
     // A mode/peer change invalidates presentation, never the callback that owns
     // an accepted mailbox result. Hidden views still copy/release that result.
+    if (_rrcHistory) _history.refresh(); // A native RRC key is not a Direct peer binding.
     _history.close();
+    _rrcHistory = false;
+    if (_rrcViewRevision != UINT32_MAX) ++_rrcViewRevision;
 }
 
 void ServiceClient::requestHistory() {
@@ -219,12 +297,17 @@ void ServiceClient::requestHistory() {
     Request request;
     request.operation = query.kind == Window::Kind::Page ? Operation::HistoryPage :
                         query.kind == Window::Kind::Status ? Operation::HistoryStatus : Operation::ReadRecord;
+    if (_rrcHistory) request.operation = query.kind == Window::Kind::Page ? Operation::RrcHistoryPage :
+        query.kind == Window::Kind::Status ? Operation::RrcHistoryStatus : Operation::RrcHistoryRecord;
     request.query = query.nonce; request.argument = query.cursor.counter; request.incoming = query.cursor.incoming;
     request.offset = query.offset; request.historyDirection = query.direction;
     request.statusRevision = query.statusRevision;
     storage::encodeHex(query.peer, 16, request.peer);
-    submitReadQuery(_history, query.nonce, query.kind == Window::Kind::Status, request, nullptr, 0, query.capacity);
+    submitReadQuery(_history, query.nonce, query.kind == Window::Kind::Status, request,
+        _rrcHistory ? &_rrcConversation : nullptr, _rrcHistory ? sizeof _rrcConversation : 0, query.capacity);
 }
+
+#include "RrcClient.inc"
 
 void ServiceClient::watchConversations() { _conversationWindow.resume(_status.generation); }
 void ServiceClient::closeConversations() { _conversationWindow.close(); }
@@ -317,7 +400,12 @@ bool ServiceClient::scan(Completion completion) {
     Request request; request.operation = Operation::Scan;
     return submit(request, "", 4096, [this, completion](const Result& result, const char* data) {
         _scanJson = result.outcome == Outcome::Ok ? data : "[]";
-        if (completion) completion(result);
+        Result checked = result;
+        if (result.outcome == Outcome::Ok && _scanJson.length() != result.length) {
+            checked.outcome = Outcome::NoMemory;
+            checked.length = 0;
+        }
+        if (completion) completion(checked);
     }) != 0;
 }
 uint32_t ServiceClient::lifecycle(Operation operation, const std::string& identity) {

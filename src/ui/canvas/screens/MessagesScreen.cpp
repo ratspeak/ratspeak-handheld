@@ -1,19 +1,186 @@
 #include "MessagesScreen.h"
+#include "ui/FeatureAvailability.h"
 #include "StorageWindowAdapter.h"
 #include "Theme.h"
+#include "PageNavigation.h"
 #include "reticulum/AnnounceManager.h"
 #include "protocol/ProtocolBackend.h"
+#include "ui/RrcCommandId.h"
+#include "history/RrcCatalog.h"
+#include "storage/MessageStore.h"
 
 namespace {
 constexpr int NavigationHeight = 18;
-constexpr int NavigationGap = 8;
-constexpr int NavigationWidth = 46;
 }
+
+#if HANDHELD_RRC_UI_ENABLED
+void MessagesScreen::switchFamily() {
+    if (!handheld::ui::RrcEnabled) return;
+    exitContextMenu(); _rrc.navigation.direct(!_rrc.navigation.direct());
+    _rrc.refresh();
+    if (_rrc.navigation.direct()) _conversations.resume(1);
+    else _conversations.close();
+}
+void MessagesScreen::pollRrc() {
+    if (!handheld::ui::RrcEnabled || !_backend) return;
+    _rrc.observe(_backend->rrcStatus(),1);
+    if (!_rrc.needsRows()) return;
+    using Page = handheld::ui::RrcNavigation::Page;
+    using namespace handheld::rrc;
+    const auto view = _rrc.beginRows();
+    const auto page=_rrc.navigation.page();
+    if (page==Page::Channels || page==Page::SavedRooms || page==Page::Inbox || page==Page::RoomInfo || page==Page::Notifications) {
+        if (_deleteTicket.valid()) { _rrc.cancelRows(view);return; }
+        const auto status=_backend->rrcStatus();
+        const auto* hub=page==Page::Channels?status.hub:_rrc.navigation.conversation().hub;
+        handheld::storage::rrc::Record record;uint32_t cursor=0;
+        bool prepared=false;
+        if(page==Page::RoomInfo || page==Page::Notifications) {
+            handheld::storage::rrc::Context context;
+            prepared=_backend->rrcContext(hub,_rrc.navigation.conversation().room,nullptr,context) &&
+                handheld::storage::rrc::Record::make(record,context,handheld::storage::rrc::Kind::Preferences,nullptr,0);
+        } else if(page==Page::Inbox) {
+            handheld::storage::rrc::Context context;
+            prepared=_backend->rrcContext(hub,nullptr,nullptr,context) &&
+                handheld::storage::rrc::Record::make(record,context,handheld::storage::rrc::Kind::Preferences,reinterpret_cast<const uint8_t*>("HQN1"),4);
+            cursor=uint32_t(_rrc.navigation.offset());
+        } else prepared=handheld::history::rrc_catalog::prepare(*_backend,hub,page==Page::Channels,_rrc.navigation.offset(),record,cursor);
+        if (!_store || !prepared) {
+            _rrc.completeRows(view,false);return;
+        }
+        const auto submitted=_store->requestRrc(page==Page::Inbox?handheld::storage::Operation::RrcPrivateInbox:
+            page==Page::RoomInfo || page==Page::Notifications?handheld::storage::Operation::RrcRead:handheld::storage::Operation::RrcSavedRooms,
+            record,nullptr,cursor,0,_rrc.navigation.after()?handheld::storage::HistoryDirection::After:handheld::storage::HistoryDirection::Before);
+        if (!submitted.accepted()) {
+            if (submitted.rejection==handheld::storage::Rejection::Busy) _rrc.cancelRows(view);
+            else _rrc.completeRows(view,false);
+            return;
+        }
+        _deleteTicket=submitted.ticket;_deleteSettled=false;memcpy(_deletePeer,hub,16);
+        _rrcQueryView=view;_rrcQuerySession=status.generation;_rrcQueryRevision=status.revision;
+        _rrcQueryOffset=_rrc.navigation.offset();_rrcQueryPage=page;return;
+    }
+    if (page==Page::People && !_rrc.navigation.conversationCurrent()) { _rrc.completeRows(view,false);return; }
+    if (!_rrc.completeRows(view,true)) return;
+    switch (_rrc.navigation.page()) {
+    case Page::Hubs: case Page::HubInfo: { HubView rows[HubViewCapacity]; const auto count = _backend->rrcHubs(rows,HubViewCapacity); _rrc.rows(rows,count); break; }
+    case Page::People: { PersonView rows[PeopleCapacity]; const auto count = _backend->rrcPeople(_rrc.navigation.conversation().room,rows,PeopleCapacity); _rrc.rows(rows,count); break; }
+    case Page::Directory: { DirectoryView rows[5]; const auto count = _backend->rrcDirectory(rows,5,_rrc.navigation.offset()); _rrc.rows(rows,count,false,true); break; }
+    default: break;
+    }
+}
+bool MessagesScreen::pollRrcCatalog() {
+    if (!_rrcQueryView || !_deleteTicket.valid() || !_store || !_backend) return false;
+    handheld::storage::Result result;if (!_store->peekResult(_deleteTicket,result)) return false;
+    const auto status=_backend->rrcStatus();
+    const bool merged=_rrcQueryPage==handheld::ui::RrcNavigation::Page::Channels;
+    const bool current=_visible && !_rrc.navigation.direct() && _rrcQueryView==_rrc.navigation.revision() && _rrcQuerySession==status.generation &&
+        (!merged || _rrcQueryRevision==status.revision);
+    uint8_t bytes[handheld::storage::Budget::SmallPayload];
+    const bool read=current && result.length<=sizeof bytes && _store->readPayload(_deleteTicket,bytes,result.length);
+    if(_rrcQueryPage==handheld::ui::RrcNavigation::Page::Inbox) {
+        handheld::rrc::PrivateView rows[handheld::history::rrc_catalog::Capacity];size_t count=0;
+        const bool ok=read && handheld::history::rrc_catalog::privateRows(result,bytes,rows,count);
+        if(!_store->releaseResult(_deleteTicket)) return false;
+        const auto view=_rrcQueryView;_rrcQueryView=0;_deleteTicket={};
+        if(!current) _rrc.cancelRows(view);
+        else if(_rrc.completeRows(view,ok)) _rrc.rows(rows,count,result.more,true);
+        return true;
+    }
+    handheld::rrc::RoomView rows[handheld::history::rrc_catalog::Capacity];size_t count=0;bool more=false;
+    const bool detail=_rrcQueryPage==handheld::ui::RrcNavigation::Page::RoomInfo || _rrcQueryPage==handheld::ui::RrcNavigation::Page::Notifications;
+    const bool ok=read && (detail ? handheld::history::rrc_catalog::roomDetail(*_backend,_rrc.navigation.conversation(),result,bytes,rows[0]) :
+        handheld::history::rrc_catalog::project(*_backend,_deletePeer,merged,_rrcQueryOffset,result,bytes,rows,count,more));
+    if(detail && ok) count=1;
+    if (!_store->releaseResult(_deleteTicket)) return false;
+    const auto view=_rrcQueryView;_rrcQueryView=0;_deleteTicket={};
+    if (!current) _rrc.cancelRows(view);
+    else if (_rrc.completeRows(view,ok)) _rrc.rows(rows,count,more,true);
+    return true;
+}
+void MessagesScreen::prepareRrcForm() {
+    if (!_rrc.form() || _rrcFormView == _rrc.navigation.revision()) return;
+    _rrcInput.clearSensitive(); _rrcInput.setMaxLength(_rrc.formLimit());
+    _rrcInput.setActive(true); _rrcFormView = _rrc.navigation.revision(); _rememberKey = false;
+    _rrcInput.setSubmitCallback([this](const std::string& value) {
+        if (_backend && _rrc.submit(value.data(),value.size(),_backend->rrcStatus(),_rememberKey)) {
+            _rrcInput.clearSensitive(); _rrcFormView = 0;
+        }
+    });
+}
+void MessagesScreen::renderRrc(M5Canvas& canvas, int y) {
+    if (!_backend) return;
+    const auto status = _backend->rrcStatus();
+    canvas.setTextColor(Theme::TEXT_SECONDARY);
+    if (_deleteNotice || _rrc.navigation.page()!=handheld::ui::RrcNavigation::Page::Channels) {
+        ScrollList::renderRow(canvas,_deleteNotice ? _deleteNotice : _rrc.heading(),0,y,Theme::CONTENT_W,false);
+        y += Theme::LIST_ROW_H;
+    }
+    if (_rrc.form()) {
+        prepareRrcForm();
+        if (_rrc.navigation.page() == handheld::ui::RrcNavigation::Page::RoomKey) {
+            canvas.drawString(_rememberKey ? "Remember: yes (Ctrl+R)" : "Remember: no (Ctrl+R)",4,y);
+            y += Theme::CHAR_H + 2;
+        }
+        _rrcInput.render(canvas,0,y,Theme::CONTENT_W);
+        return;
+    }
+    if (!_rrc.ready()) { canvas.drawString("Loading...",4,y); return; }
+    const size_t visible = std::max(1,(Theme::CONTENT_Y + Theme::CONTENT_H-y)/Theme::LIST_ROW_H);
+    const auto selected = _rrc.navigation.selected();
+    const auto first = selected < _rrc.count() && selected >= visible ? selected-visible+1 : 0;
+    for (size_t n = first; n < _rrc.count() && n < first+visible; ++n) {
+        char text[112]; _rrc.label(n,status,text,sizeof text);
+        ScrollList::renderRow(canvas,text,0,y,Theme::CONTENT_W,n==selected);
+        y += Theme::LIST_ROW_H;
+        if (n == 0 && _rrc.navigation.page() == handheld::ui::RrcNavigation::Page::Channels)
+            canvas.drawFastHLine(2,y-1,Theme::CONTENT_W-4,Theme::DIVIDER);
+    }
+}
+bool MessagesScreen::handleRrcKey(const KeyEvent& event) {
+    if (!_backend) return true;
+    if (_rrc.form()) {
+        prepareRrcForm();
+        if (event.escape && !event.repeat) { _rrcInput.clearSensitive(); _rrc.back(); return true; }
+        if (event.ctrl && (event.character=='r' || event.character=='R')) { if (!event.repeat) _rememberKey=!_rememberKey; return true; }
+        return _rrcInput.handleKey(event);
+    }
+    if (event.escape || event.backspace) { if (!event.repeat) _rrc.back(); return true; }
+    auto selected = _rrc.navigation.selected();
+    if (event.navUp()) { _rrc.navigation.select(selected >= _rrc.count() ? _rrc.count()-1 : selected ? selected-1 : 0); return true; }
+    if (event.navDown()) { _rrc.navigation.select(selected >= _rrc.count() ? 0 : std::min(selected+1,_rrc.count()-1)); return true; }
+    if (event.enter) { if (!event.repeat) _rrc.activate(selected,_backend->rrcStatus()); return true; }
+    if (event.character=='r' || event.character=='R') { _rrc.refresh(); return true; }
+    return false;
+}
+
+#endif
 
 void MessagesScreen::onEnter() {
     _showingContext = false; _visible = true; _pageFocus = -1;
+#if HANDHELD_RRC_UI_ENABLED
+    if (!handheld::ui::RrcEnabled) _rrc.navigation.direct(true);
+    _rrc.visible(handheld::ui::RrcEnabled);
+    _rrc.openDirect=[this](const char* peer) {if(_openCb) _openCb(peer);};
+    _rrc.notice = [this](const char* text) { _deleteNotice = text; _deleteNoticeSince = millis(); };
+    _rrc.send = [this](const handheld::rrc::Command& value, const uint8_t* body, size_t length) {
+        if (!_backend) return handheld::rrc::Code::Offline;
+        auto command = value;
+        command.revision = handheld::ui::nextCardRrcCommand();
+        if (!command.revision) return handheld::rrc::Code::Full;
+        return _backend->rrcCommand(command,body,length);
+    };
+#endif
     // Cardputer identity switches commit through an orderly restart.
-    _conversations.resume(1);
+    if (directFamily()) _conversations.resume(1);
+}
+void MessagesScreen::onExit() {
+    _visible = false; _conversations.close();
+#if HANDHELD_RRC_UI_ENABLED
+    _rrc.visible(false);
+    // Secret forms never survive leaving the browser.
+    _rrcInput.clearSensitive(); _rrcFormView = 0;
+#endif
 }
 
 std::string MessagesScreen::peerHex(size_t index) const {
@@ -39,6 +206,11 @@ std::string MessagesScreen::peerLabel(const std::string& peer) const {
 }
 
 bool MessagesScreen::pollConversations(bool allowAdmission) {
+#if HANDHELD_RRC_UI_ENABLED
+    const auto rrcRevision = _rrc.revision();
+    pollRrcCatalog();
+    if (allowAdmission) pollRrc();
+#endif
     if (!_lxmf) return false;
     const auto publication = _conversations.revision(), statuses = _conversations.statusRevision();
     const auto state = _conversations.state(); const auto error = _conversations.error();
@@ -66,7 +238,11 @@ bool MessagesScreen::pollConversations(bool allowAdmission) {
         _pageFocus = pageEnabled(2) ? 2 : pageEnabled(1) ? 1 : -1;
     return publication != _conversations.revision() || statuses != _conversations.statusRevision() ||
         state != _conversations.state() || error != _conversations.error() || updated != _conversations.updated() ||
-        pageFocus != _pageFocus;
+        pageFocus != _pageFocus
+#if HANDHELD_RRC_UI_ENABLED
+        || rrcRevision != _rrc.revision()
+#endif
+        ;
 }
 
 void MessagesScreen::renderList(M5Canvas& canvas, int y, int height) {
@@ -98,27 +274,7 @@ void MessagesScreen::renderList(M5Canvas& canvas, int y, int height) {
 }
 
 void MessagesScreen::renderNavigation(M5Canvas& canvas, int y) {
-    constexpr int groupWidth = 4 * NavigationWidth + 3 * NavigationGap;
-    for (int action = 0; action < 4; ++action) {
-        const int x = (Theme::CONTENT_W - groupWidth) / 2 + action * (NavigationWidth + NavigationGap);
-        const bool enabled = pageEnabled(action), focused = enabled && _pageFocus == action;
-        canvas.fillRoundRect(x, y, NavigationWidth, NavigationHeight, 3,
-                             focused ? Theme::SELECTION_BG : Theme::BG_ELEVATED);
-        canvas.drawRoundRect(x, y, NavigationWidth, NavigationHeight, 3,
-                             focused ? Theme::ACCENT : Theme::BORDER);
-        const uint16_t color = !enabled ? Theme::TEXT_MUTED : focused ? Theme::ACCENT : Theme::TEXT_PRIMARY;
-        const bool doubled = action == 0 || action == 3, right = action >= 2;
-        const int width = doubled ? 14 : 6;
-        const int left = x + (NavigationWidth - width) / 2;
-        // Two-pixel strokes, centered by their actual ink bounds.
-        for (int chevron = 0; chevron < (doubled ? 2 : 1); ++chevron) {
-            for (int row = 0; row < 10; ++row) {
-                const int slope = row < 5 ? row : 9 - row;
-                canvas.drawFastHLine(left + chevron * 8 + (right ? slope : 4 - slope),
-                                    y + (NavigationHeight - 10) / 2 + row, 2, color);
-            }
-        }
-    }
+    handheld::canvas::drawPageNavigation(canvas, y, _pageFocus, [this](int action) { return pageEnabled(action); });
 }
 
 void MessagesScreen::showContextMenu(int idx) {
@@ -178,6 +334,9 @@ void MessagesScreen::executeContextAction() {
 }
 
 bool MessagesScreen::pollDeletion() {
+#if HANDHELD_RRC_UI_ENABLED
+    if (_rrcQueryView) return pollRrcCatalog();
+#endif
     if (!_deleteTicket.valid()) {
         if (_deleteNotice && uint32_t(millis() - _deleteNoticeSince) >= 4000) {
             _deleteNotice = nullptr;
@@ -217,14 +376,25 @@ void MessagesScreen::render(M5Canvas& canvas) {
     canvas.fillRect(0, y + 2, 3, headerH - 4, Theme::ACCENT);
     canvas.setTextColor(Theme::ACCENT);
     Theme::useUiFont(canvas);
+#if HANDHELD_RRC_UI_ENABLED
+    if (!_rrc.navigation.direct()) {
+        canvas.drawString((std::string("Direct  |  [") + _rrc.navigation.secondLabel() + "]   Tab").c_str(),8,y+2);
+        canvas.drawFastHLine(0,y+headerH,Theme::CONTENT_W,Theme::DIVIDER);
+        renderRrc(canvas,y+headerH+2); return;
+    }
+#endif
     bool unavailable = false;
     for (size_t i = 0; i < _conversations.count(); ++i)
-        unavailable |= bool(_conversations.row(i)->flags & (handheld::storage::ConversationView::Unavailable |
-                                                          handheld::storage::ConversationView::StatusUnavailable));
+        unavailable |= bool(_conversations.row(i)->flags & handheld::storage::ConversationView::Unavailable);
     const char* notice = _deleteNotice ? _deleteNotice : !_conversations.freshnessAvailable() ? "Refresh needed (R)" :
         unavailable || _conversations.state() == Conversations::State::Retrying ? "Read failed; R to retry" :
+        _conversations.statusRefreshDelayed() ? "Status refresh delayed (R)" :
         nullptr;
-    const auto heading = notice ? std::string(notice) : "Page " + std::to_string(_conversations.pageNumber());
+#if HANDHELD_RRC_UI_ENABLED
+    const auto heading = notice ? std::string(notice) : std::string("[Direct]  |  ") + _rrc.navigation.secondLabel() + "   Tab";
+#else
+    const auto heading = notice ? std::string(notice) : std::string("Chats");
+#endif
     canvas.drawString(heading.c_str(), 8, y + 2);
     canvas.drawFastHLine(0, y + headerH, Theme::CONTENT_W, Theme::DIVIDER);
     y += headerH + 2;
@@ -252,7 +422,7 @@ void MessagesScreen::render(M5Canvas& canvas) {
 }
 
 bool MessagesScreen::pageEnabled(int action) const {
-    return action >= 0 && action < 4 && !_conversations.loading() &&
+    return action >= 0 && action < 4 && !_conversations.pageLoading() &&
         (action < 2 ? _conversations.canPrevious() : _conversations.canNext());
 }
 
@@ -273,6 +443,10 @@ void MessagesScreen::movePageFocus(int direction) {
 }
 
 bool MessagesScreen::handleKey(const KeyEvent& event) {
+#if HANDHELD_RRC_UI_ENABLED
+    if (event.tab && !event.repeat && !_rrc.form() && !_showingContext) { switchFamily(); return true; }
+    if (!_rrc.navigation.direct()) return handleRrcKey(event);
+#endif
     if (event.repeat && (event.backspace || event.forwardDelete)) return true;
     if (_showingContext) {
         if (event.escape || event.backspace) {

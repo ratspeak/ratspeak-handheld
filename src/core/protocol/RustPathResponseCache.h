@@ -5,10 +5,11 @@
 #include <string.h>
 #include "transport/TxLease.h"
 
-// One bounded exact-packet cache for Python-compatible tagged path-response replay. Today's
-// transport tag gate suppresses duplicate tags before C++, so one slot is sufficient and costs
-// bounded BSS on the no-PSRAM board. The original queue lifetime travels with the bytes;
-// replay may bind a new output interface, but cannot renew the packet's age.
+// One bounded exact-packet cache utility. Runtime
+// response ownership lives in ProtocolRuntime's per-interface slots, including fresh followups
+// while a replay is blocked. The Rust tag cache is bounded and can evict earlier duplicates.
+// The original queue lifetime travels with these bytes; replay may bind a new output
+// interface, but cannot renew the packet's age.
 class RustPathResponseCache {
 public:
     static constexpr size_t MAX_PACKET = 500;

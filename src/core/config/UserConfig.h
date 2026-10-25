@@ -5,12 +5,17 @@
 #include <vector>
 #include <cstring>
 #include <new>
+#include <type_traits>
 #include <utility>
 #include "storage/FlashStore.h"
 #include "storage/SDStore.h"
 #include "config/Config.h"
 #include "config/BoardConfig.h"
 #include "config/ConfigMemory.h"
+#include "config/PropagationSettings.h"
+#include "voice/VoiceTypes.h"
+
+namespace handheld::config { class JsonWriter; }
 
 enum RatWiFiMode : uint8_t { RAT_WIFI_OFF = 0, RAT_WIFI_AP = 1, RAT_WIFI_STA = 2 };
 
@@ -49,7 +54,9 @@ struct TCPEndpoint {
     bool autoConnect = true;
 };
 
-struct UserSettings {
+// Fixed-size values. Copying them never allocates, so a scalar edit is staged
+// and persisted without cloning credentials, endpoints or names.
+struct UserScalars {
     // Radio
     uint8_t radioRegion = REGION_AMERICAS;
     uint32_t loraFrequency = LORA_DEFAULT_FREQ;
@@ -63,19 +70,15 @@ struct UserSettings {
     // WiFi
     RatWiFiMode wifiMode = BOARD_DEFAULT_WIFI_MODE;
     RatWiFiMode wifiRestoreMode = RAT_WIFI_STA;
-    String wifiAPSSID;
-    String wifiAPPassword = WIFI_AP_PASSWORD;
-    std::vector<WiFiNetwork> wifiSTANetworks;
     uint8_t wifiSTASelected = 0;
 
     // AutoInterface (Reticulum LAN auto-discovery via IPv6 multicast).
     // Active only in STA mode; opt-in until proven stable on real APs.
     bool   autoIfaceEnabled  = false;
-    String autoIfaceGroupId  = "reticulum";
     uint8_t autoIfaceMaxPeers = BOARD_DEFAULT_AUTOIFACE_MAX_PEERS;
 
-    // TCP outbound connections (STA mode only)
-    std::vector<TCPEndpoint> tcpConnections;
+    handheld::propagation::Settings propagation;
+    handheld::voice::Settings voice;
 
     // Display
     uint16_t screenDimTimeout = 30;   // seconds
@@ -116,7 +119,6 @@ struct UserSettings {
     uint8_t audioVolume = 80;  // 0-100
 
     // Identity
-    String displayName;
     bool nameComplete = false; // Mirrored from the bound identity slot; empty is a choice.
 
     // Storage. Removable SD stores plaintext unless explicitly enabled; boards
@@ -128,6 +130,17 @@ struct UserSettings {
 
     // Developer mode — unlocks custom radio parameters
     bool devMode = false;
+};
+static_assert(std::is_trivially_copyable<UserScalars>::value, "Scalar settings must copy without allocation");
+
+struct UserSettings : UserScalars {
+    String wifiAPSSID;
+    String wifiAPPassword = WIFI_AP_PASSWORD;
+    std::vector<WiFiNetwork> wifiSTANetworks;
+    String autoIfaceGroupId  = "reticulum";
+    // TCP outbound connections (STA mode only)
+    std::vector<TCPEndpoint> tcpConnections;
+    String displayName;
 };
 
 class UserConfig {
@@ -157,11 +170,9 @@ public:
     bool load(FlashStore& flash);
     bool save(FlashStore& flash);
 
-    // Internal flash is authoritative; removable SD is a repairable mirror.
+    // Save only to internal flash. SD is read-only legacy recovery input.
     bool load(SDStore& sd, FlashStore& flash);
     bool save(SDStore& sd, FlashStore& flash);
-    bool flushPending(SDStore& sd, FlashStore& flash);
-    bool mirrorPending() const { return _mirrorPending || _nvsMirrorPending; }
     bool recoveryRequired() const { return _recoveryRequired; }
     bool settingsPending() const { return _namePending; }
     enum class Source : uint8_t { Absent, Flash, FlashBackup, Nvs, Sd, Unavailable, Invalid };
@@ -172,6 +183,11 @@ public:
 
     // Value snapshots for the UI/service boundary; no storage access.
     String encode() { return serializeToJson(false, SnapshotLimit); }
+    // encode()'s exact length without allocating it; zero when encode() would fail.
+    size_t snapshotLength() {
+        size_t length = 0;
+        return prepareJson(false, SnapshotLimit, length) == SaveResult::Complete ? length : 0;
+    }
     bool decode(const String& json) { return parseJson(json, false); }
     bool decode(const char* json, size_t length) { return parseJson(json, length, false); }
     static constexpr size_t StoredLimit = 32768;
@@ -184,17 +200,25 @@ private:
     bool parseJson(const String& json, bool persisted = true, bool* unavailable = nullptr);
     bool parseJson(const char* json, size_t length, bool persisted = true, bool* unavailable = nullptr);
     String serializeToJson(bool persisted = true, size_t limit = StoredLimit, bool* unavailable = nullptr);
+    // Strings and lists come from this value; scalars from the argument, so a
+    // staged scalar edit serializes against canonical settings without a copy.
+    void writeJson(handheld::config::JsonWriter&, bool persisted, const UserScalars& scalars) const;
+    enum class SaveResult : uint8_t { Complete, Invalid, NoMemory, StorageError };
+    static SaveResult saveMemoryFailure(const char* phase, size_t length);
+    SaveResult prepareJson(bool persisted, size_t limit, size_t& length);
+    SaveResult measureJson(bool persisted, size_t limit, const UserScalars& scalars, size_t& length) const;
+    class JsonSource;
     bool saveRequired(FlashStore& flash);
-    bool saveRequired(FlashStore& flash, const String& encoded);
+    SaveResult savePrepared(FlashStore& flash, size_t length) { return savePrepared(flash, length, _settings); }
+    SaveResult savePrepared(FlashStore& flash, size_t length, const UserScalars& scalars);
     void copyStateFrom(const UserConfig& source) noexcept;
     uint8_t _nameIdentity[16]{};
     bool _nameBound = false;
     bool _namePending = false;
     Source _source = Source::Absent;
+    static void sanitizeScalars(UserScalars& settings);
     static void sanitizeSettings(UserSettings& settings);
 
     UserSettings _settings;
-    bool _mirrorPending = false;
-    bool _nvsMirrorPending = false;
     bool _recoveryRequired = false;
 };

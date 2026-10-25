@@ -326,6 +326,34 @@ pub unsafe extern "C" fn rs_handheld_rns_resource_advertisement_hash(
     })
 }
 
+/// Inspect the request ID of a response advertisement before admission. This
+/// validates its grammar and purpose, but not size/compression support.
+///
+/// # Safety
+/// `adv` reads `length` bytes; `out_id` writes 16 bytes, non-null/disjoint.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rs_handheld_rns_resource_response_id(
+    adv: *const u8,
+    length: usize,
+    out_id: *mut [u8; 16],
+) -> RsHandheldStatus {
+    guard(|| {
+        if adv.is_null() || out_id.is_null() || length > LINK_MDU {
+            return RsHandheldStatus::ErrInvalidArg;
+        }
+        // SAFETY: bounded readable caller input.
+        let data = unsafe { core::slice::from_raw_parts(adv, length) };
+        let Ok(id) = ResourceAdv::response_id(data) else {
+            return RsHandheldStatus::ErrInvalidArg;
+        };
+        // SAFETY: checked writable 16-byte output.
+        unsafe {
+            *out_id = id;
+        }
+        RsHandheldStatus::Ok
+    })
+}
+
 /// RECEIVER: parse an advertisement payload (link-decrypted RESOURCE_ADV) and accept the
 /// transfer, replacing any previous inbound transfer on this context. Enforces the lite
 /// honest-subset rules fail-closed: `ErrUnsupported` for compressed / multi-segment / metadata /
@@ -347,6 +375,70 @@ pub unsafe extern "C" fn rs_handheld_rns_resource_advertise_accept(
     out_transfer_size: *mut u32,
     out_data_size: *mut u32,
     out_resource_hash: *mut [u8; 32],
+) -> RsHandheldStatus {
+    // SAFETY: preserves the public caller contract; ordinary Resources have no request ID.
+    unsafe {
+        accept_resource(
+            ctx,
+            adv,
+            adv_len,
+            out_num_parts,
+            out_transfer_size,
+            out_data_size,
+            out_resource_hash,
+            None,
+        )
+    }
+}
+
+/// Accept only a response Resource bound to a live request on the same Link.
+/// The host must check Link/interface incarnation and deadline before calling;
+/// the assembled response envelope must independently match this request ID.
+/// All ordinary size/compression/crypto restrictions remain in force.
+///
+/// # Safety
+/// Same contract as advertise_accept; `expected_request_id` reads 16 bytes,
+/// disjoint from all output regions. All required pointers must be non-null.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn rs_handheld_rns_resource_response_accept(
+    ctx: *mut RsHandheldRns,
+    adv: *const u8,
+    adv_len: usize,
+    out_num_parts: *mut u32,
+    out_transfer_size: *mut u32,
+    out_data_size: *mut u32,
+    out_resource_hash: *mut [u8; 32],
+    expected_request_id: *const [u8; 16],
+) -> RsHandheldStatus {
+    if expected_request_id.is_null() {
+        return RsHandheldStatus::ErrInvalidArg;
+    }
+    // SAFETY: caller's readable ID and original Resource contract.
+    unsafe {
+        accept_resource(
+            ctx,
+            adv,
+            adv_len,
+            out_num_parts,
+            out_transfer_size,
+            out_data_size,
+            out_resource_hash,
+            Some(&*expected_request_id),
+        )
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn accept_resource(
+    ctx: *mut RsHandheldRns,
+    adv: *const u8,
+    adv_len: usize,
+    out_num_parts: *mut u32,
+    out_transfer_size: *mut u32,
+    out_data_size: *mut u32,
+    out_resource_hash: *mut [u8; 32],
+    expected_request_id: Option<&[u8; 16]>,
 ) -> RsHandheldStatus {
     guard(|| {
         if ctx.is_null()
@@ -376,7 +468,11 @@ pub unsafe extern "C" fn rs_handheld_rns_resource_advertise_accept(
             Some(b) => b,
             None => return RsHandheldStatus::ErrInternal,
         };
-        if let Err(e) = inbound.from_advertisement_into(&parsed) {
+        let accepted = match expected_request_id {
+            Some(id) => inbound.from_response_into(&parsed, id),
+            None => inbound.from_advertisement_into(&parsed),
+        };
+        if let Err(e) = accepted {
             return resource_status(e);
         }
         // SAFETY: out pointers non-null + writable per the contract.
@@ -402,6 +498,8 @@ pub unsafe extern "C" fn rs_handheld_rns_resource_advertise_accept(
 /// `*out_complete` (all parts present -> call `rs_handheld_rns_resource_assemble`).
 /// `ErrNotReady` if no inbound transfer is open.
 ///
+/// Unknown, malformed or out-of-window parts return `ErrInvalidArg` without
+/// changing outputs. A matching received duplicate returns `Ok` with new=0.
 /// # Safety
 /// `ctx` live; `part` `part_len` readable bytes; `out_new`/`out_complete` writable i32s.
 #[unsafe(no_mangle)]
@@ -423,6 +521,9 @@ pub unsafe extern "C" fn rs_handheld_rns_resource_part_ingest(
         };
         // SAFETY: non-null + correctly sized per the contract.
         let part = unsafe { core::slice::from_raw_parts(part, part_len) };
+        if !res.matches_part(part) {
+            return RsHandheldStatus::ErrInvalidArg;
+        }
         let is_new = res.receive_part(part);
         unsafe {
             *out_new = is_new as i32;
@@ -522,7 +623,9 @@ pub unsafe extern "C" fn rs_handheld_rns_resource_window_shrink(
 
 /// RECEIVER: reassemble the completed transfer — Token-decrypt the concatenated parts with the
 /// 64-byte link session `key`, verify the resource hash over the plaintext, and copy the payload
-/// into `out`/`*out_len`. Then emit the delivery proof via `rs_handheld_rns_resource_proof_build`.
+/// into `out`/`*out_len`. Repeated calls copy the already authenticated assembly,
+/// allowing bounded identity discovery before application validation/storage.
+/// Then emit the delivery proof via `rs_handheld_rns_resource_proof_build`.
 /// `ErrNotReady` if no inbound transfer is open or parts are missing; `ErrCapacity` if `out_cap`
 /// is below this transfer's WORST-CASE plaintext — the advertised `data_size` rounded up to the
 /// AES block (up to `data_size + 15`): the check runs before the one-shot decrypt, so it must
@@ -559,10 +662,15 @@ pub unsafe extern "C" fn rs_handheld_rns_resource_assemble(
         if out_cap < max_data {
             return RsHandheldStatus::ErrCapacity;
         }
-        let keys = LinkKeys::from_combined(unsafe { &*key });
-        let n = match res.assemble(&keys) {
-            Ok(n) => n,
-            Err(e) => return resource_status(e),
+        let n = match res.data() {
+            Some(data) => data.len(),
+            None => {
+                let keys = LinkKeys::from_combined(unsafe { &*key });
+                match res.assemble(&keys) {
+                    Ok(n) => n,
+                    Err(e) => return resource_status(e),
+                }
+            }
         };
         let data = res.data().expect("assembled resource has data");
         // SAFETY: non-null + capacity checked above (n <= max_data <= out_cap).

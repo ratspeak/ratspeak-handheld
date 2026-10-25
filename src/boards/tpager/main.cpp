@@ -1,5 +1,6 @@
 #include "LvMemory.h"
 #include "runtime/FactoryResetRecovery.h"
+#include "runtime/StorageStartup.h"
 #include "runtime/DiscoveryStartup.h"
 #include "hal/NetworkTime.h"
 #include "radio/RadioSettings.h"
@@ -36,10 +37,13 @@
 #include "screens/LvHomeScreen.h"
 #include "screens/LvNodesScreen.h"
 #include "screens/LvMessagesScreen.h"
+#include "LvVoicePanel.h"
+#include "voice/VoiceInput.h"
 #include "screens/LvMessageView.h"
 #include "screens/LvContactsScreen.h"
 #include "screens/LvSettingsScreen.h"
 #include "screens/LvHelpOverlay.h"
+#include "screens/LvNoticeOverlay.h"
 #include "screens/LvQrOverlay.h"
 #include "ui/LvPowerOffOverlay.h"
 #include "screens/LvNameInputScreen.h"
@@ -48,6 +52,7 @@
 #include "storage/FlashStore.h"
 #include "storage/SDStore.h"
 #include "storage/MessageStore.h"
+#include "ui/RollOffNotice.h"
 #include "reticulum/AnnounceManager.h"
 #include "reticulum/LXMFManager.h"
 #include "reticulum/IdentityManager.h"
@@ -124,6 +129,7 @@ handheld::ServiceRunner serviceRunner(deviceService);
 handheld::WiFiConnection wifiConnection;
 static bool homeAnnounceRequested = false;
 static bool serviceAvailable = false;
+static bool rollOffChecked = false;
 static void serviceNetworkPoll();
 static void applyUiSettings();
 #if HAS_GPS
@@ -135,14 +141,17 @@ LvBootScreen lvBootScreen;
 LvHomeScreen lvHomeScreen;
 LvNodesScreen lvNodesScreen;
 LvMessagesScreen lvMessagesScreen;
+LvVoicePanel lvVoicePanel;
 LvContactsScreen lvContactsScreen;
 LvMessageView lvMessageView;
 LvSettingsScreen lvSettingsScreen;
 LvHelpOverlay lvHelpOverlay;
+LvNoticeOverlay lvNoticeOverlay;
 LvQrOverlay lvQrOverlay;
 LvPowerOffOverlay lvPowerOffOverlay;
 void performPowerOff();
 static std::atomic<bool> serialPowerOffRequested{false};
+static std::atomic<bool> serialBatteryRequested{false};
 LvNameInputScreen lvNameInputScreen;
 LvTimezoneScreen lvTimezoneScreen;
 LvDataCleanScreen lvDataCleanScreen;
@@ -280,7 +289,7 @@ static ProtocolBackend::AnnounceResult announceWithName(bool silent = false) {
         Serial.println("[ANNOUNCE-TX] skipped: no active transport");
         return ProtocolBackend::AnnounceResult::Failed;
     }
-    rs::Bytes appData = encodeAnnounceName(userConfig.settings().displayName);
+    rs::Bytes appData = encodeAnnounceName(userConfig.settings().displayName, backend->destinationHashHex().c_str());
     Serial.printf("[ANNOUNCE-TX] name=\"%s\" appData=%d bytes silent=%s\n",
         userConfig.settings().displayName.c_str(), (int)appData.size(),
         silent ? "yes" : "no");
@@ -300,7 +309,7 @@ static ProtocolBackend::AnnounceResult announceWithName(bool silent = false) {
 static void pollScheduledAnnounces() {
     using Scheduler = handheld::AnnounceScheduler;
     const auto event = announceScheduler.poll(uint32_t(millis()), userConfig.settings().announceInterval,
-        rustLoraIface.isOnline() && rustLoraIface.airtimeUtilization() > LoRaInterface::AIRTIME_THROTTLE,
+        rustLoraIface.isOnline() && rustLoraIface.airtimeLimited(),
         [](Scheduler::Action, uint8_t) {
             const auto result = announceWithName(true);
             return result == ProtocolBackend::AnnounceResult::Sent ? Scheduler::Result::Sent :
@@ -396,8 +405,12 @@ void onHotkeyRssiMonitor() { serviceClient.action(handheld::Operation::Diagnosti
 
 void setup() {
     ratspeakRetainComponentId(RATSPEAK_COMPONENT_ID("tpager", "standalone"));
-    diagnostics.boardHelp = "[SERIAL] O power-off";
+    diagnostics.boardHelp = "[SERIAL] B battery/charger, O power-off";
     diagnostics.boardCommand = [](char command) {
+        if (command == 'B') {
+            serialBatteryRequested.store(true, std::memory_order_release);
+            return true;
+        }
         if (command != 'O') return false;
         // Serial runs on the protocol task; the UI owns lifecycle submission
         // and the eventual PMU action after the service has settled.
@@ -458,17 +471,18 @@ void setup() {
     if (!launcherBoot.ok) {
         Serial.printf("[BOOT] Launcher return unavailable: %s\n", launcherBoot.message);
     }
+    // Step 2: Initialize I2C bus, then enable T-Pager peripheral rails.
+    Wire.begin(I2C_SDA, I2C_SCL);
+    Wire.setClock(400000);
+    Wire.setTimeOut(20);
+    powerMgr.begin();
+    Power::enablePeripherals();
+
     if (!psramFound() || heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) < 1024 * 1024) {
         Serial.printf("[BOOT] FATAL: PSRAM unavailable or too fragmented (largest=%lu)\n",
                       (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
         while (true) delay(1000);
     }
-
-    // Step 2: Initialize I2C bus, then enable T-Pager peripheral rails.
-    Wire.begin(I2C_SDA, I2C_SCL);
-    Wire.setClock(400000);
-    Wire.setTimeOut(20);
-    Power::enablePeripherals();
 
     // Step 3: Initialize shared SPI bus
     sharedSPI.begin(SPI_SCK, SPI_MISO, SPI_MOSI);
@@ -604,8 +618,9 @@ void setup() {
     lvBootScreen.setProgress(0.55f, "Input ready");
     // (LVGL boot renders via lv_timer_handler in setProgress)
 
-    // A reset intent is checked before early config load. Display and input
-    // are now ready; recover explicitly before any config/identity import.
+    // Unmounted storage, then a reset intent, are resolved before early config
+    // use. Display and input are now ready; recover before any import.
+    handheld::storageStartup(flash, keyboard, display.gfx(), []() { ESP.restart(); });
     handheld::factoryResetRecovery(flash, sdStore, keyboard, display.gfx(), []() { ESP.restart(); });
 
     // Refuse a known SD initialization failure before dependent imports/writes.
@@ -702,9 +717,14 @@ void setup() {
     // Step 16: Message store
     lvBootScreen.setProgress(0.72f, "Starting messaging...");
     // (LVGL boot renders via lv_timer_handler in setProgress)
-    if (!messageStore.begin(&flash, &sdStore, userConfig.settings().sdStorageEnabled)) {
+    const auto messages = messageStore.beginForBoot(&flash, &sdStore, userConfig.settings().sdStorageEnabled);
+    if (messages == MessageStore::BootResult::Failed) {
         lvBootScreen.showError("Storage could not start.\nYour saved messages have been preserved.");
         for (;;) { lv_timer_handler(); delay(20); }
+    }
+    if (messages == MessageStore::BootResult::InternalOnly) {
+        lvBootScreen.setProgress(0.72f, "SD card messages not loaded");
+        for (const unsigned long start = millis(); millis() - start < 3000;) { lv_timer_handler(); delay(20); }
     }
 
     // Protocol runtime lifecycle: init -> identity -> boot-seed ->
@@ -755,10 +775,8 @@ void setup() {
 
 
     // Step 20: Boot loop recovery
-    if (bootLoopRecovery) {
-        userConfig.settings().wifiMode = RAT_WIFI_OFF;
-        Serial.println("[BOOT] WiFi forced OFF (boot loop recovery)");
-    }
+    // This boot only; a later save must not persist the recovery mode.
+    if (bootLoopRecovery) Serial.println("[BOOT] WiFi forced OFF (boot loop recovery)");
     lvBootScreen.setProgress(0.83f, "Config loaded");
     // (LVGL boot renders via lv_timer_handler in setProgress)
 
@@ -775,11 +793,11 @@ void setup() {
     // (LVGL boot renders via lv_timer_handler in setProgress)
 
     // Step 22: WiFi start
-    RatWiFiMode wifiMode = userConfig.settings().wifiMode;
+    const RatWiFiMode wifiMode = bootLoopRecovery ? RAT_WIFI_OFF : userConfig.settings().wifiMode;
     ui.lvStatusBar().setWiFiEnabled(wifiMode != RAT_WIFI_OFF);
     lvBootScreen.setProgress(0.87f, wifiMode == RAT_WIFI_AP ? "Starting WiFi AP..." :
         wifiMode == RAT_WIFI_STA ? "WiFi STA starting..." : "WiFi disabled");
-    if (!network.begin(userConfig.settings())) Serial.println("[WIFI] Selected mode could not start");
+    if (!network.begin(userConfig.settings(), wifiMode)) Serial.println("[WIFI] Selected mode could not start");
     ui.lvStatusBar().setWiFiActive(network.accessPoint() && network.accessPoint()->isAPActive());
 
     // Step 23: BLE stays disabled in default builds.
@@ -789,7 +807,6 @@ void setup() {
     // Step 24: Power manager
     lvBootScreen.setProgress(0.92f, "Power manager...");
     // (LVGL boot renders via lv_timer_handler in setProgress)
-    powerMgr.begin();
     powerMgr.setDimTimeout(userConfig.settings().screenDimTimeout);
     powerMgr.setOffTimeout(userConfig.settings().screenOffTimeout);
     powerMgr.setBrightness(userConfig.settings().brightness);
@@ -843,9 +860,10 @@ void setup() {
 
     serviceClient.onNotice = [](const char* message) {
         ui.lvStatusBar().showToast(message, 2000);
-        if (strcmp(message, "New message") == 0) audio.requestMessage();
+        if (strcmp(message, "New message") == 0 || strcmp(message,"New hub message")==0) audio.requestMessage();
     };
     serviceClient.onConfigApplied = applyUiSettings;
+    serviceClient.beforeLifecycle = [] { return lvMessageView.prepareMaintenance(); };
     deviceService.pollNetwork = serviceNetworkPoll;
     deviceService.networkStatus = [](handheld::Status& status) {
 #if HAS_GPS
@@ -865,8 +883,11 @@ void setup() {
     deviceService.applyRadio = [](const UserSettings& settings, bool accepting) {
         return applyLiveRadioSettings(radio, rustLoraIface, settings, accepting);
     };
+    deviceService.networkCommitted = [](const UserSettings& s, uint8_t changes) {
+        network.settingsCommitted(s, changes);
+    };
     deviceService.applyPeripherals = [](const UserSettings& s) {
-        const auto data = encodeAnnounceName(s.displayName);
+        const auto data = encodeAnnounceName(s.displayName, backend->destinationHashHex().c_str());
         protocolRuntime.seedAnnounceAppData(data.data(), data.size());
 #if HAS_GPS
         gps.setTimeEnabled(s.gpsTimeEnabled);
@@ -889,7 +910,7 @@ void setup() {
         case 4: diagnostics.startRssiMonitor(); break;
         }
     };
-    deviceService.startScan = []() { wifiConnection.startScan(); };
+    deviceService.startScan = []() { return wifiConnection.startScan(); };
     deviceService.finishScan = [](String& json) { return wifiConnection.finishScan(json); };
     deviceService.closeAdmissions = []() {
         announceScheduler.stop();
@@ -915,6 +936,8 @@ void setup() {
     lvSettingsScreen.setService(&serviceClient);
     lvMessageView.setService(&serviceClient);
     lvMessagesScreen.setService(&serviceClient);
+    lvVoicePanel.begin(&serviceClient);
+    ui.setVoicePanel(&lvVoicePanel);
     lvContactsScreen.setService(&serviceClient);
     lvNodesScreen.setService(&serviceClient);
     lvHomeScreen.setService(&serviceClient);
@@ -965,7 +988,7 @@ void setup() {
             }
         }
         serviceClient.applySettings([](const handheld::Result& result) {
-            if (result.outcome == handheld::Outcome::Ok) ui.lvStatusBar().showToast("Saved; reboot to apply", 2500);
+            if (result.outcome == handheld::Outcome::Ok) ui.lvStatusBar().showToast("TCP saved", 2000);
         }, false);
     });
     lvHomeScreen.setWiFiToggleCallback([]() {
@@ -1010,7 +1033,7 @@ void setup() {
     lvContactsScreen.setAnnounceManager(&serviceClient.nodes);
     lvContactsScreen.setUIManager(&ui);
     lvContactsScreen.setNodeSelectedCallback([](const std::string& peerHex) {
-        lvMessageView.setPeerHex(peerHex);
+        if (!lvMessageView.setPeerHex(peerHex)) return;
         ui.lvTabBar().setActiveTab(LvTabBar::TAB_MSGS);
         ui.setScreen(&lvMessageView);
     });
@@ -1019,7 +1042,7 @@ void setup() {
     lvNodesScreen.setUIManager(&ui);
     lvNodesScreen.setUserConfig(&serviceClient.config);
     lvNodesScreen.setNodeSelectedCallback([](const std::string& peerHex) {
-        lvMessageView.setPeerHex(peerHex);
+        if (!lvMessageView.setPeerHex(peerHex)) return;
         ui.lvTabBar().setActiveTab(LvTabBar::TAB_MSGS);
         ui.setScreen(&lvMessageView);
     });
@@ -1028,10 +1051,13 @@ void setup() {
     lvMessagesScreen.setBackend(&serviceClient.protocol);
     lvMessagesScreen.setUIManager(&ui);
     lvMessagesScreen.setOpenCallback([](const std::string& peerHex) {
-        lvMessageView.setPeerHex(peerHex);
+        if (!lvMessageView.setPeerHex(peerHex)) return;
         ui.setScreen(&lvMessageView);
     });
 
+    lvMessagesScreen.setRrcOpenCallback([](const handheld::rrc::Conversation& binding,const char* insert) {
+        if (lvMessageView.setRrcConversation(binding,insert)) ui.setScreen(&lvMessageView);
+    });
     lvMessageView.setBackend(&serviceClient.protocol);
     lvMessageView.setAnnounceManager(&serviceClient.nodes);
     lvMessageView.setUIManager(&ui);
@@ -1163,6 +1189,7 @@ void setup() {
         keyboard.backlightOn();
     }
 
+    powerMgr.activity(); // Idle timeouts start after boot, as on the other boards.
     Serial.println("[BOOT] rsPager ready");
     Serial.printf("[BOOT] Summary: radio=%s flash=%s sd=%s\n",
                   radioOnline ? "ONLINE" : "OFFLINE",
@@ -1274,8 +1301,10 @@ static void serviceNetworkPoll() {
 void loop() {
     lvSettingsScreen.pollFirmwareCheck();
     if (serialPowerOffRequested.exchange(false, std::memory_order_acq_rel)) performPowerOff();
+    if (serialBatteryRequested.exchange(false, std::memory_order_acq_rel)) powerMgr.printBatteryDiagnostics();
     serviceRunner.cooperativeTick();
     serviceClient.poll();
+    lvMessageView.pollRrc();
     if (homeAnnounceRequested && serviceClient.status().state == handheld::ServiceState::Running &&
         serviceClient.action(handheld::Operation::HomeReady)) homeAnnounceRequested = false;
     static uint32_t previousInputLoop = 0, maxInputGap = 0, lastUiMetrics = 0;
@@ -1328,9 +1357,10 @@ void loop() {
     // While tab-cycling (navbar mode) screens never own long-press: focus is hidden,
     // so acting on it would be invisible.
     if (inputManager.hadLongPress()) {
-        bool screenOwns = !lvQrOverlay.isVisible() && (ui.isBootMode() || !wheelNavbarMode);
+        bool screenOwns = !lvQrOverlay.isVisible() && !lvNoticeOverlay.isVisible() && (ui.isBootMode() || !wheelNavbarMode);
         if (!(screenOwns && ui.handleLongPress())) {
-            powerMgr.forceScreenOff();
+            handheld::voice::VoiceInput::instance().cancel();
+        powerMgr.forceScreenOff();
         }
     }
 
@@ -1349,11 +1379,13 @@ void loop() {
         if (lvPowerOffOverlay.isVisible()) {
             lvPowerOffOverlay.handleKey(evt);
         }
+        else if (lvNoticeOverlay.handleKey(evt)) {}
         // Help overlay intercepts all keys when visible
         else if (lvHelpOverlay.isVisible()) {
             lvHelpOverlay.handleKey(evt);
         }
         // QR controls own navigation while the overlay is visible.
+        else if (lvVoicePanel.handleKey(evt)) {}
         else if (lvQrOverlay.isVisible()) {
             lvQrOverlay.handleKey(evt);
         }
@@ -1362,7 +1394,7 @@ void loop() {
             // settings text entry from being preempted by global shortcuts.
             bool consumed = false;
             if (!ui.isBootMode() && wheelNavbarMode) {
-                if (evt.encoder && (evt.up || evt.down)) {
+                if (evt.source == InputSource::Wheel && (evt.up || evt.down)) {
                     cycleWheelNavbar(evt.up ? -1 : 1);
                     consumed = true;
                 } else if (evt.enter || evt.character == '\n' || evt.character == '\r') {
@@ -1425,12 +1457,15 @@ void loop() {
         }
     }
 
+    lvVoicePanel.poll(powerMgr.isScreenOn() && serviceClient.available() && serviceClient.status().state==handheld::ServiceState::Running && !lvHelpOverlay.isVisible() && !lvQrOverlay.isVisible() && !lvPowerOffOverlay.isVisible() && !lvNoticeOverlay.isVisible());
+    if(lvVoicePanel.active() && powerMgr.isScreenOn()) powerMgr.activity();
     audio.loop();
     powerMgr.loop();
     if (powerMgr.screenSleepGestureFired()) {
         if (lvPowerOffOverlay.isVisible()) {
             lvPowerOffOverlay.hide();
         }
+        handheld::voice::VoiceInput::instance().cancel();
         powerMgr.forceScreenOff();
     }
     if (millis() - lastStatusUpdate >= 100) {
@@ -1442,10 +1477,19 @@ void loop() {
         ui.lvStatusBar().setWiFiActive(status.wifi || status.ap);
         ui.lvStatusBar().setTCPConnected(status.tcpUp != 0);
         ui.lvStatusBar().setAutoIfacePeers(status.autoPeers);
+        if (status.historyRolledOff && !rollOffChecked && !ui.isBootMode()) {
+            rollOffChecked = true;
+            namespace text = handheld::ui::storage_history;
+            if (!text::rollOffSeen()) {
+                lvHelpOverlay.hide(); lvNoticeOverlay.show(text::RollOffTitle, text::RollOffNotice, text::markRollOffSeen);
+            }
+        }
         if (powerMgr.isScreenOn()) {
             ui.lvStatusBar().setBatteryPercent(powerMgr.batteryPercent());
             ui.lvStatusBar().setBatteryDisplay(serviceClient.config.settings().batteryDisplay);
             ui.lvStatusBar().setUse24Hour(serviceClient.config.settings().use24HourTime);
+            lvMessagesScreen.setUse24Hour(serviceClient.config.settings().use24HourTime);
+            lvMessageView.setUse24Hour(serviceClient.config.settings().use24HourTime);
             ui.lvStatusBar().updateTime();
 #if HAS_GPS
             ui.lvStatusBar().setGPSFix(status.gpsFix);

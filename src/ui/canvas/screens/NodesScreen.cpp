@@ -3,6 +3,10 @@
 #include <algorithm>
 
 void NodesScreen::onEnter() {
+    _showingActions = false;
+    _peers.reset();
+    const int bodyHeight = Theme::CONTENT_H - Theme::SECTION_HEADER_H - 2;
+    _peers.configure(Theme::LIST_ROW_H, (bodyHeight / Theme::LIST_ROW_H) * Theme::LIST_ROW_H);
     refreshList();
 }
 
@@ -30,7 +34,7 @@ static std::string truncUTF8(const std::string& name, size_t maxChars) {
 
 // Helper: format a node line
 static void formatNodeLine(char* line, size_t lineSize, const DiscoveredNode& node) {
-    std::string displayName = truncUTF8(node.name, 18);
+    std::string displayName = truncUTF8(node.name.empty() ? node.hash.toHex().substr(0, 12) : node.name, 18);
     if (node.lastSeen == 0) {
         snprintf(line, lineSize, "%-20s saved", displayName.c_str());
         return;
@@ -61,97 +65,14 @@ static uint16_t stalenessColor(const DiscoveredNode& node) {
 void NodesScreen::refreshList() {
     if (!_announces) return;
 
-    std::string prevSelected;
-    int oldIdx = _list.getSelectedIndex();
-    if (oldIdx >= 0 && oldIdx < (int)_nodeHashes.size()) {
-        prevSelected = _nodeHashes[oldIdx];
-    }
-
-    _list.clear();
-    _nodeHashes.clear();
-    _contactCount = 0;
-
-    const auto& nodes = _announces->nodes();
-
-    // Separate contacts and peers, sort each alphabetically
-    struct SortEntry { int idx; std::string lower; };
-    std::vector<SortEntry> contacts, peers;
-
-    for (int i = 0; i < (int)nodes.size(); i++) {
-        std::string l = nodes[i].name;
-        std::transform(l.begin(), l.end(), l.begin(), ::tolower);
-        if (nodes[i].saved) {
-            contacts.push_back({i, std::move(l)});
-        } else {
-            peers.push_back({i, std::move(l)});
-        }
-    }
-
-    // Sort: letters before numbers, then alphabetical
-    auto sortFn = [](const SortEntry& a, const SortEntry& b) {
-        bool aDigit = !a.lower.empty() && a.lower[0] >= '0' && a.lower[0] <= '9';
-        bool bDigit = !b.lower.empty() && b.lower[0] >= '0' && b.lower[0] <= '9';
-        if (aDigit != bDigit) return bDigit;
-        return a.lower < b.lower;
-    };
-    std::sort(contacts.begin(), contacts.end(), sortFn);
-    std::sort(peers.begin(), peers.end(), sortFn);
-
-    _lastKnownCount = (int)nodes.size();
-    int newSelectedIdx = 0;
-
-    // === Contacts section (only if contacts exist) ===
-    if (!contacts.empty()) {
-        for (auto& entry : contacts) {
-            const auto& node = nodes[entry.idx];
-            char line[64];
-            formatNodeLine(line, sizeof(line), node);
-            _list.addItem(line, stalenessColor(node));
-            std::string hexStr = node.hash.toHex();
-            _nodeHashes.push_back(hexStr);
-            if (!prevSelected.empty() && hexStr == prevSelected) {
-                newSelectedIdx = (int)_nodeHashes.size() - 1;
-            }
-        }
-        _contactCount = (int)contacts.size();
-
-        // Separator between contacts and peers
-        if (!peers.empty()) {
-            char sep[32];
-            snprintf(sep, sizeof(sep), "-- Peers (%d) --", (int)peers.size());
-            _list.addItem(sep, Theme::MUTED);
-            _nodeHashes.push_back("");  // not selectable
-        }
-    }
-
-    // === Peers section (always shown) ===
-    for (auto& entry : peers) {
-        const auto& node = nodes[entry.idx];
-        char line[64];
-        formatNodeLine(line, sizeof(line), node);
-        _list.addItem(line, stalenessColor(node));
-        std::string hexStr = node.hash.toHex();
-        _nodeHashes.push_back(hexStr);
-        if (!prevSelected.empty() && hexStr == prevSelected) {
-            newSelectedIdx = (int)_nodeHashes.size() - 1;
-        }
-    }
-
-    if (!_nodeHashes.empty()) {
-        // Skip section headers when restoring selection
-        if (newSelectedIdx == 0 && _nodeHashes.size() > 1) newSelectedIdx = 1;
-        _list.setSelected(newSelectedIdx);
-    }
-
+    _peers.sync(_announces->nodes());
     _lastRefresh = millis();
 }
 
 void NodesScreen::showActionMenu(int nodeIdx) {
-    if (!_announces || nodeIdx < 0 || nodeIdx >= (int)_nodeHashes.size()) return;
-    if (_nodeHashes[nodeIdx].empty()) return;  // Section header
+    if (!_announces || nodeIdx < 0 || nodeIdx >= (int)_peers.total()) return;
 
-    _selectedNodeIdx = nodeIdx;
-    _selectedNodeHash = _nodeHashes[nodeIdx];
+    _selectedNodeHash = _peers.hash(nodeIdx);
 
     // Try to find live node — may have been evicted since list was built
     rs::Bytes hash;
@@ -208,14 +129,10 @@ void NodesScreen::executeAction(int actionIdx) {
 
 void NodesScreen::exitActionMenu() {
     _showingActions = false;
-    _selectedNodeIdx = -1;
 }
 
 void NodesScreen::render(M5Canvas& canvas) {
-    if (!_showingActions && millis() - _lastRefresh > 30000) {
-        int delta = abs(_announces->nodeCount() - _lastKnownCount);
-        if (delta > 0) refreshList();
-    }
+    if (!_showingActions && millis() - _lastRefresh >= 1000) refreshList();
 
     int y = Theme::CONTENT_Y;
 
@@ -256,16 +173,12 @@ void NodesScreen::render(M5Canvas& canvas) {
         Theme::useUiFont(canvas);
         canvas.setTextColor(Theme::ACCENT);
         canvas.setCursor(8, y + 2);
-        if (_contactCount > 0) {
-            canvas.printf("Contacts (%d)", _contactCount);
-        } else {
-            canvas.printf("Peers (%d)", _announces ? _announces->nodeCount() : 0);
-        }
+        canvas.printf("%u peers", unsigned(_peers.total()));
 
         canvas.drawFastHLine(0, y + headerH, Theme::SCREEN_W, Theme::DIVIDER);
         y += headerH + 2;
 
-        if (_list.itemCount() == 0) {
+        if (_peers.total() == 0) {
             Theme::useSmallFont(canvas);
             canvas.setTextColor(Theme::MUTED);
             canvas.setCursor(4, y + 10);
@@ -273,7 +186,27 @@ void NodesScreen::render(M5Canvas& canvas) {
             canvas.setCursor(4, y + 22);
             canvas.print("Waiting for announces...");
         } else {
-            _list.render(canvas, 0, y, Theme::SCREEN_W, Theme::CONTENT_H - (y - Theme::CONTENT_Y));
+            // Only the viewport is formatted; the shared order stores IDs,
+            // never a second 50-row cache of display text.
+            const size_t begin = _peers.visibleBegin(), end = _peers.visibleEnd();
+            const int bodyHeight = Theme::CONTENT_H - (y - Theme::CONTENT_Y);
+            for (size_t i = begin; i < end; ++i) {
+                const auto* node = _announces->findNodeByHex(_peers.hash(i));
+                char line[128];
+                if (node) formatNodeLine(line, sizeof(line), *node);
+                else snprintf(line, sizeof(line), "%.12s unavailable", _peers.hash(i).c_str());
+                const auto color = node ? (node->saved ? Theme::ACCENT : stalenessColor(*node)) : Theme::MUTED;
+                const int rowY = y + int(i - begin) * Theme::LIST_ROW_H;
+                if (i + 1 < end && i != _peers.selected())
+                    canvas.drawFastHLine(8, rowY + Theme::LIST_ROW_H - 1, Theme::CONTENT_W - 12, Theme::DIVIDER);
+                ScrollList::renderRow(canvas, line, 0, rowY, Theme::CONTENT_W, i == _peers.selected(), color);
+            }
+            if (_peers.maxScroll() > 0) {
+                const int barH = std::max(6, bodyHeight * int(end - begin) / int(_peers.total()));
+                const int barY = y + _peers.scrollY() * (bodyHeight - barH) / _peers.maxScroll();
+                canvas.fillRoundRect(Theme::CONTENT_W - 3, y, 2, bodyHeight, 1, Theme::DIVIDER);
+                canvas.fillRoundRect(Theme::CONTENT_W - 4, barY, 3, barH, 1, Theme::PRIMARY_MUTED);
+            }
         }
     }
     Theme::useSmallFont(canvas);
@@ -302,29 +235,13 @@ bool NodesScreen::handleKey(const KeyEvent& event) {
         return true;
     }
 
-    // Navigation
-    if (event.navUp()) {
-        _list.scrollUp();
-        // Skip section headers
-        int idx = _list.getSelectedIndex();
-        if (idx >= 0 && idx < (int)_nodeHashes.size() && _nodeHashes[idx].empty()) {
-            _list.scrollUp();
-        }
-        return true;
-    }
-    if (event.navDown()) {
-        _list.scrollDown();
-        int idx = _list.getSelectedIndex();
-        if (idx >= 0 && idx < (int)_nodeHashes.size() && _nodeHashes[idx].empty()) {
-            _list.scrollDown();
-        }
+    if (event.navUp() || event.navDown()) {
+        _peers.move(event.navUp() ? -1 : 1);
+        _peers.ensureSelectedVisible();
         return true;
     }
     if (event.enter) {
-        int idx = _list.getSelectedIndex();
-        if (idx >= 0 && idx < (int)_nodeHashes.size() && !_nodeHashes[idx].empty()) {
-            showActionMenu(idx);
-        }
+        if (_peers.total()) showActionMenu(int(_peers.selected()));
         return true;
     }
     return false;

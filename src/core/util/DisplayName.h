@@ -6,8 +6,8 @@
 namespace handheld {
 inline constexpr char DEVICE_NAME_PREFIX[] = "Ratspeak.org-";
 inline constexpr size_t DEVICE_NAME_FALLBACK_SIZE = sizeof(DEVICE_NAME_PREFIX) + 3;
-// UI fallback only: an unnamed identity stays unnamed in storage and announces.
-// Share the same address-derived home label across both handheld renderers.
+// Derive the same default label for Home and announcements from the active
+// destination. Keep configured storage empty so identity switches recalculate it.
 inline const char* deviceDisplayName(const char* name, const char* destination,
                                     const char* device,
                                     char (&fallback)[DEVICE_NAME_FALLBACK_SIZE]) {

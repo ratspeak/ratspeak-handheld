@@ -43,15 +43,20 @@ void Power::setBrightness(uint8_t percent) {
     _brightnessPct = constrain(percent, 1, 100);
     if (_state == ACTIVE) {
         display.setBrightness(percentToPWM(_brightnessPct));
+    } else if (_state == DIMMED) {
+        display.setBrightness(dimPWM());
     }
 }
 
 void Power::setKbBrightness(uint8_t percent, bool apply) {
     percent = constrain(percent, 0, 100);
+    // Unrelated saves leave the light as auto-off/dim/off states set it.
+    if (percent == _kbBrightnessPct) return;
+    _kbBrightnessPct = percent;
     keyboard.setBacklightBrightness(percent);
     if (percent == 0) {
         keyboard.backlightOff();
-    } else if (apply) { // Show the new brightness
+    } else if (apply && _state == ACTIVE) { // Show a new level on a visible screen.
         keyboard.backlightOn();
     }
 }
@@ -108,7 +113,7 @@ void Power::setState(State newState) {
             }
             break;
         case DIMMED:
-            display.setBrightness(DIM_PWM);
+            display.setBrightness(dimPWM());
             if (_kbAutoOff) {
                 keyboard.backlightOff();
             }

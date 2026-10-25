@@ -3,6 +3,8 @@
 #include "config/Config.h"
 #include "runtime/TaskOwner.h"
 #include "ratspeak_protocol.h"
+#include "voice/VoiceWorker.h"
+#include "storage/LegacyMessageArena.h"
 #include <cctype>
 #include <cstring>
 #include <esp_heap_caps.h>
@@ -22,6 +24,22 @@ void DeviceDiagnostics::printDiagnostics() {
     Serial.printf("Paths: %d  Links: %d\n", (int)backend->pathCount(), (int)backend->linkCount());
     Serial.printf("Delivery: %s  Resources: %u\n", backend->deliveryBackendDetail(),
                   (unsigned)backend->activeResourceTransfers());
+    const auto voice=backend->voiceStatus();
+    Serial.printf("Voice: phase=%u reason=%u profile=%u iface=%u generation=%lu RXdrops=%lu TXdrops=%lu stack_free=%lu encode_us=%lu decode_us=%lu\n",
+                  unsigned(voice.phase),unsigned(voice.reason),voice.profile,voice.iface,
+                  (unsigned long)voice.generation,(unsigned long)voice.rxDrops,(unsigned long)voice.txDrops,
+                  (unsigned long)voice.stackFree,(unsigned long)voice.encodeUs,(unsigned long)voice.decodeUs);
+    const auto memo=backend->memoStatus();
+    Serial.printf("Memo: phase=%u reason=%u generation=%lu frames=%lu bytes=%u stack_free=%lu encode_us=%lu decode_us=%lu\n",
+                  unsigned(memo.phase),unsigned(memo.reason),(unsigned long)memo.generation,
+                  (unsigned long)memo.frames,memo.length,(unsigned long)memo.stackFree,
+                  (unsigned long)memo.encodeUs,(unsigned long)memo.decodeUs);
+    Serial.printf("Memo errors: audio=%u storage_step=%u storage_error=%u\n",
+                  unsigned(memo.audioError),unsigned(memo.storageStep),unsigned(memo.storageError));
+    const auto memory=handheld::voice::VoiceWorker::memoryStatus();
+    Serial.printf("Audio memory: stage=%lu free=%lu largest=%lu required_free=%lu required_block=%lu codec=%lu\n",
+                  (unsigned long)memory.stage,(unsigned long)memory.internalFree,(unsigned long)memory.largest,
+                  (unsigned long)memory.requiredFree,(unsigned long)memory.requiredBlock,(unsigned long)memory.codecBytes);
     Serial.printf("Radio: %s\n", radioOnline ? "ONLINE" : "OFFLINE");
     if (radioOnline) {
         Serial.printf("Freq: %lu Hz  SF: %d  BW: %lu  CR: 4/%d  TXP: %d dBm\n",
@@ -77,6 +95,10 @@ void DeviceDiagnostics::printDiagnostics() {
     }
     Serial.printf("Free heap: %lu bytes  PSRAM: %lu bytes\n",
                   (unsigned long)ESP.getFreeHeap(), (unsigned long)ESP.getFreePsram());
+    const auto& reserve = storage::legacyMessageArena();
+    if (reserve.available())
+        Serial.printf("Storage reserve: %lu bytes legacy=%u\n",
+                      (unsigned long)reserve.capacity(), unsigned(reserve.legacyNeeded()));
     sampleMemory(static_cast<uint32_t>(millis()));
     printMemory();
     if (extraDump) extraDump();

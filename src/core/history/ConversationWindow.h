@@ -65,12 +65,15 @@ public:
     uint32_t revision() const { return _control.value.publication; }
     uint32_t statusRevision() const { return _control.value.statusPublication; }
     bool statusReady() const { return _control.value.statusReady; }
+    bool statusRefreshDelayed() const { return visible() && live().info.value.statusRefresh.delayed(); }
     uint32_t identityGeneration() const { return _control.value.identity; }
     Order order() const { return _control.value.order; }
     State state() const { return _control.value.state; }
     storage::Error error() const { return _control.value.error; }
     bool visible() const;
     bool loading() const;
+    // Background refreshes do not invalidate the published page boundaries.
+    bool pageLoading() const;
     bool canPrevious() const;
     bool canNext() const;
     size_t count() const;
@@ -101,6 +104,7 @@ private:
         bool awaiting = false, copied = false, publish = false, held = false;
         bool followFirst = true, updated = false, open = false, selectedValid = false;
         bool statusReady = false, statusDirty = false, statusFailed = false;
+        bool navigationPending = false;
     };
     static_assert(sizeof(Control) <= 128, "Conversation controls exceed the adopted reserve");
     union ControlBank {
@@ -115,6 +119,7 @@ private:
         Order order = Order::Recent;
         Direction direction = Direction::After;
         bool hasCursor = false, moreBefore = false, moreAfter = false;
+        StatusRefresh statusRefresh;
     };
     static_assert(sizeof(PageInfo) <= 64, "Conversation page metadata exceeds its reserve");
     union InfoBank {

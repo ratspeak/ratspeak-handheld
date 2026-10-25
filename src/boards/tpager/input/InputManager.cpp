@@ -1,4 +1,5 @@
 #include "InputManager.h"
+#include "voice/VoiceInput.h"
 #include "config/BoardConfig.h"
 
 void InputManager::begin(Keyboard* kb, Scrollwheel* pointer, TouchInput* touch) {
@@ -24,10 +25,10 @@ void InputManager::update(bool dispatchReady) {
 
     // Short clicks win the next dispatch; retained motion alternates with
     // keyboard input. Never dequeue a key merely to overwrite it with a click.
-    if (screenOn && dispatchReady && !_pointerInput.longPress && _pointerInput.preferPointer()) {
+    if (!handheld::voice::VoiceInput::instance().enabled() && screenOn && dispatchReady && !_pointerInput.longPress && _pointerInput.preferPointer()) {
         _hasKey = _pointerInput.take(_keyEvent);
     }
-    if (_kb && !_hasKey && !_pointerInput.longPress && (dispatchReady || !screenOn)) {
+    if (_kb && !_hasKey && !_pointerInput.longPress && (dispatchReady || !screenOn || handheld::voice::VoiceInput::instance().enabled())) {
         _kb->update();
         if (_kb->hasEvent()) {
             _activity = _strongActivity = true;

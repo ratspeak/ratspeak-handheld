@@ -9,10 +9,14 @@
 
 using namespace handheld::storage;
 
-bool MessageStore::begin(FlashStore* flash, SDStore* sd, bool externalStorageEnabled) {
+bool MessageStore::begin(FlashStore* flash, SDStore* sd, bool externalStorageEnabled, bool migrate) {
     handheld::assertDeviceOwner();
     if (_writeQueue.accepting() || !_writeQueue.stopped() || _writeQueue.drainCount()) return false;
     _flash = flash; _sd = sd; _externalStorageEnabled = externalStorageEnabled;
+    _audioExternalReady = _externalStorageEnabled && _sd && _sd->isReady();
+    _audioRetentionConfigured=false;_audioRetentionDirty=true;_protectedVoiceRecord={};_audioRetentionRetry=0;
+    _reclaimTicket={};_reclaimCursor={};_createsSinceReclaim=0;
+    _reclaimEnabled=false;_reclaimDue=true;_reclaimContinue=false;_historyRolledOff=false;
     if (!_flash || !_flash->isReady()) return false;
     if (!handheld::storage::StorageLease::initialize()) return false;
     handheld::storage::StorageLease lease;
@@ -21,20 +25,24 @@ bool MessageStore::begin(FlashStore* flash, SDStore* sd, bool externalStorageEna
         _sd->ensureDir(SD_PATH_ROOT); _sd->ensureDir(SD_PATH_MESSAGES);
     }
     try {
-        MessageMigration migration(_flash, _sd, _externalStorageEnabled);
-        if (!migration.run()) {
-            Serial.println("[MSGSTORE] Initialization deferred: legacy storage needs recovery");
-            return false;
-        }
+        if (migrate) {
+            MessageMigration migration(_flash, _sd, _externalStorageEnabled);
+            const bool migrated = migration.run();
+            migration.persistFloor();
+            if (!migrated) {
+                Serial.println("[MSGSTORE] Initialization deferred: legacy storage needs recovery");
+                return false;
+            }
 #if LEGACY_READ_CTR_MIGRATION
-        // Boot owns the executor until migration has settled. Deferred worker
-        // registration begins only at the ordinary initialization below.
-        if (!transactions().begin(_flash, _sd, _externalStorageEnabled, false) ||
-            !migration.foldReadMarkers(transactions())) {
-            Serial.println("[MSGSTORE] Initialization deferred: legacy read state needs recovery");
-            return false;
-        }
+            // Boot owns the executor until migration has settled. Deferred worker
+            // registration begins only at the ordinary initialization below.
+            if (!transactions().begin(_flash, _sd, _externalStorageEnabled, false)) {
+                Serial.println("[MSGSTORE] Initialization deferred: legacy read state needs recovery");
+                return false;
+            }
+            migration.foldReadMarkers(transactions());
 #endif
+        }
     } catch (const std::bad_alloc&) {
         Serial.println("[MSGSTORE] Initialization deferred: migration memory unavailable");
         return false;
@@ -49,6 +57,9 @@ bool MessageStore::begin(FlashStore* flash, SDStore* sd, bool externalStorageEna
     }
 #endif
     if (!transactions().begin(_flash, _sd, _externalStorageEnabled, STORAGE_DEFERRED_IO != 0)) return false;
+    if (!transactions().expireTemporaryMemos()) {
+        Serial.println("[MSGSTORE] Temporary voice cleanup pending; retry initialization");return false;
+    }
     try {
         if (!loadStartupMetadata()) {
             Serial.println("[MSGSTORE] Initialization deferred: incomplete startup message metadata"); return false;
@@ -58,6 +69,16 @@ bool MessageStore::begin(FlashStore* flash, SDStore* sd, bool externalStorageEna
         Serial.println("[MSGSTORE] Initialization deferred: insufficient memory"); return false;
     }
     return _writeQueue.begin(transactions(), STORAGE_DEFERRED_IO ? WriteQueue::Execution::Deferred : WriteQueue::Execution::Immediate);
+}
+
+MessageStore::BootResult MessageStore::beginForBoot(FlashStore* flash, SDStore* sd, bool externalStorageEnabled) {
+    _cardPending = false;
+    if (begin(flash, sd, externalStorageEnabled)) return BootResult::Ready;
+    // Without the card, a legacy item's conflict with its card copy is unprovable.
+    if (!externalStorageEnabled || !sd || !sd->isReady() || !begin(flash, sd, false, false)) return BootResult::Failed;
+    _cardPending = true;
+    Serial.println("[MSGSTORE] SD messages not loaded; using internal storage for this boot");
+    return BootResult::InternalOnly;
 }
 
 int MessageStore::messageCount(const std::string& peer) const {

@@ -16,10 +16,10 @@ public:
     bool hadActivity() const { return _activity; }
     bool anyDown() const { return _boot.down || _top.down; }
 
-    // Factory-reset recovery runs before the on-screen keyboard exists and
-    // asks for R/X/B/Enter: tap top = R, tap BOOT = X, hold BOOT = B,
-    // hold top = Enter.
-    void setRecoveryKeys(bool enabled) { _recovery = enabled; }
+    // Startup recovery screens run before the on-screen keyboard exists:
+    // tap top = topTap (R for reset recovery, E for storage), tap BOOT = X,
+    // hold BOOT = B, hold top = Enter. 0 restores normal mapping.
+    void setRecoveryKeys(char topTap) { _recoveryTop = topTap; }
 
     // No key backlight on this board.
     bool setBacklightBrightness(uint8_t) { return true; }
@@ -39,5 +39,6 @@ private:
     Button _boot, _top;
     KeyEvent _event{};
     uint32_t _lastPoll = 0;
-    bool _hasEvent = false, _hold = false, _activity = false, _recovery = false;
+    bool _hasEvent = false, _hold = false, _activity = false;
+    char _recoveryTop = 0;
 };

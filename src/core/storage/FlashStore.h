@@ -54,6 +54,14 @@ public:
     bool wipeForReset();
     bool completeReset();
 
+    // Why begin() did not mount. Unprepared: blank, or leftovers without a
+    // LittleFS on our own partition, so nothing of anyone's is at stake and
+    // prepare() runs unasked. Damaged/Foreign may hold someone's data: erase
+    // them only on the user's explicit choice.
+    enum class Startup : uint8_t { Ready, Missing, Unprepared, Damaged, Foreign, Failed };
+    Startup startup() const { return _startup; }
+    bool prepare();
+
     bool isReady() const { return _ready; }
     size_t totalBytes() const;
     size_t usedBytes() const;
@@ -66,6 +74,7 @@ private:
     void recoverAtomicArtifacts();
     bool _ready = false;
     ResetState _resetState = ResetState::Unavailable;
+    Startup _startup = Startup::Failed;
     static SemaphoreHandle_t _mutex;
 };
 

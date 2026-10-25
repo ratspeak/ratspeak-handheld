@@ -28,8 +28,9 @@ SOURCE_VARIABLES = {
     "rsLXMFLite": "LXMF_LITE_COMMIT",
     "rsReticulum": "RNS_FULL_COMMIT",
     "rsLXMF": "LXMF_FULL_COMMIT",
+    "rsLXST": "LXST_COMMIT",
 }
-SOURCE_ROLES = {name: "firmware" if name.endswith("Lite") else "trusted-validation"
+SOURCE_ROLES = {name: "firmware" if name.endswith("Lite") or name == "rsLXST" else "trusted-validation"
                 for name in SOURCE_VARIABLES}
 SHA = re.compile(r"[0-9a-f]{40}")
 SEMVER = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?")
@@ -214,10 +215,13 @@ def check_workspace(root: Path = ROOT, *, allow_dirty: bool = False) -> None:
 
 
 def archive_inputs(root: Path = ROOT) -> str:
-    """Fingerprint actual Lite inputs as well as their selected commit identities."""
+    """Fingerprint the archive toolchain and the selected firmware sources' commits and contents.
+
+    The release version is not compiled into the archives, so a version bump alone
+    leaves their provenance current."""
     from source_fingerprint import source_fingerprint
 
-    records = {"identity": load_identity(root), "firmware_sources": {}}
+    records = {"toolchain": load_identity(root)["archive_toolchain"], "firmware_sources": {}}
     for name, expected in source_pins(root, role="firmware").items():
         source = root.parent / name
         actual = git(source, "rev-parse", "HEAD")

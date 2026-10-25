@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <type_traits>
 #include "AlignedStorageMemory.h"
+#include "reticulum/LXMFStatus.h"
 
 namespace handheld::storage {
 
@@ -22,7 +23,12 @@ constexpr bool operator!=(Ticket a, Ticket b) { return !(a == b); }
 
 enum class Operation : uint8_t {
     CreateIncoming, CreateOutgoing, UpdateStatus, MarkRead, DeleteConversation,
-    ReadRecord, ReadHistoryPage, ReadPending, ReadConversationPage, ReadConversation, Trim
+    ReadRecord, ReadHistoryPage, ReadPending, ReadConversationPage, ReadConversation, Trim,
+    LoadPrepared, WritePrepared, LoadPurge, WritePurge, ClearPurge,
+    RrcRead, RrcAppend, RrcWrite, RrcStatus, RrcPage, RrcMarkRead, RrcClear, RrcSavedRooms, RrcPrivateInbox, RrcObserve,
+    ReadAudio,
+    MemoRead, MemoBegin, MemoAppend, MemoSeal, MemoClear, MemoPromote, MemoCancel,
+    RetryOutgoing, MemoExpire, DeleteRecord, RetainAudio, Reclaim
 };
 enum class Rejection : uint8_t {
     None, Busy, Invalid, TooLarge, NoMemory, Unavailable, Fenced, Exhausted
@@ -36,6 +42,8 @@ enum class State : uint8_t { Free, Queued, CancelQueued, Running, Ready, Retired
 enum class HistoryDirection : uint8_t { Before, After };
 enum class ConversationOrder : uint8_t { Recent, Peer };
 enum class ConversationDirection : uint8_t { Before, After };
+// Complete on the card in use, held while the card's history is not loaded, or rolling.
+enum class HistoryMode : uint8_t { Card, CardNotLoaded, Rolling };
 
 struct Submission {
     Ticket ticket;
@@ -50,9 +58,33 @@ struct RecordKey {
     bool incoming = false;
 };
 
+// Framing is independent of playback support. Unknown codecs retain their bytes;
+// malformed network fields retain an explicit unavailable state without a blob.
+struct AudioMetadata {
+    uint32_t checksum = 0; // Local storage integrity; never network authentication.
+    uint16_t length = 0;
+    uint8_t mode = 0, state = 0; // 0 absent, 1 field present, 2 malformed field, 3 locally removed (descriptor retained)
+};
+static_assert(sizeof(AudioMetadata) == 8, "Audio metadata budget changed");
+
 // Scalars are copied at admission. Title/content occupy the slot's separate
 // bounded byte buffer, with explicit lengths (embedded NUL bytes are preserved).
 struct Request {
+    // Memo operations bind source to local identity and key.peer to recipient;
+    // offset is the expected durable revision, peerGeneration the byte offset.
+    // RRC operations use a typed RrcRecord payload. For those operations only,
+    // messageId[0..16] is an opaque local filename key (not an LXMF ID), offset
+    // is the expected record revision, and key.counter is a page/status cursor.
+    // RrcRead without hasMessageId reads one unique counter within its context.
+    // RrcPage uses historyDirection and an exclusive local counter boundary.
+    // RrcPrivateInbox uses the descriptor counter in the same way. Private
+    // RrcAppend/RrcWrite(Draft) source holds the exact participant identity.
+    // RrcAppend/RrcObserve destination holds the local observation nonce.
+    // They never participate in LXMF counts, deletion fences or history queries.
+    // Reclaim: key is the protected voice record, offset 1 continues to the
+    // hysteresis goal, and (peerGeneration, read) is an exclusive (counter,
+    // incoming) cursor past records this run already kept. Its result key
+    // carries the next cursor; more asks for another pass.
     // ReadPending: exclusive after (counter, peer), outgoing only.
     // ReadHistoryPage: peer plus exclusive (counter, incoming) in historyDirection.
     // Counter zero starts Before at newest, After at oldest; never discard a
@@ -68,9 +100,12 @@ struct Request {
     uint16_t titleLength = 0;
     uint16_t contentLength = 0;
     uint16_t readCapacity = 0;
+    AudioMetadata audio;
     Operation operation = Operation::CreateIncoming;
     uint8_t status = 0; // persisted LXMFStatus numeric value
+    messaging::DeliveryPolicy deliveryPolicy = messaging::DeliveryPolicy::DirectOnly;
     bool read = false;
+    bool existingOnly = false; // MarkRead: rewrite existing copies only, never add a mirror
     bool hasMessageId = false;
     HistoryDirection historyDirection = HistoryDirection::Before;
     // Conversation pages use (timestamp, key.peer), while a detail query binds
@@ -110,7 +145,9 @@ struct Result {
     MediumResult flash;
     MediumResult sd;
     bool duplicate = false;
+    bool enriched = false; // A resend attached previously discarded media to the same MID.
     bool more = false;
+    bool audioBecameRetainable = false; // UpdateStatus made a queued audio clip eligible for cleanup.
 };
 
 // A bounded history-page payload contains these complete record selectors.
@@ -127,8 +164,11 @@ struct StoredRecordHeader {
     uint8_t source[16] = {}, destination[16] = {}, messageId[32] = {};
     double timestamp = 0;
     uint32_t counter = 0, revision = 0, titleLength = 0, contentLength = 0;
+    AudioMetadata audio;
     uint8_t status = 0;
+    messaging::DeliveryPolicy deliveryPolicy = messaging::DeliveryPolicy::DirectOnly;
     bool incoming = false, read = false, hasMessageId = false;
+    bool prepared = false; // A committed encrypted envelope may never be regenerated if missing.
 };
 static_assert(sizeof(StoredRecordHeader) <= 104, "Stored record response metadata grew");
 
@@ -179,6 +219,9 @@ struct Budget {
     // one arena and stream the file; no complete input/output JSON copy.
     static constexpr size_t LegacyScratch = 56 * 1024;
     static constexpr size_t LegacyAllocation = LegacyScratch + AlignedStorageOverhead;
+    // Kept after a boot census finds no record beyond JsonAllocator: normal
+    // parsing plus margin for bounded mutation growth (one pool page, fields).
+    static constexpr size_t ReducedLegacyScratch = JsonAllocator + 2048;
 
     static constexpr size_t payloadCapacity(bool cardputer, uint8_t slot) {
         return slot >= NormalSlots ? 0 :
@@ -187,6 +230,9 @@ struct Budget {
     static constexpr bool validBody(size_t title, size_t content) {
         return title <= MaxMessageBody && content <= MaxMessageBody - title;
     }
+    // Card's JsonAllocator term is the normal capacity of its reserved arena
+    // (LegacyScratch, or ReducedLegacyScratch after a clean boot census), not
+    // a separate allocation; the arena remainder is the legacy reserve.
     static constexpr size_t storageWorkingSet(bool cardputer) {
         return (cardputer ? CardPayloadBytes : LargeBoardPayloadBytes) + SlotCeiling +
                JsonAllocator + IoScratch + StoreBookkeeping + WorkerStack + RtosBookkeeping +
@@ -202,6 +248,7 @@ static_assert(Budget::SlotBytes <= Budget::SlotCeiling, "Storage slots exceed th
 static_assert(Budget::storageWorkingSet(true) == 27296, "Review Cardputer storage budget changes");
 static_assert(Budget::storageWorkingSet(false) == 39104, "Review Deck/Pager storage budget changes");
 static_assert(Budget::MaxNewJson <= Budget::MaxJsonFile, "New records must fit the retained schema");
+static_assert(Budget::ReducedLegacyScratch < Budget::LegacyScratch, "Reduction must return reserve bytes");
 static_assert(std::is_trivially_copyable<Request>::value && std::is_trivially_copyable<Result>::value,
               "Storage requests/results cannot retain heap or callback ownership");
 

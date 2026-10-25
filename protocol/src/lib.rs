@@ -161,6 +161,8 @@ const _: () = {
 pub struct RsHandheldRns {
     /// Active identity. `None` until `rs_handheld_rns_load_identity` succeeds.
     identity: Option<LocalIdentity>,
+    /// Reusable 1 KiB normalized field-key index; never placed on the protocol task stack.
+    lxmf_field_scratch: core::cell::RefCell<lxmf_codec::LxmfFieldScratch>,
     /// Transport/relay node. `None` until `rs_handheld_rns_open_transport` succeeds.
     /// Points into the CALLER-owned buffer passed to open_transport (never Rust-allocated,
     /// never freed here): the node is plain no-Drop data, so shutdown drops this pointer
@@ -197,6 +199,7 @@ pub struct RsHandheldRns {
     /// Exact tag from the most recently surfaced own-destination path request. The C++ pump
     /// consumes it immediately so its bounded response cache can preserve Python tag semantics.
     own_path_request: Option<OwnPathRequest>,
+    voice_enabled: bool,
 }
 
 // The context is one long-lived C-allocator allocation. Together with the caller-owned
@@ -205,15 +208,16 @@ pub struct RsHandheldRns {
 // resource buffers. These target-compiled guards catch pointer-width/layout drift as well as
 // ratchet/table growth.
 const _: () = {
-    assert!(core::mem::size_of::<RsHandheldRns>() <= 9 * 1024);
+    assert!(core::mem::size_of::<RsHandheldRns>() <= 10 * 1024);
     assert!(
         core::mem::size_of::<RsHandheldRns>() + core::mem::size_of::<rns_lite_core::MicroNode>()
-            <= 41 * 1024
+            <= 42 * 1024
     );
 };
 
 #[derive(Clone, Copy)]
 struct OwnPathRequest {
+    voice: bool,
     tag: [u8; DESTINATION_LENGTH],
     tag_len: usize,
 }
@@ -328,6 +332,7 @@ pub unsafe extern "C" fn rs_handheld_rns_init(out: *mut *mut RsHandheldRns) -> R
         }
         let ctx = Box::new(RsHandheldRns {
             identity: None,
+            lxmf_field_scratch: core::cell::RefCell::new(lxmf_codec::LxmfFieldScratch::new()),
             node: None,
             seen: SeenMessages100::new(),
             resource_out: None,
@@ -341,6 +346,7 @@ pub unsafe extern "C" fn rs_handheld_rns_init(out: *mut *mut RsHandheldRns) -> R
             pending_ratchet: None,
             pending_announce_wire: None,
             own_path_request: None,
+            voice_enabled: false,
         });
         // SAFETY: `out` is non-null and writable per the contract above.
         unsafe { *out = Box::into_raw(ctx) };
@@ -391,8 +397,25 @@ mod transport;
 pub use transport::*;
 mod lxmf;
 pub use lxmf::*;
+mod propagation;
+pub use propagation::*;
+mod relay;
+pub use relay::*;
+mod stamps;
+pub use stamps::*;
 mod proof;
+mod rrc;
+mod rrc_secret;
 pub use proof::*;
+pub use rrc::*;
+pub use rrc_secret::*;
+mod voice;
+pub use voice::*;
+mod memo;
+pub use memo::*;
+mod voice_endpoint;
+use voice_endpoint::VOICE_DESTINATION_NAME;
+pub use voice_endpoint::*;
 mod link;
 pub use link::*;
 mod resource;

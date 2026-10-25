@@ -1,0 +1,11 @@
+{
+  "repository": "https://github.com/Xinyuan-LilyGO/T-Deck",
+  "commit": "1dddf6e0d3aaa74cd4e10ba02938865b99682391",
+  "path": "lib/es7210/src",
+  "license": "ESPRESSIF MIT (products restriction), original notices retained in each source",
+  "sha256": {
+    "es7210.cpp": "55645aef77cde281972eaa3ad44006ff5b000a615cab1083bab03f93316bf301",
+    "es7210.h": "7f67a932189be6f707f6c9b8fad779e98cf510ff3637777a59ffbd21bfec7df1",
+    "audio_hal.h": "1a262b9a5092c8c23c1e38e68dc77b46f95daa057d8344f9534d76f6a41fb9fd"
+  }
+}

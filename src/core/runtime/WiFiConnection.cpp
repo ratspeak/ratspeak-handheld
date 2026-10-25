@@ -1,6 +1,7 @@
 #include "WiFiConnection.h"
 #include "config/NetworkTiming.h"
 #include "transport/WiFiInterface.h"
+#include "transport/WiFiScanSupport.h"
 #include <esp_wifi.h>
 #include <atomic>
 
@@ -13,6 +14,10 @@ bool eventsRegistered = false; // boot/protocol owner only
 }
 void WiFiConnection::initializeEvents() {
     if (eventsRegistered) return;
+    // UserConfig owns saved credentials. SDK reconnects must not write another
+    // NVS copy outside the storage lease while microphone capture is active.
+    WiFi.persistent(false);
+    WiFi.setAutoReconnect(false);
     WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t) {
         if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED)
             disconnectSequence.fetch_add(1, std::memory_order_release);
@@ -57,7 +62,15 @@ WiFiConnection::Transition WiFiConnection::poll() {
     const uint32_t now = static_cast<uint32_t>(millis());
     if (_scanning) { pollActiveScan(); return Transition::None; }
     if (_scanRequested && _state != State::Connecting) {
+        if (handheld_wifi_scan_busy()) {
+            if (static_cast<int32_t>(now - _scanDeadline) >= 0) {
+                _scanRequested = false; _scanResult = ""; _scanOutcome = ScanResult::Failed;
+            }
+            return Transition::None;
+        }
         _scanRequested = false; _scanning = true;
+        _scanRetiring = false; _scanRestore = true; _scanReset = false;
+        _scanRestoreAt = now;
         _scanPreviousMode = WiFi.getMode();
         _scanStartedAt = now;
         if (!WiFiInterface::startAsyncScan()) {
@@ -95,33 +108,80 @@ WiFiConnection::Transition WiFiConnection::poll() {
     return Transition::None;
 }
 void WiFiConnection::releaseScan() {
+    if (handheld_wifi_scan_busy()) return;
     WiFi.scanDelete();
-    if (_scanPreviousMode == WIFI_OFF || _scanPreviousMode == WIFI_AP) WiFi.mode(_scanPreviousMode);
+    if (_scanRestore && WiFi.getMode() != _scanPreviousMode && !WiFi.mode(_scanPreviousMode)) {
+        Serial.println("[WIFI] Scan mode restore failed; retry pending");
+        if (_scanOutcome != ScanResult::Pending) {
+            _scanResult = ""; _scanOutcome = ScanResult::Failed;
+        }
+        _scanRetiring = true;
+        _scanRestoreAt = static_cast<uint32_t>(millis()) + 1000;
+        return;
+    }
+    if (handheld_wifi_scan_busy()) {
+        _scanRetiring = true;
+        _scanRetireDeadline = static_cast<uint32_t>(millis()) + 2000;
+        return;
+    }
     _scanning = false;
+    _scanRetiring = false;
+}
+void WiFiConnection::cancelActiveScan() {
+    _scanRetiring = true;
+    _scanRetireDeadline = static_cast<uint32_t>(millis()) + 2000;
+    const esp_err_t stopped = handheld_wifi_scan_cancel();
+    Serial.printf("[WIFI] Scan stop status=%d; draining completion\n", (int)stopped);
+    releaseScan();
 }
 void WiFiConnection::pollActiveScan() {
+    const uint32_t now = static_cast<uint32_t>(millis());
+    if (_scanRetiring) {
+        if (handheld_wifi_scan_busy()) {
+            if (_scanRestore && !_scanReset && static_cast<int32_t>(now - _scanRetireDeadline) >= 0) {
+                // STA_STOP drains on the same Arduino queue as SCAN_DONE. Do
+                // not admit new scans while either old event can still arrive.
+                if (WiFi.mode(WIFI_OFF)) _scanReset = true;
+                else _scanRetireDeadline = now + 1000;
+            }
+        } else if (static_cast<int32_t>(now - _scanRestoreAt) >= 0) releaseScan();
+        return;
+    }
     const auto result = WiFi.scanComplete();
     if (result == WIFI_SCAN_RUNNING && static_cast<int32_t>(static_cast<uint32_t>(millis()) - _scanDeadline) < 0) return;
     // A terminal SDK error need not stop the driver scan. Retire it before
     // deleting results or allowing a retry, including the owner's deadline.
     if (result < 0) {
-        esp_wifi_scan_stop();
-        Serial.printf("[WIFI] Scan failed (status=%d elapsed=%lums heap=%lu largest=%lu)\n",
-                      (int)result, (unsigned long)(static_cast<uint32_t>(millis()) - _scanStartedAt),
+        Serial.printf("[WIFI] Scan failed (status=%d error=%d elapsed=%lums heap=%lu largest=%lu)\n",
+                      (int)result, (int)handheld_wifi_scan_error(),
+                      (unsigned long)(static_cast<uint32_t>(millis()) - _scanStartedAt),
                       (unsigned long)ESP.getFreeHeap(), (unsigned long)ESP.getMaxAllocHeap());
     }
     _scanResult = "";
-    _scanOutcome = ScanResult::Failed;
+    _scanOutcome = handheld_wifi_scan_error() == ESP_ERR_NO_MEM ? ScanResult::NoMemory : ScanResult::Failed;
     if (result >= 0) {
-        JsonDocument doc; auto rows = doc.to<JsonArray>();
-        for (const auto& network : WiFiInterface::getScanResults(15)) {
-            auto row = rows.add<JsonObject>(); row["ssid"] = network.ssid;
-            row["rssi"] = network.rssi; row["encrypted"] = network.encrypted;
+        try {
+            const auto networks = WiFiInterface::getScanResults(15);
+            // Release SDK rows before allocating the result envelope.
+            WiFi.scanDelete();
+            JsonDocument doc; auto rows = doc.to<JsonArray>();
+            for (const auto& network : networks) {
+                auto row = rows.add<JsonObject>(); row["ssid"] = network.ssid;
+                row["rssi"] = network.rssi; row["encrypted"] = network.encrypted;
+            }
+            const size_t bytes = measureJson(doc);
+            _scanOutcome = ScanResult::NoMemory;
+            if (!doc.overflowed() && _scanResult.reserve(bytes) &&
+                serializeJson(doc, _scanResult) == bytes && _scanResult.length() == bytes)
+                _scanOutcome = ScanResult::Ready;
+        } catch (const std::bad_alloc&) {
+            _scanOutcome = ScanResult::NoMemory;
         }
-        serializeJson(doc, _scanResult);
-        _scanOutcome = ScanResult::Ready;
+        if (_scanOutcome != ScanResult::Ready) _scanResult = "";
+        releaseScan();
+    } else {
+        cancelActiveScan();
     }
-    releaseScan();
 }
 void WiFiConnection::pollSettlements() {
     // Finish the scan already owned by a caller without starting RF work or
@@ -137,21 +197,28 @@ bool WiFiConnection::startScan() {
     if (_closed || scanning() || _scanOutcome != ScanResult::Pending) return false;
     initializeEvents();
     _scanRequested = true;
+    _scanDeadline = static_cast<uint32_t>(millis()) + network_timing::WifiScanMs;
     return true;
 }
 ScanResult WiFiConnection::finishScan(String& json) {
     const auto outcome = _scanOutcome;
     if (outcome == ScanResult::Pending) return outcome;
-    json = _scanResult; _scanResult = ""; _scanOutcome = ScanResult::Pending;
+    json = std::move(_scanResult); _scanResult = ""; _scanOutcome = ScanResult::Pending;
     return outcome;
 }
 void WiFiConnection::stop() {
     _state = State::Disabled;
     if (scanning()) {
-        if (_scanning) { esp_wifi_scan_stop(); releaseScan(); }
+        const bool unsettled = _scanRequested || (_scanning && !_scanRetiring);
+        // The caller takes responsibility for the next configured mode. A late
+        // scan settlement must not undo Disconnect or a new profile selection.
+        _scanRestore = false;
+        if (_scanning && !_scanRetiring) cancelActiveScan();
         _scanRequested = false;
-        _scanResult = "";
-        _scanOutcome = ScanResult::Cancelled;
+        if (unsettled) {
+            _scanResult = "";
+            _scanOutcome = ScanResult::Cancelled;
+        }
     }
 }
 } // namespace handheld

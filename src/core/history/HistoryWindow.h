@@ -1,6 +1,7 @@
 #pragma once
 
 #include "storage/StorageContract.h"
+#include "StatusRefresh.h"
 #include <cstddef>
 #include <cstdint>
 
@@ -50,6 +51,15 @@ public:
         storage::Error statusError = storage::Error::None;
         uint8_t flags = 0;
         storage::Error readError = storage::Error::None;
+        // Uses the former padding byte; no history arena growth. Low six bits
+        // hold rounded seconds, high bits the audio presentation class. Playback
+        // re-reads the exact record and verifies its full media descriptor.
+        uint8_t audio = 0;
+        bool hasAudio() const { return audio != 0; }
+        bool nativeAudio() const { return (audio & 0xc0) == 0x40; }
+        bool audioRemoved() const { return (audio && audio<0x40) || audio==0x81; }
+        uint8_t audioSeconds() const { return audio & 0x3f; }
+        const char* audioLabel() const { return audioRemoved()?"Audio removed":nativeAudio() ? "Voice message" : audio == 0x80 ? "Unsupported audio" : "Audio unavailable"; }
         bool incoming() const { return flags & Incoming; }
         bool unavailable() const { return flags & Unavailable; }
         bool more() const { return !unavailable() && sourceOffset + sourceLength < uint32_t(titleLength) + contentLength; }
@@ -57,10 +67,18 @@ public:
     static_assert(sizeof(Span) == 32, "History span metadata budget changed");
 
     void open(const uint8_t peer[16], uint32_t identityGeneration);
+    // Direct-chat reentry may reuse the existing newest bank. Other contexts
+    // use open(), which always invalidates retained presentation.
+    void resume(const uint8_t peer[16], uint32_t identityGeneration);
     void close();
     bool older();
     bool newer();
     bool newest();
+    // A durable memo promotion can precede its asynchronous history read. Keep
+    // only its key/duration until the normal published row replaces this hint.
+    void queuedAudio(uint32_t counter,uint16_t bytes);
+    uint8_t queuedAudioSeconds() const;
+    bool moveSelection(int direction);
     bool openFull(size_t span);
     bool backToChat();
     void refresh();
@@ -82,6 +100,7 @@ public:
     // Ready includes explicit unavailable/error projections. This prevents a
     // changing backend or failed read from holding a body publication forever.
     bool statusReady() const { return control().statusReady; }
+    bool statusRefreshDelayed() const { return visible() && livePage().info.statusRefresh.delayed(); }
     uint32_t statusRevision() const { return control().statusPublication; }
 
     // LVGL may point labels at published text. A publication holds the old bank
@@ -96,7 +115,10 @@ public:
     uint32_t identityGeneration() const { return control().identity; }
     size_t focusedSpan() const { return control().focus; }
     // VisibleSpans means the composer. UI focus is part of the control budget.
-    void focusSpan(size_t index) { control().focus = index < spanCount() ? index : VisibleSpans; }
+    void focusSpan(size_t index) {
+        control().focus = index < spanCount() ? index : VisibleSpans;
+        control().selectEdge = 0; // Explicit dismissal also cancels a pending page selection.
+    }
     Mode mode() const { return control().mode; }
     State state() const { return control().state; }
     Error error() const { return control().error; }
@@ -139,11 +161,19 @@ private:
         uint8_t active = 0, buildIndex = 0, spanCount = 0;
         uint8_t focus = VisibleSpans;
         uint16_t usedText = 0;
-        bool awaiting = false, copied = false, publish = false, publicationHeld = false;
-        bool newBelow = false, followNewest = true, previousSlice = false;
+        // Owner-thread flags share bytes so the queued key/duration fit the
+        // existing 128-byte control bank; these are not cross-thread atomics.
+        bool awaiting:1, copied:1, publish:1, publicationHeld:1;
+        bool newBelow:1, followNewest:1, previousSlice:1;
+        bool statusDirty:1, statusFailed:1, statusReady:1;
         uint32_t observedStatusRevision = 0, sampledStatusRevision = 0, statusPublication = 0;
-        bool statusDirty = false, statusFailed = false, statusReady = false;
+        int8_t selectEdge = 0;
+        uint8_t queuedAudioDuration = 0;
         uint32_t observedHistoryRevision = 0;
+        uint32_t queuedAudioCounter = 0;
+        Control() : awaiting(false), copied(false), publish(false), publicationHeld(false),
+            newBelow(false), followNewest(true), previousSlice(false),
+            statusDirty(false), statusFailed(false), statusReady(false) {}
     };
     static_assert(sizeof(Control) <= 128, "History control exceeds its row-arena allocation");
     union ControlBank {
@@ -156,9 +186,11 @@ private:
         uint32_t identity = 0;
         storage::HistoryEntry bound;
         uint32_t total = 0;
+        uint32_t sourceRevision = UINT32_MAX;
         uint8_t count = 0, first = 0, last = 0, spans = 0;
         storage::HistoryDirection direction = storage::HistoryDirection::Before;
         bool moreOlder = false, moreNewer = false, full = false;
+        StatusRefresh statusRefresh;
     };
     static_assert(sizeof(PageInfo) <= 64, "History page control exceeds its row-arena allocation");
     struct Page { storage::HistoryEntry entries[PageSize] = {}; PageInfo info; };

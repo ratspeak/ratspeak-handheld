@@ -1,6 +1,11 @@
 #include "WiFiInterface.h"
+#include "WiFiScanSupport.h"
 #include "config/Config.h"
+#include "config/ConfigMemory.h"
 #include "config/NetworkTiming.h"
+#include <esp_wifi.h>
+#include <cstring>
+#include <utility>
 
 namespace {
 // The pinned Arduino 2.0.x API exposes its shared scan deadline to subclasses.
@@ -14,7 +19,6 @@ struct ScanDeadline : WiFiScanClass {
 WiFiInterface::WiFiInterface(const char* name)
     : _name(name ? name : "WiFiInterface"), _server(WIFI_AP_PORT)
 {
-    _apPassword = WIFI_AP_PASSWORD;
     _txBuffer = (uint8_t*)ps_malloc(TX_BUFFER_SIZE);
     if (!_txBuffer) _txBuffer = (uint8_t*)malloc(TX_BUFFER_SIZE);
 }
@@ -24,9 +28,36 @@ WiFiInterface::~WiFiInterface() {
     if (_txBuffer) { free(_txBuffer); _txBuffer = nullptr; }
 }
 
-void WiFiInterface::setAPCredentials(const char* ssid, const char* password) {
-    _apSSID = ssid;
-    _apPassword = password;
+bool WiFiInterface::prepareAPCredentials(const char* ssid, const char* password, APCredentials& prepared) {
+    if (!ssid || !password) return false;
+    char generated[32];
+    if (!*ssid) {
+        snprintf(generated, sizeof(generated), DEVICE_AP_PREFIX "-%04x",
+                 unsigned(ESP.getEfuseMac() & 0xFFFF));
+        ssid = generated;
+    }
+    const size_t nameLength = strlen(ssid), passwordLength = strlen(password);
+    if (nameLength > 32 || passwordLength > 64) return false;
+    APCredentials candidate;
+    using handheld::config::Memory;
+    if (!Memory::reserveString(candidate.ssid, nameLength) || !candidate.ssid.concat(ssid, nameLength) ||
+        (passwordLength && (!Memory::reserveString(candidate.password, passwordLength) ||
+                            !candidate.password.concat(password, passwordLength))) || !Memory::admits(0)) return false;
+    prepared = std::move(candidate);
+    return true;
+}
+
+void WiFiInterface::setAPCredentials(APCredentials&& prepared) {
+    _apSSID = std::move(prepared.ssid);
+    _apPassword = std::move(prepared.password);
+    _apConfigured = true;
+}
+
+bool WiFiInterface::setAPCredentials(const char* ssid, const char* password) {
+    APCredentials prepared;
+    if (!prepareAPCredentials(ssid, password, prepared)) return false;
+    setAPCredentials(std::move(prepared));
+    return true;
 }
 
 void WiFiInterface::setSTACredentials(const char* ssid, const char* password) {
@@ -39,13 +70,8 @@ bool WiFiInterface::isSTAConnected() const {
 }
 
 bool WiFiInterface::startAP() {
-    // Generate SSID from chip ID if not set
-    if (_apSSID.isEmpty()) {
-        uint32_t chip = ESP.getEfuseMac() & 0xFFFF;
-        char ssid[32];
-        snprintf(ssid, sizeof(ssid), DEVICE_AP_PREFIX "-%04x", chip);
-        _apSSID = ssid;
-    }
+    WiFi.persistent(false); // Credentials persist through UserConfig, not SDK NVS.
+    if (!_apConfigured && !setAPCredentials("", WIFI_AP_PASSWORD)) return false;
 
     // AP-only mode — saves ~20KB vs WIFI_AP_STA
     if (!WiFi.mode(WIFI_AP) || !WiFi.softAP(_apSSID.c_str(), _apPassword.c_str())) {
@@ -144,56 +170,6 @@ void WiFiInterface::loop() {
     readClients();
 }
 
-std::vector<WiFiInterface::ScanResult> WiFiInterface::scanNetworks(int maxResults) {
-    std::vector<ScanResult> results;
-    wifi_mode_t prevMode = WiFi.getMode();
-    bool wasConnected = (WiFi.status() == WL_CONNECTED);
-    String prevSSID, prevPass;
-
-    Serial.printf("[WIFI] Scan: prevMode=%d connected=%d\n", (int)prevMode, wasConnected);
-
-    // Ensure we're in a mode that supports scanning
-    if (prevMode == WIFI_OFF || prevMode == WIFI_AP) {
-        WiFi.mode(WIFI_AP_STA);
-    }
-    // Disconnect from any active STA connection to free the radio for scanning
-    WiFi.disconnect(false);
-    delay(300);
-
-    // Delete any previous scan results
-    WiFi.scanDelete();
-
-    Serial.println("[WIFI] Starting network scan...");
-
-    // Synchronous scan — blocks until complete (typically 2-5 seconds)
-    int n = WiFi.scanNetworks(false, false, false, 300, 0);
-
-    Serial.printf("[WIFI] Scan result: %d\n", n);
-
-    // If synchronous returned -2 (still running), poll for it
-    if (n == WIFI_SCAN_RUNNING) {
-        unsigned long t0 = millis();
-        while (n == WIFI_SCAN_RUNNING && millis() - t0 < 15000) {
-            delay(200);
-            n = WiFi.scanComplete();
-        }
-        Serial.printf("[WIFI] Scan poll result: %d\n", n);
-    }
-
-    if (n >= 0) results = getScanResults(maxResults);
-    WiFi.scanDelete();
-
-    // Restore previous WiFi mode
-    if (prevMode == WIFI_OFF) {
-        WiFi.disconnect(true);
-        WiFi.mode(WIFI_OFF);
-    } else if (prevMode == WIFI_AP) {
-        WiFi.mode(WIFI_AP);
-    }
-    // Note: if was STA/AP_STA, the reconnect will happen via main loop's STA handler
-    return results;
-}
-
 bool WiFiInterface::startAsyncScan() {
     const wifi_mode_t mode = WiFi.getMode();
     const wifi_mode_t scanMode = mode == WIFI_OFF ? WIFI_STA :
@@ -208,15 +184,10 @@ bool WiFiInterface::startAsyncScan() {
     const int result = WiFi.scanNetworks(true, false, false, 300, 0);
     const bool started = result == WIFI_SCAN_RUNNING || result >= 0;
     if (started) ScanDeadline::apply();
-    Serial.printf("[WIFI] Async scan %s (status=%d mode=%d heap=%lu largest=%lu)\n",
-                  started ? "started" : "rejected", result, (int)scanMode,
+    Serial.printf("[WIFI] Async scan %s (status=%d error=%d mode=%d heap=%lu largest=%lu)\n",
+                  started ? "started" : "rejected", result, (int)handheld_wifi_scan_error(), (int)scanMode,
                   (unsigned long)ESP.getFreeHeap(), (unsigned long)ESP.getMaxAllocHeap());
     return started;
-}
-
-bool WiFiInterface::isScanComplete() {
-    int result = WiFi.scanComplete();
-    return result != WIFI_SCAN_RUNNING;
 }
 
 std::vector<WiFiInterface::ScanResult> WiFiInterface::getScanResults(int maxResults) {
@@ -229,20 +200,25 @@ std::vector<WiFiInterface::ScanResult> WiFiInterface::getScanResults(int maxResu
     const size_t capacity = static_cast<size_t>(std::max(0, std::min(maxResults, 15)));
     results.reserve(capacity);
     for (int i = 0; i < n && capacity; ++i) {
-        String ssid = WiFi.SSID(i);
+        const auto* raw = static_cast<const wifi_ap_record_t*>(WiFi.getScanInfoByIndex(i));
+        if (!raw) throw std::bad_alloc();
+        String ssid;
+        const size_t length = strnlen(reinterpret_cast<const char*>(raw->ssid), sizeof(raw->ssid));
+        if (!ssid.reserve(length) || !ssid.concat(reinterpret_cast<const char*>(raw->ssid), length))
+            throw std::bad_alloc();
         if (ssid.isEmpty()) continue;
-        const int rssi = WiFi.RSSI(i);
-        const bool encrypted = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
+        const int rssi = raw->rssi;
+        const bool encrypted = raw->authmode != WIFI_AUTH_OPEN;
         auto same = std::find_if(results.begin(), results.end(),
             [&](const ScanResult& row) { return row.ssid == ssid; });
         if (same != results.end()) {
             if (rssi > same->rssi) { same->rssi = rssi; same->encrypted = encrypted; }
         } else if (results.size() < capacity) {
-            results.push_back({ssid, rssi, encrypted});
+            results.push_back({std::move(ssid), rssi, encrypted});
         } else {
             auto weakest = std::min_element(results.begin(), results.end(),
                 [](const ScanResult& a, const ScanResult& b) { return a.rssi < b.rssi; });
-            if (rssi > weakest->rssi) *weakest = {ssid, rssi, encrypted};
+            if (rssi > weakest->rssi) *weakest = {std::move(ssid), rssi, encrypted};
         }
     }
     std::sort(results.begin(), results.end(),

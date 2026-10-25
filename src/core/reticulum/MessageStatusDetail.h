@@ -11,6 +11,18 @@ inline const char* messageStatusLabel(LXMFStatus status) {
         case LXMFStatus::DELIVERED: return "delivered";
         case LXMFStatus::FAILED: return "failed";
         case LXMFStatus::UNCONFIRMED: return "unconfirmed";
+        case LXMFStatus::PROP_QUEUED: return "prop queued";
+        case LXMFStatus::PROP_SENDING: return "prop sending";
+        case LXMFStatus::PROPAGATED: return "propagated";
+        case LXMFStatus::PROP_UNAVAILABLE: return "prop unavailable";
+        case LXMFStatus::PROP_UNCONFIRMED: return "prop unconfirmed";
+        case LXMFStatus::RECIPIENT_UNKNOWN: return "recipient unknown";
+        case LXMFStatus::STAMP_UNKNOWN: return "stamp unknown";
+        case LXMFStatus::STAMP_COST_HIGH: return "stamp cost high";
+        case LXMFStatus::STAMP_FAILED: return "stamp failed";
+        case LXMFStatus::PROP_TOO_LARGE: return "prop too large";
+        case LXMFStatus::PROP_REJECTED: return "prop rejected";
+        case LXMFStatus::PROP_INVALID: return "prop invalid";
         default: return "draft";
     }
 }

@@ -19,9 +19,6 @@ MaintenanceResult performMaintenance(MaintenanceBarrier& barrier, const Request&
     const bool protocolFlushed = backend.persistData();
     const bool contactsFlushed = !nodes || nodes->flushPending();
     const bool identityFlushed = identities.flushPending();
-    // Device settings are already canonical; an optional SD mirror is not a
-    // reason to discard or roll back their committed value.
-    config.flushPending(sd, flash);
     if (!protocolFlushed || !contactsFlushed || !identityFlushed) {
         barrier.complete(token, false);
         return {false, "Flush failed. Restart again to force; pending data may be lost."};

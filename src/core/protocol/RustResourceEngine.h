@@ -10,6 +10,7 @@
 class RustClock;
 class RustInterfacePump;
 class RustLxmfEngine;
+class RustLinkManager;
 
 // One outbound + one inbound Reticulum Resource transfer. Rust owns codecs and crypto;
 // this owner schedules interface I/O, retries, cancellation and durable delivery.
@@ -24,10 +25,11 @@ public:
         RustClock* clock = nullptr;
         RustInterfacePump* pump = nullptr;
         RustLxmfEngine* lxmf = nullptr;
+        RustLinkManager* links = nullptr;
     };
-    // Called with the exact outgoing ticket when a resource resolves: true on a valid
-    // delivery proof, false on cancellation/timeout — LXMF flips DELIVERED / FAILED.
-    using OutcomeCb = std::function<void(handheld::outgoing::Ticket, bool)>;
+    using Outcome = handheld::outgoing::ResourceOutcome;
+    // The exact ticket and cause let AUTO distinguish timeout from explicit refusal.
+    using OutcomeCb = std::function<void(handheld::outgoing::Ticket, Outcome)>;
 
     void begin(const Deps& deps) { _d = deps; }
     void setOutcomeCallback(OutcomeCb cb) { _outcome = cb; }
@@ -40,8 +42,9 @@ public:
     bool receiving() const { return _in.active; }
     uint8_t activeTransfers() const { return (uint8_t)((_out.active ? 1 : 0) + (_in.active ? 1 : 0)); }
 
-    // Link-frame dispatch from the link manager (RESOURCE_ADV/REQ/PRF/parts).
-    void onLinkFrame(const uint8_t peerDest[16], const uint8_t linkId[16], const uint8_t key[64],
+    // True only for a valid frame belonging to an admitted transfer; this
+    // acceptance grants Link liveness, independently from message delivery.
+    bool onLinkFrame(const uint8_t peerDest[16], const uint8_t linkId[16], const uint8_t key[64],
                      uint8_t ifaceId, const rs_handheld_local_frame_t& f);
     void dropPeer(const uint8_t peerDest[16]);
     void cancelSend(handheld::outgoing::Ticket);
@@ -50,6 +53,7 @@ public:
 
 private:
     friend class RustLxmfEngine;
+    friend class RustPropagationInbox;
     // One service-owned synchronous staging buffer. Outgoing encoding is copied
     // into a packet or Rust Resource before a driver/callback can run. Incoming
     // assembly is copied into storage before application notifications. Neither
@@ -92,6 +96,10 @@ private:
         uint8_t reqRetriesLeft = 0;     // bounded part re-requests (Resource.py:613-628 MAX_RETRIES)
         bool requestPending = false;
         bool cancelPending = false;
+        bool awaitingSource = false;
+        bool response = false;
+        uint8_t requestId[16]{};
+        unsigned long sourcePollMs = 0;
         handheld::TxReceipt receipt;
     };
 
@@ -105,10 +113,11 @@ private:
                        uint8_t raw[128], size_t& rawLen);
     void sendRequest();
     void servePendingParts();
+    void acceptAssembled();
     void cancelOutbound();
     void closeInbound(bool cancel, bool keepReceipt = false);
     uint32_t waitMs(uint8_t iface, uint32_t packets, uint32_t minimum) const;
-    void closeOutbound(bool delivered, bool notify = true);
+    void closeOutbound(Outcome, bool notify = true);
 
     Deps _d;
     Out _out;

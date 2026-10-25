@@ -4,25 +4,30 @@
 #include <cstdint>
 #include <type_traits>
 #include "storage/ConversationView.h"
+#include "config/PropagationSettings.h"
+#include "protocol/RrcTypes.h"
+#include "voice/VoiceTypes.h"
+#include "voice/MemoTypes.h"
 
 namespace handheld {
 
 enum class Operation : uint8_t {
-    Nodes, PeerName, ConversationPage, ConversationDetail, HistoryPage, ReadRecord, HistoryStatus, Settings, Identities, Scan,
+    Nodes, PeerName, ConversationPage, ConversationDetail, HistoryPage, ReadRecord, HistoryStatus, Settings, Identities, Scan, PropagationNodes,
+    RrcHubs, RrcRooms, RrcChannels, RrcPeople, RrcDirectory, RrcContext, RrcHistoryPage, RrcHistoryRecord, RrcHistoryStatus, RrcDraft, RrcDetail, RrcSavedRooms, RrcInbox, RrcRoom,
     Send, MarkRead, DeleteConversation, SaveContact, DeleteContact, RenameContact,
     ApplySettings, Announce, CreateIdentity, ImportIdentity, Diagnostics,
-    HomeReady, Restart, PowerOff, SwitchIdentity, FormatSD, WipeSD, FactoryReset,
+    PropagationSync, RrcCommand, VoiceCommand, MemoCommand, HomeReady, DeleteRecord, Restart, PowerOff, SwitchIdentity, FormatSD, WipeSD, FactoryReset,
     EnableSDAndRestart, ClearOldDataAndRestart
 };
 enum class Admission : uint8_t { Admitted, Busy, NotReady, Invalid };
-enum class Outcome : uint8_t { Ok, Failed, Stale, Invalid, NotReady, Cancelled };
+enum class Outcome : uint8_t { Ok, Failed, Stale, Invalid, NotReady, Cancelled, NoMemory };
 enum class ServiceState : uint8_t { Starting, Running, Quiescing, Stopped, Failed };
 
 constexpr bool lifecycleOperation(Operation op) {
     return op >= Operation::Restart;
 }
 constexpr bool queryOperation(Operation op) {
-    return op <= Operation::Scan;
+    return op <= Operation::RrcRoom;
 }
 
 struct Request {
@@ -69,6 +74,10 @@ struct Result {
 };
 
 struct Status {
+    propagation::SyncView propagation;
+    rrc::Status rrc;
+    voice::Status voice;
+    memo::Status memo;
     uint32_t generation = 1;
     uint32_t storeRevision = 0;
     uint32_t historyRevision = 0; // Structural invalidation only; MAX is exhausted.
@@ -105,6 +114,8 @@ struct Status {
     bool ap = false;
     bool sd = false;
     bool flash = false;
+    bool historyRolledOff = false; // The oldest history rolled off for space this boot.
+    storage::HistoryMode history = storage::HistoryMode::Rolling;
     bool scanRunning = false;
     bool gpsFix = false;
     char identity[33] = {};

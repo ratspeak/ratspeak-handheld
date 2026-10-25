@@ -3,6 +3,7 @@
 // Shared input contract for the Deck/Pager LVGL frontend. Hardware adapters
 // translate their own keys and pointing devices into these semantic events.
 enum class InputMode { Navigation, TextInput };
+enum class InputSource : unsigned char { Keyboard, Wheel, Trackball };
 
 struct KeyEvent {
     char character = 0;
@@ -19,7 +20,7 @@ struct KeyEvent {
     bool down = false;
     bool left = false;
     bool right = false;
-    bool encoder = false; // Scroll-wheel movement or click.
+    InputSource source = InputSource::Keyboard;
     bool repeat = false;  // Text deletion may repeat; back/dismiss must not.
 };
 

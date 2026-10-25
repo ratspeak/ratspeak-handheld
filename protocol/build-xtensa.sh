@@ -23,10 +23,29 @@ test "$ver" = "$(python3 ../tools/release_identity.py toolchain)" || {
     exit 1
 }
 
-source_fingerprint="$(python3 ../tools/source_fingerprint.py)"
+source_fingerprint="$(python3 ../tools/source_fingerprint.py --archive)"
+
+# Cargo hashes the absolute path of out-of-workspace path dependencies into
+# symbol names, and panic locations embed source paths. Build through one fixed
+# stage of links to this checkout's sources and remap the stage, registry and
+# sysroot, so any checkout of the selected sources reproduces the same bytes.
+stage=/tmp/ratspeak-handheld-xtensa
+mkdir "$stage" || { echo "ERROR: $stage exists (concurrent or interrupted build)" >&2; exit 1; }
+trap 'rm -f -- "$stage"/*; rmdir -- "$stage"' EXIT
+ln -s "$(cd .. && pwd -P)" "$stage/ratspeak-handheld"
+for sibling in rsReticulumLite rsLXMFLite rsLXST rsReticulum rsLXMF; do
+    ln -s "$(cd ../.. && pwd -P)/$sibling" "$stage/$sibling"
+done
+remaps=(
+    "--remap-path-prefix=$stage=/ratspeak"
+    "--remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}/registry/src=/cargo/registry/src"
+    "--remap-path-prefix=$(rustc +esp --print sysroot)/lib/rustlib/src/rust=/rustc/$(rustc +esp -vV | sed -n 's/^commit-hash: //p')"
+)
+export CARGO_ENCODED_RUSTFLAGS="$(IFS=$'\x1f'; echo "${remaps[*]}")"
 
 for profile in small micro; do
     cargo +esp build -p ratspeak-handheld-protocol \
+        --manifest-path "$stage/ratspeak-handheld/protocol/Cargo.toml" \
         --profile xtensa \
         --target xtensa-esp32s3-none-elf \
         --no-default-features \
@@ -38,7 +57,7 @@ for profile in small micro; do
         "prebuilt/xtensa-esp32s3/$profile/"
 done
 
-test "$source_fingerprint" = "$(python3 ../tools/source_fingerprint.py)" || {
+test "$source_fingerprint" = "$(python3 ../tools/source_fingerprint.py --archive)" || {
     echo "ERROR: source changed while rebuilding archives" >&2
     exit 1
 }
@@ -52,10 +71,11 @@ test "$archive_inputs" = "$(python3 ../tools/release_identity.py archive-inputs)
 {
     echo "built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "toolchain: $ver"
-    echo "ratspeak-handheld.source-sha256: $source_fingerprint"
+    echo "protocol.source-sha256: $source_fingerprint"
     echo "source-graph-sha256: $archive_inputs"
     echo "rsReticulumLite: $(git -C ../../rsReticulumLite rev-parse HEAD)$( { git -C ../../rsReticulumLite diff --quiet HEAD && test -z "$(git -C ../../rsReticulumLite ls-files --others --exclude-standard 2>/dev/null)"; } 2>/dev/null || echo ' +dirty')"
     echo "rsLXMFLite: $(git -C ../../rsLXMFLite rev-parse HEAD)$( { git -C ../../rsLXMFLite diff --quiet HEAD && test -z "$(git -C ../../rsLXMFLite ls-files --others --exclude-standard 2>/dev/null)"; } 2>/dev/null || echo ' +dirty')"
+    echo "rsLXST: $(git -C ../../rsLXST rev-parse HEAD)$( { git -C ../../rsLXST diff --quiet HEAD && test -z "$(git -C ../../rsLXST ls-files --others --exclude-standard 2>/dev/null)"; } 2>/dev/null || echo ' +dirty')"
     for profile in small micro; do
         echo "$profile.sha256: $(shasum -a 256 "prebuilt/xtensa-esp32s3/$profile/libratspeak_protocol.a" | cut -d' ' -f1)"
     done

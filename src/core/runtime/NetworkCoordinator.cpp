@@ -1,5 +1,6 @@
 #include "NetworkCoordinator.h"
 #include "config/NetworkTiming.h"
+#include "config/NetworkSettings.h"
 #include "protocol/RustInterfacePump.h"
 #include "transport/TcpClientSet.h"
 #include "transport/RnsAutoInterface.h"
@@ -7,6 +8,7 @@
 #include <esp_netif.h>
 #include <new>
 #include <algorithm>
+#include <utility>
 
 namespace handheld {
 namespace {
@@ -32,21 +34,22 @@ void NetworkCoordinator::retireTransports() {
     _pump.attachWifiAp(nullptr);
     if (_ap) { delete _ap; _ap = nullptr; }
     _connected = false; _deferred = false; _reload = false;
+    _apApply = false; _apResult = HotspotResult::None;
 }
-bool NetworkCoordinator::begin(const UserSettings& settings) {
+bool NetworkCoordinator::begin(const UserSettings& settings, RatWiFiMode mode) {
     if (_closed) return false;
     WiFiConnection::initializeEvents();
     retireTransports();
     _wifi.stop(); _helpersStopped = false;
     WiFi.disconnect(false);
-    if (settings.wifiMode == RAT_WIFI_STA) return _wifi.begin(settings);
-    if (settings.wifiMode == RAT_WIFI_OFF) return WiFi.mode(WIFI_OFF);
-    if (settings.wifiMode != RAT_WIFI_AP) return false;
+    if (mode == RAT_WIFI_STA) return _wifi.begin(settings);
+    if (mode == RAT_WIFI_OFF) return WiFi.mode(WIFI_OFF);
+    if (mode != RAT_WIFI_AP) return false;
     _ap = new (std::nothrow) WiFiInterface();
     if (!_ap) { WiFi.mode(WIFI_OFF); return false; }
     // An empty SSID still selects the generated name; its saved password applies.
-    _ap->setAPCredentials(settings.wifiAPSSID.c_str(), settings.wifiAPPassword.c_str());
-    if (!_ap->start()) { delete _ap; _ap = nullptr; return false; }
+    if (!_ap->setAPCredentials(settings.wifiAPSSID.c_str(), settings.wifiAPPassword.c_str()) ||
+        !_ap->start()) { delete _ap; _ap = nullptr; WiFi.mode(WIFI_OFF); return false; }
     _pump.attachWifiAp(_ap);
     return true;
 }
@@ -54,7 +57,14 @@ void NetworkCoordinator::disconnect() {
     if (_closed) return;
     retireTransports(); _wifi.stop(); WiFi.disconnect(false); WiFi.mode(WIFI_OFF);
 }
-uint8_t NetworkCoordinator::poll(const UserSettings& settings, unsigned long rnsDuration, Budget budget) {
+void NetworkCoordinator::settingsCommitted(const UserSettings& settings, uint8_t changes) {
+    if (_closed) return;
+    if (changes & network_settings::Tcp) requestTcpReload();
+    if (settings.wifiMode != RAT_WIFI_AP) _apApply = false;
+    else if (_ap && (changes & network_settings::AccessPoint)) _apApply = true;
+}
+uint8_t NetworkCoordinator::poll(const UserSettings& settings, unsigned long rnsDuration, Budget budget,
+                                 HotspotAdmission hotspotAdmission) {
     if (_closed) { pollSettlements(); return None; }
     uint8_t events = None;
     const bool explicitReload = _reload;
@@ -110,6 +120,26 @@ uint8_t NetworkCoordinator::poll(const UserSettings& settings, unsigned long rns
         }
         else Serial.println("[TCP] Invalid endpoint settings; existing owner retained");
     }
+    // Only this new blocking step needs fresh radio/audio admission. Scanner
+    // settlement and retired TCP helper progress above/below must keep running.
+    if (settings.wifiMode != RAT_WIFI_AP) _apApply = false;
+    if (_apApply && _ap && !_wifi.scanning() && hotspotAdmission && hotspotAdmission()) {
+        _apApply = false;
+        WiFiInterface::APCredentials prepared;
+        if (!WiFiInterface::prepareAPCredentials(settings.wifiAPSSID.c_str(),
+                                                 settings.wifiAPPassword.c_str(), prepared)) {
+            _apResult = HotspotResult::NeedsRestart; // Existing service is intact.
+        } else {
+            _pump.attachWifiAp(nullptr);
+            _ap->stop();
+            _ap->setAPCredentials(std::move(prepared));
+            if (_ap->start()) {
+                _pump.attachWifiAp(_ap);
+                _apResult = HotspotResult::Applied;
+            } else _apResult = HotspotResult::Unavailable;
+        }
+        events |= HotspotChanged;
+    }
     _tcp.maintain();
     if (rnsDuration > budget.overloadMs) events |= TcpSkipped;
     else {
@@ -122,6 +152,7 @@ uint8_t NetworkCoordinator::poll(const UserSettings& settings, unsigned long rns
 }
 void NetworkCoordinator::closeAdmissions() {
     _closed = true; _deferred = false; _reload = false;
+    _apApply = false; _apResult = HotspotResult::None;
     _wifi.closeAdmissions();
 }
 void NetworkCoordinator::pollSettlements() {

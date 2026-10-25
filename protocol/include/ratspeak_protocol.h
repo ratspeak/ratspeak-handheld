@@ -67,6 +67,49 @@ typedef enum rs_handheld_status {
 /* Opaque, Rust-owned backend context. */
 typedef struct rs_handheld_rns rs_handheld_rns_t;
 
+/* One resumable stamp job, owned exclusively by the caller until destroy. */
+typedef struct RsHandheldStamp rs_handheld_stamp_t;
+typedef struct rs_handheld_stamp_progress {
+    uint64_t attempts;
+    uint8_t stamp[32];
+    uint16_t completed_rounds, total_rounds, value;
+    uint8_t state; /* 0 preparing, 1 searching, 2 complete, 3 exhausted, 4 cancelled */
+} rs_handheld_stamp_progress_t;
+/* kind: 0 recipient, 1 propagation. Fresh CSPRNG seed. Cost <=20, attempts <=8388608.
+ * Failure leaves *out unchanged. Serialize calls; buffers must be disjoint. */
+rs_handheld_status_t rs_handheld_stamp_create(const uint8_t material[32], uint8_t kind,
+    uint8_t cost, const uint8_t seed[32], uint64_t attempt_limit, rs_handheld_stamp_t **out);
+/* At most 4 preparation rounds or 1024 nonces. Zero budgets inspect progress. */
+rs_handheld_status_t rs_handheld_stamp_step(rs_handheld_stamp_t *job, uint16_t rounds,
+    uint32_t attempts, rs_handheld_stamp_progress_t *out);
+rs_handheld_status_t rs_handheld_stamp_cancel(rs_handheld_stamp_t *job);
+void rs_handheld_stamp_destroy(rs_handheld_stamp_t *job); /* null is a no-op */
+
+/* Bounded relay codecs. Buffers are exclusive; all other inputs/outputs are
+ * disjoint and non-null. Crypto failure invalidates buffer contents. All scalar
+ * outputs publish only on success. Capacity is at most RESOURCE_DATA_MAX. */
+rs_handheld_status_t rs_handheld_lxmf_relay_size(size_t packed_length, uint8_t recipient_stamp,
+    size_t *entry_length, size_t *upload_length);
+rs_handheld_status_t rs_handheld_lxmf_append_stamp(uint8_t *buffer, size_t length,
+    size_t capacity, const uint8_t stamp[32], size_t *out_length);
+rs_handheld_status_t rs_handheld_lxmf_relay_encrypt(const rs_handheld_rns_t *ctx,
+    const uint8_t recipient[64], uint64_t wall_secs, uint64_t uptime_ms,
+    const uint8_t ephemeral[32], const uint8_t iv[16], uint8_t *buffer,
+    size_t length, size_t capacity, size_t *out_length, uint8_t transient_id[32]);
+rs_handheld_status_t rs_handheld_lxmf_transient_id(const uint8_t *data, size_t length, uint8_t out[32]);
+rs_handheld_status_t rs_handheld_lxmf_relay_upload(uint8_t *buffer, size_t encrypted_length,
+    size_t capacity, double timestamp, const uint8_t stamp[32], size_t *out_length);
+/* Restores full packed LXMF. Caller must then validate sender/signature and
+ * commit locally before allowing a node purge. Retained keys stay inside Rust. */
+rs_handheld_status_t rs_handheld_lxmf_relay_decrypt(const rs_handheld_rns_t *ctx,
+    uint8_t *buffer, size_t length, size_t *out_length, uint8_t transient_id[32]);
+rs_handheld_status_t rs_handheld_lxmf_available_first(const uint8_t *data, size_t length,
+                                                    uint8_t id[32], uint32_t *count);
+rs_handheld_status_t rs_handheld_lxmf_available_at(const uint8_t *data, size_t length, uint32_t index,
+                                                 uint8_t id[32], uint32_t *count);
+rs_handheld_status_t rs_handheld_lxmf_fetched_view(const uint8_t *data, size_t length,
+    size_t *offset, size_t *entry_length);
+
 /* Static NUL-terminated version string, owned by Rust. Never null; do not free. */
 const char *rs_handheld_rns_version(void);
 
@@ -139,6 +182,32 @@ typedef struct rs_handheld_announce_event {
     uint32_t app_data_len;
     uint8_t  app_data[RS_HANDHELD_ANNOUNCE_MAX_APP_DATA];
 } rs_handheld_announce_event_t;
+
+/* Parsed propagation announce metadata, after signature/binding acceptance.
+ * Decimal KB limits; name is sanitized UTF-8 with NUL termination. */
+typedef struct rs_handheld_propagation_node {
+    uint64_t timebase;
+    uint64_t transfer_limit_kb;
+    uint64_t sync_limit_kb;
+    uint8_t enabled;
+    uint8_t stamp_cost;
+    uint8_t stamp_flex;
+    uint8_t peering_cost;
+    uint8_t name[64];
+} rs_handheld_propagation_node_t;
+
+rs_handheld_status_t rs_handheld_lxmf_propagation_node(const uint8_t *data, size_t length,
+                                                     rs_handheld_propagation_node_t *out);
+/* Request operations: 0 list, 1 one-message fetch, 2 durable-only purge.
+ * ID may be NULL only for list. limit_bytes is converted to decimal KB. */
+rs_handheld_status_t rs_handheld_lxmf_get_request(double timestamp, uint8_t operation,
+    const uint8_t transient_id[32], uint16_t limit_bytes, uint8_t *out, size_t capacity, size_t *length);
+/* Exact request-bound RESPONSE envelope; returns an encoded-value span into input. */
+rs_handheld_status_t rs_handheld_lxmf_response_view(const uint8_t *data, size_t length,
+    const uint8_t request_id[16], size_t *offset, size_t *value_length);
+/* known=0 means unknown; known=1,cost=0 means explicitly free recipient delivery. */
+rs_handheld_status_t rs_handheld_lxmf_delivery_cost(const uint8_t *data, size_t length,
+                                                uint8_t *known, uint8_t *cost);
 
 /* Build a signed lxmf.delivery announce_data for the active identity into `out` (capacity
  * out_cap); *out_len receives the byte length, out_dest_hash[16] the announce destination.
@@ -222,14 +291,17 @@ size_t rs_handheld_rns_transport_align(int32_t profile);
  * path requests for OTHER dests stay DROPPED. No out-param — the arrival interface is already in
  * scope at the C++ call site and the re-announce is a fresh signed announce, not tag-bound. */
 #define RS_HANDHELD_INGEST_PATH_REQUEST_SELF     10
-/* A validated inbound announce for an aspect OTHER than lxmf.delivery (e.g. lxst.telephony,
- * lxmf.propagation, NomadNet). Its path is learned like any announce, but out_event is NOT filled
+/* A validated inbound announce for an aspect OTHER than lxmf.delivery/lxmf.propagation
+ * (e.g. lxst.telephony, NomadNet). Its path is learned, but out_event is NOT filled
  * and the C++ must NOT surface it as a contact — this LXMF endpoint neither routes nor lists other
  * aspects (otherwise one identity can appear as several peers). */
 #define RS_HANDHELD_INGEST_ANNOUNCE_OTHER        11
 /* A signature-valid announce rejected by transport freshness/quality policy. out_event is NOT
  * touched; it must never reach KeyMap, contacts, or peer-ratchet persistence. */
 #define RS_HANDHELD_INGEST_ANNOUNCE_IGNORED      12
+// Accepted propagation announce: event filled; never project it as a contact.
+#define RS_HANDHELD_INGEST_ANNOUNCE_PROPAGATION  13
+#define RS_HANDHELD_INGEST_ANNOUNCE_RRC          14
 
 /* rs_handheld_rns_poll_outbound *out_reason codes (OutboundReason in src/lib.rs). */
 #define RS_HANDHELD_TX_ANNOUNCE_REBROADCAST 0
@@ -335,6 +407,11 @@ rs_handheld_status_t rs_handheld_rns_packet_ingest(rs_handheld_rns_t *ctx, const
 rs_handheld_status_t rs_handheld_rns_update_interface(rs_handheld_rns_t *ctx,
     uint8_t interface_id, uint32_t generation, int32_t interface_mode,
     uint32_t bitrate_bps, uint8_t outbound);
+/* Exact-owner clear-packet budget (0..500), after framing/IFAC. A stale/zero
+ * generation returns ERR_NOT_READY and leaves current facts unchanged. Changes
+ * retire transit Links; a budget below500 cannot carry any Link handshake. */
+rs_handheld_status_t rs_handheld_rns_update_interface_capacity(rs_handheld_rns_t *ctx,
+    uint8_t interface_id, uint32_t generation, uint16_t clear_mtu);
 
 rs_handheld_status_t rs_handheld_rns_packet_ingest_with_mode(rs_handheld_rns_t *ctx,
                                          const uint8_t *raw, size_t raw_len,
@@ -637,6 +714,36 @@ rs_handheld_status_t rs_handheld_rns_lxmf_build_link(const rs_handheld_rns_t *ct
                                            uint8_t *out, size_t out_cap, size_t *out_len,
                                            uint8_t out_dest_hash[16], uint8_t out_message_id[32]);
 
+/* Recorded voice uses native LXMF 700C mode 0x03; it is not an LXST mode byte.
+ * These product limits are separate from the whole-message Resource ceiling. */
+#define RS_HANDHELD_MEMO_MODE 0x03u
+#define RS_HANDHELD_MEMO_RECORD_BYTES 1500u
+#define RS_HANDHELD_MEMO_PLAY_BYTES 3000u
+#define RS_HANDHELD_MEDIA_PLAINTEXT_MAX 383u
+
+typedef struct rs_handheld_memo_info {
+    uint32_t frames, duration_ms, sample_rate, frame_samples, frame_bytes, codec_profile;
+} rs_handheld_memo_info_t;
+/* Inspect before playback: 700C only, nonempty integral native frames, <=30s.
+ * Returns UNSUPPORTED for another mode, INVALID_ARG for framing, CAPACITY for
+ * duration. Does not allocate or begin audio. Output unchanged on failure. */
+rs_handheld_status_t rs_handheld_memo_inspect(uint8_t mode, size_t byte_length,
+                                            rs_handheld_memo_info_t *out);
+/* Exact signed packed size, excluding recipient stamp/propagation overhead. */
+rs_handheld_status_t rs_handheld_lxmf_audio_packed_size(size_t title_len, size_t content_len,
+                                            uint8_t mode, size_t audio_len, size_t *out_size);
+/* Signed native FIELD_AUDIO for Direct or PN wrapping. Inputs/output must be
+ * disjoint. Empty inputs may be NULL. The whole-message bound is enforced before
+ * allocation/signing. Scalar outputs unchanged on failure. Framing does not
+ * establish codec support: inspect newly recorded media separately. */
+rs_handheld_status_t rs_handheld_rns_lxmf_build_audio(const rs_handheld_rns_t *ctx,
+                                            const uint8_t recipient_public_key[64], double timestamp,
+                                            const uint8_t *title, size_t title_len,
+                                            const uint8_t *content, size_t content_len,
+                                            uint8_t mode, const uint8_t *audio, size_t audio_len,
+                                            uint8_t *out, size_t out_cap, size_t *out_len,
+                                            uint8_t out_dest_hash[16], uint8_t out_message_id[32]);
+
 /* Validate a FULL packed LXMF message received over a link / assembled from a resource:
  * dest(16) || source(16) || signature(64) || msgpack payload. The active identity must be the
  * delivery dest (RS_HANDHELD_ERR_CRYPTO on mismatch/forgery); source_public_key is recalled by the
@@ -671,6 +778,36 @@ rs_handheld_status_t rs_handheld_rns_lxmf_parse_link_view(const rs_handheld_rns_
                                            const uint8_t source_public_key[64],
                                            rs_handheld_lxmf_view_t *out_view);
 
+/* State 0 absent, 1 well-framed, 2 malformed. Unknown modes are well-framed;
+ * memo_inspect separately decides playback support. No malformed field can
+ * invalidate independently authenticated text or imply successful playback. */
+typedef struct rs_handheld_audio_view {
+    uint32_t state, mode, offset, length;
+} rs_handheld_audio_view_t;
+typedef struct rs_handheld_media_view {
+    rs_handheld_lxmf_view_t message;
+    rs_handheld_audio_view_t audio;
+} rs_handheld_media_view_t;
+/* Authenticated text/audio spans borrow the exact packed input. No spans/key
+ * are published on authentication failure. No proof/storage/playback side effect. */
+rs_handheld_status_t rs_handheld_rns_lxmf_parse_media_view(const rs_handheld_rns_t *ctx,
+                                            const uint8_t *data, size_t data_len,
+                                            const uint8_t source_public_key[64],
+                                            rs_handheld_media_view_t *out_view);
+/* Opportunistic equivalent: the exact hint from peek_source_hint and the
+ * caller's recalled source key, with spans into caller-owned plaintext scratch.
+ * The existing source discovery/unknown-source retry policy stays caller-owned.
+ * Scratch must have at least
+ * MEDIA_PLAINTEXT_MAX bytes. Contents unspecified on failure; NEVER consume then.
+ * Retain scratch unchanged until storage has copied all admitted spans. All
+ * input/output regions are disjoint; metadata unchanged on failure. */
+rs_handheld_status_t rs_handheld_rns_lxmf_parse_hint_media(const rs_handheld_rns_t *ctx,
+                                            const uint8_t *data, size_t data_len,
+                                            uint8_t key_hint, const uint8_t source_public_key[64],
+                                            uint8_t *plain, size_t plain_cap,
+                                            rs_handheld_media_view_t *out_view);
+
+
 /* ---- Proof / delivery-status / dedup: byte-exact with Python RNS 1.3.8 ----
  * A proof of receipt is the receiver's Ed25519 signature over the proven packet's full 32-byte hash:
  * implicit = signature(64) (Reticulum default); explicit = packet_hash(32) || signature(64). The
@@ -684,6 +821,81 @@ rs_handheld_status_t rs_handheld_rns_lxmf_parse_link_view(const rs_handheld_rns_
  * active identity. implicit != 0 -> signature(64); else packet_hash(32) || signature(64). Writes the
  * proof to out[out_cap] (>= 64, or >= 96 for explicit) and *out_len. RS_HANDHELD_ERR_NOT_READY if no
  * identity is loaded; RS_HANDHELD_ERR_CAPACITY if out is too small. */
+/* Explicit Link packet proof. seed is THIS initiator Link's retained Ed25519
+ * seed. Owner checks role/state and wipes the seed on teardown. */
+rs_handheld_status_t rs_handheld_rns_link_packet_proof(const uint8_t seed[32],
+    const uint8_t packet_hash[32], uint8_t *out, size_t out_cap, size_t *out_len);
+
+/* RRC v1 packet codec. All offsets borrow the original, unchanged input packet.
+ * No heap allocation or persistent context. Decoding never authenticates a hub:
+ * the Link/session owner must enforce source and session bindings. */
+typedef struct { uint16_t offset, length; } rs_handheld_rrc_span_t;
+typedef struct {
+    uint64_t kind, timestamp_ms;
+    uint8_t id[8], source[16], destination[16], has_destination;
+} rs_handheld_rrc_meta_t;
+typedef struct {
+    rs_handheld_rrc_meta_t meta;
+    rs_handheld_rrc_span_t room, nickname, body, text;
+    uint8_t body_kind; /* absent=0, text=1, other CBOR=2 */
+} rs_handheld_rrc_view_t;
+typedef struct {
+    rs_handheld_rrc_span_t name, version;
+    uint32_t limits[5]; /* nickname, room, body, rooms, messages/minute */
+    uint8_t limits_present, capabilities;
+} rs_handheld_rrc_welcome_t;
+rs_handheld_status_t rs_handheld_rrc_decode(const uint8_t *data, size_t length,
+    rs_handheld_rrc_view_t *out);
+/* body_kind: absent=0, text=1, encoded CBOR=2, HELLO client-version=3.
+ * Null out counts only. On insufficient capacity the output is untouched. */
+rs_handheld_status_t rs_handheld_rrc_encode(const rs_handheld_rrc_meta_t *meta,
+    const uint8_t *room, size_t room_length, const uint8_t *nickname, size_t nickname_length,
+    const uint8_t *body, size_t body_length, uint8_t body_kind,
+    uint8_t *out, size_t capacity, size_t *out_length);
+rs_handheld_status_t rs_handheld_rrc_welcome(const uint8_t *data, size_t length,
+    rs_handheld_rrc_welcome_t *out);
+/* Validates the entire roster before returning a member. Null out_member counts. */
+rs_handheld_status_t rs_handheld_rrc_member(const uint8_t *data, size_t length,
+    size_t index, uint8_t out_member[16], size_t *out_count);
+rs_handheld_status_t rs_handheld_rrc_announce_name(const uint8_t *data, size_t length,
+    rs_handheld_rrc_span_t *out);
+/* UTF-8 trim; rooms additionally lowercase using the desktop Unicode rules.
+ * nickname=1 validates a nickname, nickname=0 a room. Output excludes NUL. */
+rs_handheld_status_t rs_handheld_rrc_normalize(const uint8_t *data, size_t length,
+    uint8_t nickname, uint8_t *out, size_t capacity, size_t *out_length);
+/* Desktop exact literal @nickname or @full-identity matching, case-insensitive.
+ * UTF-8 text <=431, nickname <=32 bytes. Writes 0/1; untouched on error.
+ * All pointers nonnull, readable for lengths; output writable and disjoint. */
+rs_handheld_status_t rs_handheld_rrc_mentions(const uint8_t *data, size_t length,
+    const uint8_t *nickname, size_t nickname_length, const uint8_t identity[16], uint8_t *out);
+/* Derive a participant's canonical LXMF address. The identity comes from the
+ * authenticated hub; LXMF independently obtains/authenticates the recipient key. */
+rs_handheld_status_t rs_handheld_lxmf_destination_for_identity(const uint8_t identity[16], uint8_t out[16]);
+/* Derive rrc.hub for a control source already authenticated by the Link owner.
+ * Used to validate the original hub source when projecting stored notices. */
+rs_handheld_status_t rs_handheld_rrc_destination_for_identity(const uint8_t identity[16], uint8_t out[16]);
+/* Domain-separated local conversation key; never a Reticulum destination.
+ * kind=0 normalized room, kind=1 full participant identity,
+ * kind=2 source identity[16] followed by RRC message ID[8]. */
+rs_handheld_status_t rs_handheld_rrc_storage_key(uint8_t kind, const uint8_t *data,
+    size_t length, uint8_t out[16]);
+/* Verify the rrc.hub name binding and derive the authenticated control source.
+ * The caller must already have authenticated the announced public key. */
+rs_handheld_status_t rs_handheld_rrc_hub_identity(const uint8_t destination[16],
+    const uint8_t public_key[64], uint8_t out_identity[16]);
+/* Desktop RSCHKEY v1 identity seal, bounded to 160 UTF-8 key bytes. The room
+ * must be canonical (1..64 bytes). All pointers disjoint; output/capacity <=431.
+ * Entropy is 32 fresh ephemeral bytes plus a fresh 16-byte IV. Output length is
+ * zero on failure; an unsuccessful seal may have modified the output buffer. */
+rs_handheld_status_t rs_handheld_rrc_seal_key(const rs_handheld_rns_t *ctx,
+    const uint8_t hub[16], const uint8_t *room, size_t room_length,
+    const uint8_t *key, size_t key_length, const uint8_t entropy[48],
+    uint8_t *out, size_t capacity, size_t *out_length);
+rs_handheld_status_t rs_handheld_rrc_unseal_key(const rs_handheld_rns_t *ctx,
+    const uint8_t hub[16], const uint8_t *room, size_t room_length,
+    const uint8_t *sealed, size_t sealed_length,
+    uint8_t *out, size_t capacity, size_t *out_length);
+
 rs_handheld_status_t rs_handheld_rns_proof_build(const rs_handheld_rns_t *ctx, const uint8_t packet_hash[32],
                                        int32_t implicit, uint8_t *out, size_t out_cap,
                                        size_t *out_len);
@@ -741,8 +953,16 @@ rs_handheld_status_t rs_handheld_rns_seed_seen_message(rs_handheld_rns_t *ctx, c
 
 /* INITIATOR: build a LINKREQUEST. x25519_priv[32] + ed25519_seed[32] are per-link EPHEMERAL key
  * material (caller entropy; no RNG here) — retain x25519_priv for rs_handheld_rns_link_derive. mode MUST be
- * 1 (AES-256); any other value -> RS_HANDHELD_ERR_UNSUPPORTED. mtu is masked to 21 bits (use 500). Writes
+ * 1 (AES-256); any other value -> RS_HANDHELD_ERR_UNSUPPORTED. mtu must be0 or500 (zero normalizes to500); other values return ERR_INVALID_ARG. Writes
  * the payload to out[out_cap] and *out_len (67). RS_HANDHELD_ERR_CAPACITY if out is too small. */
+/* ACTIVE initiator only: build LINKIDENTIFY plaintext, then encrypt on that Link. */
+rs_handheld_status_t rs_handheld_rns_link_identify(const rs_handheld_rns_t *ctx,
+                                                const uint8_t link_id[16], uint8_t out[128]);
+/* Responder Link, from the handshake on: verify decrypted LINKIDENTIFY; retain first
+ * identity in the Link owner and suppress duplicate callbacks. Output unchanged on error. */
+rs_handheld_status_t rs_handheld_rns_link_verify_identification(const uint8_t link_id[16],
+                                                const uint8_t *data, size_t data_len,
+                                                uint8_t out_public[64]);
 rs_handheld_status_t rs_handheld_rns_link_request_build(const uint8_t x25519_priv[32],
                                               const uint8_t ed25519_seed[32], uint8_t mode,
                                               uint32_t mtu, uint8_t *out, size_t out_cap,
@@ -751,7 +971,9 @@ rs_handheld_status_t rs_handheld_rns_link_request_build(const uint8_t x25519_pri
 /* RESPONDER: parse a LINKREQUEST. out_x25519_pub[32] (required) is the initiator's ephemeral X25519
  * public key for rs_handheld_rns_link_derive; out_ed25519_pub[32], out_mode, out_mtu are optional (NULL to
  * ignore). The legacy 64-byte (keys-only) form is also accepted, defaulting to AES-256/MTU-500.
- * RS_HANDHELD_ERR_INVALID_ARG on NULL required args or a length that is neither 64 nor 67. */
+ * Only AES-256 is accepted; other modes return ERR_UNSUPPORTED. Valid larger offers select500.
+ * RS_HANDHELD_ERR_INVALID_ARG on NULL required args, sub500 MTU or a length other than64/67.
+ * Every output is unchanged on error. */
 rs_handheld_status_t rs_handheld_rns_link_request_parse(const uint8_t *data, size_t data_len,
                                               uint8_t out_x25519_pub[32], uint8_t out_ed25519_pub[32],
                                               uint8_t *out_mode, uint32_t *out_mtu);
@@ -763,8 +985,8 @@ rs_handheld_status_t rs_handheld_rns_link_id(const uint8_t dest_hash[16], const 
 
 /* RESPONDER: build an LRPROOF, signed with the ACTIVE identity's long-term Ed25519 key.
  * responder_x25519_priv[32] is the responder's per-link EPHEMERAL X25519 key (retain it for
- * rs_handheld_rns_link_derive). mode MUST be 1 (AES-256) -> else RS_HANDHELD_ERR_UNSUPPORTED; mtu masked to 21
- * bits. Writes the payload to out[out_cap] and *out_len (99). RS_HANDHELD_ERR_NOT_READY if no identity is
+ * rs_handheld_rns_link_derive). mode MUST be 1 (AES-256) -> else RS_HANDHELD_ERR_UNSUPPORTED; mtu must be0 or500,
+ * zero normalizes to500; other values return ERR_INVALID_ARG. Writes the payload to out[out_cap] and *out_len (99). RS_HANDHELD_ERR_NOT_READY if no identity is
  * loaded; RS_HANDHELD_ERR_CAPACITY if out is too small. */
 rs_handheld_status_t rs_handheld_rns_link_proof_build(const rs_handheld_rns_t *ctx,
                                             const uint8_t responder_x25519_priv[32],
@@ -772,10 +994,11 @@ rs_handheld_status_t rs_handheld_rns_link_proof_build(const rs_handheld_rns_t *c
                                             uint8_t *out, size_t out_cap, size_t *out_len);
 
 /* INITIATOR: validate an LRPROOF against the destination identity's public key (from its announce) +
- * the link id. Writes 1/0 to *out_valid; on a structurally valid proof, the responder's ephemeral
+ * the link id. Writes 1/0 to *out_valid; on an authenticated valid proof, the responder's ephemeral
  * X25519 public key to out_responder_x25519_pub[32] (optional, NULL to ignore — needed for
  * rs_handheld_rns_link_derive). A malformed length, a non-AES-256 mode, or a bad signature -> *out_valid = 0
- * with RS_HANDHELD_OK (not an arg error). The legacy 96-byte proof is accepted. Stateless.
+ * with RS_HANDHELD_OK (not an arg error). Only effectiveMTU500 fits our request; a larger proof
+ * is invalid. The legacy96-byte proof is accepted. Key output is unchanged on invalid proof. Stateless.
  * RS_HANDHELD_ERR_INVALID_ARG only on NULL required args.
  * ACTIVATION CONTRACT (the C++ link state machine's job — NOT done here): a valid proof authenticates
  * the responder but does NOT activate the link. After this returns valid, the initiator must
@@ -907,6 +1130,16 @@ rs_handheld_status_t rs_handheld_rns_resource_outbound_close(rs_handheld_rns_t *
 rs_handheld_status_t rs_handheld_rns_resource_advertisement_hash(const uint8_t *adv,
     size_t adv_len, uint8_t out_resource_hash[32]);
 
+/* Same bounds as ordinary Resource admission; accepts only is_response with the
+ * exact pending request ID. Caller binds live Link/interface/deadline and must
+ * also check the assembled RESPONSE envelope. */
+rs_handheld_status_t rs_handheld_rns_resource_response_accept(rs_handheld_rns_t *ctx,
+    const uint8_t *adv, size_t adv_len, uint32_t *out_num_parts,
+    uint32_t *out_transfer_size, uint32_t *out_data_size, uint8_t out_resource_hash[32],
+    const uint8_t expected_request_id[16]);
+/* Parse only a response ADV's exact 16-byte request ID, before support checks. */
+rs_handheld_status_t rs_handheld_rns_resource_response_id(const uint8_t *adv, size_t length,
+                                                        uint8_t out_id[16]);
 rs_handheld_status_t rs_handheld_rns_resource_advertise_accept(rs_handheld_rns_t *ctx,
                                                                const uint8_t *adv, size_t adv_len,
                                                                uint32_t *out_num_parts,
@@ -915,9 +1148,10 @@ rs_handheld_status_t rs_handheld_rns_resource_advertise_accept(rs_handheld_rns_t
                                                                uint8_t out_resource_hash[32]);
 
 /* RECEIVER: ingest one received part (raw RESOURCE-context packet payload). Writes 1/0 to
- * *out_new (1 = filled a previously-empty slot; duplicates, tampered parts and out-of-window
- * arrivals are 0 — not an error) and 1/0 to *out_complete (all parts present -> call
- * rs_handheld_rns_resource_assemble). RS_HANDHELD_ERR_NOT_READY if no inbound transfer is open. */
+ * *out_new (1 = filled a previously-empty slot; a matching received duplicate is 0)
+ * and 1/0 to *out_complete (all parts present -> call rs_handheld_rns_resource_assemble).
+ * Unknown, tampered or out-of-window parts return RS_HANDHELD_ERR_INVALID_ARG without
+ * changing outputs. RS_HANDHELD_ERR_NOT_READY if no inbound transfer is open. */
 rs_handheld_status_t rs_handheld_rns_resource_part_ingest(rs_handheld_rns_t *ctx,
                                                           const uint8_t *part, size_t part_len,
                                                           int32_t *out_new, int32_t *out_complete);
@@ -941,7 +1175,9 @@ rs_handheld_status_t rs_handheld_rns_resource_window_shrink(rs_handheld_rns_t *c
 
 /* RECEIVER: reassemble the completed transfer — Token-decrypt the parts with the link session
  * key[64], verify the resource hash over the plaintext, copy the payload into out[out_cap] and
- * its length to *out_len. Then emit the delivery proof via rs_handheld_rns_resource_proof_build.
+ * its length to *out_len. Repeated calls copy the authenticated assembly without decrypting
+ * again, until close. Emit a delivery proof only after LXMF verification and storage admission
+ * via rs_handheld_rns_resource_proof_build.
  * RS_HANDHELD_ERR_NOT_READY if no inbound transfer is open or parts are missing;
  * RS_HANDHELD_ERR_CAPACITY if out_cap is below this transfer's WORST-CASE plaintext — the
  * advertised data_size rounded up to the AES block (up to data_size + 15): the check runs
@@ -1068,6 +1304,89 @@ rs_handheld_status_t rs_handheld_rns_peer_ratchet_remember(rs_handheld_rns_t *ct
                                                            const uint8_t ratchet[32],
                                                            uint64_t wall_secs, uint64_t uptime_ms,
                                                            int32_t *out_changed);
+
+/* Live LXST: caller-owned, serialized state; no capture/playback is started by
+ * Rust. Allocate final storage with the queried size AND alignment. PCM is mono
+ * 8 kHz signed 16-bit; native profile payloads include their Codec2 mode byte.
+ * Profiles: 0x10 = 3200 samples/41 bytes, 0x20 = 2560/65, 0x30 = 1600/81.
+ * Opus/memo containers are not part of this live media boundary. */
+typedef struct {
+    uint32_t native_samples, native_bytes, packet_frames, packet_bytes;
+    uint32_t interval_ms, raw_bytes, mode;
+} rs_handheld_voice_profile_t;
+/* Executable codec shape and encrypted HEADER_1 Link size, excluding RNode/IFAC.
+ * Invalid/unsupported input leaves out unchanged. */
+rs_handheld_status_t rs_handheld_voice_profile(uint32_t profile, rs_handheld_voice_profile_t *out);
+typedef struct { uint32_t kind, value; } rs_handheld_voice_event_t;
+typedef struct {
+    uint32_t audio_generation, status, profile, ended, flags, event_count;
+    rs_handheld_voice_event_t events[8];
+} rs_handheld_voice_result_t;
+typedef struct { uint16_t offset, length; uint8_t codec, reserved[3]; } rs_handheld_voice_frame_t;
+typedef struct {
+    uint32_t signal_count, frame_count;
+    uint32_t signals[8];
+    rs_handheld_voice_frame_t frames[4];
+} rs_handheld_voice_packet_t;
+
+/* Telephone endpoint defaults OFF, and identity replacement disables it. */
+rs_handheld_status_t rs_handheld_voice_destination(const uint8_t public_key[64], uint8_t out[16]);
+rs_handheld_status_t rs_handheld_voice_peer_destination(const uint8_t public_key[64], uint8_t out_delivery[16]);
+rs_handheld_status_t rs_handheld_voice_enable(rs_handheld_rns_t *ctx, uint32_t enabled);
+rs_handheld_status_t rs_handheld_voice_announce(const rs_handheld_rns_t *ctx, const uint8_t seed[5],
+    uint64_t order, uint32_t response, uint8_t *out, size_t capacity, size_t *out_len);
+/* Take the exact self-request tag and endpoint (0 delivery, 1 telephone). */
+rs_handheld_status_t rs_handheld_rns_take_own_path_request(rs_handheld_rns_t *ctx,
+    uint8_t out_tag[16], size_t *out_length, uint32_t *out_endpoint);
+#define RS_HANDHELD_INGEST_ANNOUNCE_VOICE 15
+
+#define RS_HANDHELD_VOICE_LINK_READY 1u
+#define RS_HANDHELD_VOICE_PEER_VERIFIED 2u
+#define RS_HANDHELD_VOICE_ANSWER 3u
+#define RS_HANDHELD_VOICE_SIGNAL 4u
+#define RS_HANDHELD_VOICE_AUDIO_READY 5u /* argument=audio_generation, extra=success */
+#define RS_HANDHELD_VOICE_PTT 6u         /* argument=pressed; fresh edge only */
+#define RS_HANDHELD_VOICE_TICK 7u
+#define RS_HANDHELD_VOICE_END 8u
+#define RS_HANDHELD_VOICE_PROFILE_MEDIA 9u /* validated codec/mode/size; argument=profile */
+/* Event kinds: 1 send signal; 2 identify; 3 select profile; 4 prepare;
+ * 5 reset; 6 open audio; 7 start receive; 8 dial tone; 9 terminate;
+ * 10 close Link; 11 ring; 12 switch profile; 13 ignored signal;
+ * 20 capture(value=0/1); 21 flush media; 22 ended(value=end reason).
+ * End reasons: 1 local, 2 remote, 3 rejected, 4 busy, 5 timeout,
+ * 6 unsupported profile, 7 audio unavailable, 8 route lost. */
+size_t rs_handheld_voice_codec_size(void);
+size_t rs_handheld_voice_codec_align(void);
+size_t rs_handheld_voice_session_size(void);
+size_t rs_handheld_voice_session_align(void);
+rs_handheld_status_t rs_handheld_voice_codec_init(uint8_t *storage, size_t capacity, uint32_t profile);
+rs_handheld_status_t rs_handheld_voice_codec_encode(uint8_t *storage, const int16_t *pcm, size_t samples,
+                                                 uint8_t *out, size_t capacity, size_t *out_len);
+rs_handheld_status_t rs_handheld_voice_codec_decode(uint8_t *storage, const uint8_t *payload, size_t length,
+                                                 int16_t *pcm, size_t capacity, size_t *out_samples);
+/* Native frame streaming: 160/320 PCM16 samples and exactly 4/8 encoded bytes.
+ * No mode header here; validate/aggregate the negotiated full packet at the caller. */
+rs_handheld_status_t rs_handheld_voice_codec_encode_frame(uint8_t *storage, const int16_t *pcm, size_t samples,
+                                                       uint8_t *out, size_t capacity);
+rs_handheld_status_t rs_handheld_voice_codec_decode_frame(uint8_t *storage, const uint8_t *payload, size_t length,
+                                                       int16_t *pcm, size_t capacity);
+void rs_handheld_voice_codec_clear(uint8_t *storage);
+/* allowed: bit 0 admits VLBW, bit 1 admits LBW, bit 2 admits ULBW; only qualified local
+ * routes/codecs may be admitted. Every bool is 0 or 1. */
+rs_handheld_status_t rs_handheld_voice_session_init(uint8_t *storage, size_t capacity, uint32_t incoming,
+                                                 uint32_t preferred, uint32_t allowed, uint32_t capture,
+                                                 uint32_t playback, uint64_t now_ms);
+/* PeerVerified requires actual cryptographic Link identity verification.
+ * Fence every call by current session/view/interface generation. Results carry
+ * scalar state/events only; PCM never traverses the Service/UI mailbox. */
+rs_handheld_status_t rs_handheld_voice_session_apply(uint8_t *storage, uint32_t operation,
+                                                  uint32_t argument, uint32_t extra, uint64_t now_ms,
+                                                  rs_handheld_voice_result_t *out);
+rs_handheld_status_t rs_handheld_voice_packet_view(const uint8_t *data, size_t length,
+                                                rs_handheld_voice_packet_t *out);
+rs_handheld_status_t rs_handheld_voice_packet_encode(const uint32_t *signals, size_t count,
+                                                  uint32_t codec, const uint8_t *payload, size_t length,
+                                                  uint8_t *out, size_t capacity, size_t *out_len);
 
 #ifdef __cplusplus
 } /* extern "C" */

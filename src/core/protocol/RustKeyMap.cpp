@@ -3,11 +3,30 @@
 #include "config/Config.h"
 #include "storage/FlashStore.h"
 #include "storage/SDStore.h"
+#include "storage/LegacyMessageArena.h"
+#include "storage/StorageLease.h"
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <string.h>
 
 namespace {
+class KeyMapScratch {
+public:
+    KeyMapScratch(bool shared, uint8_t* fallback, size_t capacity)
+        : _borrow(_lease.held() && shared),
+          _bytes(_lease.held() ? (shared ? static_cast<uint8_t*>(_borrow.data()) : fallback) : nullptr),
+          _capacity(capacity) {}
+    uint8_t* data() const { return _bytes; }
+    size_t capacity() const { return _capacity; }
+private:
+    // The owner never waits on the worker. Retain the lease across export,
+    // atomic write/readback and import; release scratch before unlocking.
+    handheld::storage::StorageLease _lease;
+    handheld::storage::LegacyMessageBorrow _borrow;
+    uint8_t* _bytes;
+    size_t _capacity;
+};
+
 bool fromHex(const char* hex, size_t hexLen, uint8_t* out, size_t outLen) {
     if (!hex || hexLen != outLen * 2) return false;
     auto nibble = [](char c) -> int {
@@ -27,35 +46,48 @@ bool fromHex(const char* hex, size_t hexLen, uint8_t* out, size_t outLen) {
 }  // namespace
 
 bool RustKeyMap::begin(FlashStore* flash, rs_handheld_rns_t* ctx, int32_t profile,
-                       uint64_t nowMs) {
+                       uint64_t nowMs) try {
     _flash = flash;
     _ctx = ctx;
     const size_t cap = profile == RS_HANDHELD_PROFILE_MICRO ? MICRO_BLOB_MAX : SMALL_BLOB_MAX;
-    _blob.assign(cap, 0);
+    static_assert(MICRO_BLOB_MAX <= handheld::storage::Budget::ReducedLegacyScratch &&
+                  handheld::propagation::RecipientStampCosts::BlobMax <= MICRO_BLOB_MAX);
+    _sharedScratch = profile == RS_HANDHELD_PROFILE_MICRO && handheld::storage::legacyMessageArena().available();
+    if (_sharedScratch) std::vector<uint8_t>().swap(_blob);
+    else _blob.assign(cap, 0);
     _dirty = false;
     _lastSaveMs = nowMs;
+    _lastCostSaveMs = nowMs; _costs = {};
+    _lastBorrowAttemptMs = nowMs - BUSY_RETRY_MS;
     if (!_flash || !_ctx) return false;
+    KeyMapScratch scratch(_sharedScratch, _blob.data(), cap);
+    if (!scratch.data()) return false;
 
     const bool hadBlob = _flash->exists(PATH_BLOB) || _flash->exists(PATH_BLOB_BACKUP);
-    bool restored = restore(nowMs);
+    bool restored = restore(nowMs, scratch.data(), scratch.capacity());
+    size_t costsLength = 0;
+    if (_flash->readFileFully(PATH_COSTS, scratch.data(), handheld::propagation::RecipientStampCosts::BlobMax, costsLength))
+        _costs.restore(scratch.data(), costsLength); // Invalid optional metadata stays unknown.
     if (!restored && _flash->exists(PATH_LEGACY_JSON)) {
-        return migrateJson(nowMs);
+        return migrateJson(nowMs, scratch.data(), scratch.capacity());
     } else if (restored && _flash->exists(PATH_LEGACY_JSON)) {
         // A valid Rust blob is authoritative; a leftover JSON is a completed or
         // interrupted migration artifact and must not overwrite newer LRU state.
         _flash->remove(PATH_LEGACY_JSON);
     }
     return restored || !hadBlob;
+} catch (const std::bad_alloc&) {
+    return false;
 }
 
-bool RustKeyMap::restore(uint64_t nowMs) {
-    if ((!_flash->exists(PATH_BLOB) && !_flash->exists(PATH_BLOB_BACKUP)) || _blob.empty()) return false;
+bool RustKeyMap::restore(uint64_t nowMs, uint8_t* bytes, size_t capacity) {
+    if ((!_flash->exists(PATH_BLOB) && !_flash->exists(PATH_BLOB_BACKUP)) || !bytes || !capacity) return false;
     size_t len = 0;
-    if (!_flash->readFileFully(PATH_BLOB, _blob.data(), _blob.size(), len)) {
+    if (!_flash->readFileFully(PATH_BLOB, bytes, capacity, len)) {
         Serial.println("[RUST-KEYS] destination blob read failed");
         return false;
     }
-    if (rs_handheld_rns_known_dest_import(_ctx, _blob.data(), len, nowMs) != RS_HANDHELD_OK) {
+    if (rs_handheld_rns_known_dest_import(_ctx, bytes, len, nowMs) != RS_HANDHELD_OK) {
         Serial.println("[RUST-KEYS] destination blob validation failed");
         return false;
     }
@@ -63,7 +95,7 @@ bool RustKeyMap::restore(uint64_t nowMs) {
     return true;
 }
 
-bool RustKeyMap::migrateJson(uint64_t nowMs) {
+bool RustKeyMap::migrateJson(uint64_t nowMs, uint8_t* bytes, size_t capacity) {
     String json = _flash->readString(PATH_LEGACY_JSON);
     if (json.isEmpty()) return false;
     JsonDocument doc;
@@ -91,7 +123,9 @@ bool RustKeyMap::migrateJson(uint64_t nowMs) {
     // Even an empty, syntactically-valid legacy object migrates to a valid empty
     // blob. Delete JSON only after atomic write + readback + Rust validation.
     _dirty = true;
-    if (!flush(nowMs, true)) {
+    // begin() already owns the scratch/lease. Do not recursively borrow it.
+    _lastSaveMs = nowMs;
+    if (!persist(nowMs, bytes, capacity)) {
         Serial.println("[RUST-KEYS] legacy keymap migration persist failed; retained");
         return false;
     }
@@ -130,29 +164,61 @@ size_t RustKeyMap::size() const {
 
 void RustKeyMap::loop(uint64_t nowMs) { flush(nowMs, false); }
 
-bool RustKeyMap::flush(uint64_t nowMs, bool force) {
-    if (!_dirty) return true;
-    if (!force && nowMs - _lastSaveMs < SAVE_INTERVAL_MS) return true;
-    return persist(nowMs);
+void RustKeyMap::learnCost(const rs_handheld_announce_event_t& event, uint64_t wallSecs, uint64_t nowMs) {
+    uint8_t known = 0, cost = 0;
+    if (rs_handheld_lxmf_delivery_cost(event.app_data, event.app_data_len, &known, &cost) == RS_HANDHELD_OK)
+        _costs.learn(event.destination_hash, known != 0, cost, wallSecs, nowMs);
 }
 
-bool RustKeyMap::persist(uint64_t nowMs) {
-    if (!_flash || !_ctx || _blob.empty()) return false;
+bool RustKeyMap::flush(uint64_t nowMs, bool force) try {
+    const bool keysDue = _dirty && (force || nowMs - _lastSaveMs >= SAVE_INTERVAL_MS);
+    const bool costsDue = _costs.dirty() && (force || nowMs - _lastCostSaveMs >= SAVE_INTERVAL_MS);
+    if (!keysDue && !costsDue) return true;
+    if (!_flash || !_ctx || (!force && nowMs - _lastBorrowAttemptMs < BUSY_RETRY_MS)) return false;
+    _lastBorrowAttemptMs = nowMs;
+    KeyMapScratch scratch(_sharedScratch, _blob.data(), _sharedScratch ? MICRO_BLOB_MAX : _blob.size());
+    if (!scratch.data()) return false; // Still dirty; retry admission at a bounded pace.
+    bool ok = true;
+    if (keysDue) {
+        _lastSaveMs = nowMs; // Failed I/O does not rewrite every owner poll.
+        ok = persist(nowMs, scratch.data(), scratch.capacity());
+    }
+    if (costsDue) {
+        _lastCostSaveMs = nowMs; // Failed optional writes do not hammer flash every poll.
+        ok = persistCosts(scratch.data(), scratch.capacity()) && ok;
+    }
+    return ok;
+} catch (const std::bad_alloc&) {
+    // Preserve dirty state and attempt pacing; scoped scratch/lease have
+    // already unwound. A filesystem allocation refusal is retryable.
+    return false;
+}
+
+bool RustKeyMap::persistCosts(uint8_t* bytes, size_t capacity) {
+    if (!_flash || !bytes || capacity < handheld::propagation::RecipientStampCosts::BlobMax) return false;
+    const size_t length = _costs.encode(bytes, handheld::propagation::RecipientStampCosts::BlobMax);
+    if (!length || !_flash->writeAtomic(PATH_COSTS, bytes, length)) return false;
+    // FlashStore's atomic writer verifies exact bytes before promotion. Do not
+    // reimport the live cache: doing so would discard current-boot monotonic ages.
+    _costs.committed(); return true;
+}
+
+bool RustKeyMap::persist(uint64_t nowMs, uint8_t* bytes, size_t capacity) {
+    if (!_flash || !_ctx || !bytes || !capacity) return false;
     size_t len = 0;
-    if (rs_handheld_rns_known_dest_export(_ctx, _blob.data(), _blob.size(), &len) !=
+    if (rs_handheld_rns_known_dest_export(_ctx, bytes, capacity, &len) !=
             RS_HANDHELD_OK ||
-        len == 0 || !_flash->writeAtomic(PATH_BLOB, _blob.data(), len)) {
+        len == 0 || !_flash->writeAtomic(PATH_BLOB, bytes, len)) {
         return false;
     }
 
     size_t readLen = 0;
-    if (!_flash->readFileFully(PATH_BLOB, _blob.data(), _blob.size(), readLen) || readLen != len ||
-        rs_handheld_rns_known_dest_import(_ctx, _blob.data(), readLen, nowMs) != RS_HANDHELD_OK) {
+    if (!_flash->readFileFully(PATH_BLOB, bytes, capacity, readLen) || readLen != len ||
+        rs_handheld_rns_known_dest_import(_ctx, bytes, readLen, nowMs) != RS_HANDHELD_OK) {
         Serial.println("[RUST-KEYS] destination blob readback validation failed");
         return false;
     }
     _dirty = false;
-    _lastSaveMs = nowMs;
     return true;
 }
 

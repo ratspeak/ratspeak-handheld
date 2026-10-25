@@ -238,20 +238,28 @@ pub unsafe extern "C" fn rs_handheld_rns_lxmf_parse(
         let mut scratch = [0u8; rns_lite_core::crypto::MAX_ECIES_PLAINTEXT];
         // Ring first (peers encrypt to our announced ratchet), base key fallback — never enforced.
         let ring = unsafe { &*ctx }.ratchet_ring.private_keys();
+        let mut fields = match unsafe { &*ctx }.lxmf_field_scratch.try_borrow_mut() {
+            Ok(fields) => fields,
+            Err(_) => return RsHandheldStatus::ErrNotReady,
+        };
         let view: LxmfView = match lxmf_codec::parse_opportunistic_ratchet(
             id,
             ring,
             data,
             unsafe { &*source_public_key },
             &mut scratch,
+            &mut fields,
         ) {
             Ok((v, _ring_index)) => v,
             Err(
                 LxmfError::Crypto | LxmfError::SignatureInvalid | LxmfError::SourceHashMismatch,
             ) => return RsHandheldStatus::ErrCrypto,
-            Err(LxmfError::MalformedPayload | LxmfError::OutputTooSmall) => {
+            Err(
+                LxmfError::MalformedPayload | LxmfError::DuplicateField | LxmfError::OutputTooSmall,
+            ) => {
                 return RsHandheldStatus::ErrInvalidArg;
             }
+            Err(LxmfError::TooManyFields) => return RsHandheldStatus::ErrCapacity,
             Err(_) => return RsHandheldStatus::ErrInternal,
         };
         fill_lxmf_message(view, unsafe { &mut *out_message })
@@ -289,6 +297,10 @@ pub unsafe extern "C" fn rs_handheld_rns_lxmf_parse_hint(
         };
         let data = unsafe { core::slice::from_raw_parts(data, data_len) };
         let mut scratch = [0u8; rns_lite_core::crypto::MAX_ECIES_PLAINTEXT];
+        let mut fields = match c.lxmf_field_scratch.try_borrow_mut() {
+            Ok(fields) => fields,
+            Err(_) => return RsHandheldStatus::ErrNotReady,
+        };
         let view = match lxmf_codec::parse_opportunistic_ratchet_hint(
             id,
             c.ratchet_ring.private_keys(),
@@ -296,14 +308,18 @@ pub unsafe extern "C" fn rs_handheld_rns_lxmf_parse_hint(
             data,
             unsafe { &*source_public_key },
             &mut scratch,
+            &mut fields,
         ) {
             Ok(view) => view,
             Err(
                 LxmfError::Crypto | LxmfError::SignatureInvalid | LxmfError::SourceHashMismatch,
             ) => return RsHandheldStatus::ErrCrypto,
-            Err(LxmfError::MalformedPayload | LxmfError::OutputTooSmall) => {
+            Err(
+                LxmfError::MalformedPayload | LxmfError::DuplicateField | LxmfError::OutputTooSmall,
+            ) => {
                 return RsHandheldStatus::ErrInvalidArg;
             }
+            Err(LxmfError::TooManyFields) => return RsHandheldStatus::ErrCapacity,
             Err(_) => return RsHandheldStatus::ErrInternal,
         };
         fill_lxmf_message(view, unsafe { &mut *out_message })
@@ -354,9 +370,14 @@ pub unsafe extern "C" fn rs_handheld_rns_lxmf_parse_auto(
             ) {
                 Ok(pair) => pair,
                 Err(LxmfError::Crypto) => return RsHandheldStatus::ErrCrypto,
-                Err(LxmfError::MalformedPayload | LxmfError::OutputTooSmall) => {
+                Err(
+                    LxmfError::MalformedPayload
+                    | LxmfError::DuplicateField
+                    | LxmfError::OutputTooSmall,
+                ) => {
                     return RsHandheldStatus::ErrInvalidArg;
                 }
+                Err(LxmfError::TooManyFields) => return RsHandheldStatus::ErrCapacity,
                 Err(_) => return RsHandheldStatus::ErrInternal,
             }
         };
@@ -380,6 +401,10 @@ pub unsafe extern "C" fn rs_handheld_rns_lxmf_parse_auto(
             None => return RsHandheldStatus::ErrNotReady,
         };
         let mut scratch = [0u8; rns_lite_core::crypto::MAX_ECIES_PLAINTEXT];
+        let mut fields = match c.lxmf_field_scratch.try_borrow_mut() {
+            Ok(fields) => fields,
+            Err(_) => return RsHandheldStatus::ErrNotReady,
+        };
         let view = match lxmf_codec::parse_opportunistic_ratchet_hint(
             id,
             c.ratchet_ring.private_keys(),
@@ -387,14 +412,18 @@ pub unsafe extern "C" fn rs_handheld_rns_lxmf_parse_auto(
             data,
             &source_public_key,
             &mut scratch,
+            &mut fields,
         ) {
             Ok(view) => view,
             Err(
                 LxmfError::Crypto | LxmfError::SignatureInvalid | LxmfError::SourceHashMismatch,
             ) => return RsHandheldStatus::ErrCrypto,
-            Err(LxmfError::MalformedPayload | LxmfError::OutputTooSmall) => {
+            Err(
+                LxmfError::MalformedPayload | LxmfError::DuplicateField | LxmfError::OutputTooSmall,
+            ) => {
                 return RsHandheldStatus::ErrInvalidArg;
             }
+            Err(LxmfError::TooManyFields) => return RsHandheldStatus::ErrCapacity,
             Err(_) => return RsHandheldStatus::ErrInternal,
         };
         let status = fill_lxmf_message(view, unsafe { &mut *out_message });
@@ -438,9 +467,9 @@ pub unsafe extern "C" fn rs_handheld_rns_lxmf_peek_source(
                 RsHandheldStatus::Ok
             }
             Err(LxmfError::Crypto) => RsHandheldStatus::ErrCrypto,
-            Err(LxmfError::MalformedPayload | LxmfError::OutputTooSmall) => {
-                RsHandheldStatus::ErrInvalidArg
-            }
+            Err(
+                LxmfError::MalformedPayload | LxmfError::DuplicateField | LxmfError::OutputTooSmall,
+            ) => RsHandheldStatus::ErrInvalidArg,
             Err(_) => RsHandheldStatus::ErrInternal,
         }
     })
@@ -491,9 +520,9 @@ pub unsafe extern "C" fn rs_handheld_rns_lxmf_peek_source_hint(
                 RsHandheldStatus::Ok
             }
             Err(LxmfError::Crypto) => RsHandheldStatus::ErrCrypto,
-            Err(LxmfError::MalformedPayload | LxmfError::OutputTooSmall) => {
-                RsHandheldStatus::ErrInvalidArg
-            }
+            Err(
+                LxmfError::MalformedPayload | LxmfError::DuplicateField | LxmfError::OutputTooSmall,
+            ) => RsHandheldStatus::ErrInvalidArg,
             Err(_) => RsHandheldStatus::ErrInternal,
         }
     })
@@ -729,26 +758,35 @@ pub unsafe extern "C" fn rs_handheld_rns_lxmf_parse_link(
     })
 }
 
-fn validated_direct_view<'a>(
+pub(super) fn validated_direct_view<'a>(
     ctx: &RsHandheldRns,
     data: &'a [u8],
     source_public_key: &[u8; PUBLIC_KEY_LENGTH],
     scratch: &mut [u8],
 ) -> Result<LxmfView<'a>, RsHandheldStatus> {
     let id = ctx.identity.as_ref().ok_or(RsHandheldStatus::ErrNotReady)?;
-    lxmf_codec::parse_link(id, data, source_public_key, scratch).map_err(|error| match error {
-        LxmfError::Crypto
-        | LxmfError::SignatureInvalid
-        | LxmfError::SourceHashMismatch
-        | LxmfError::DestinationMismatch => RsHandheldStatus::ErrCrypto,
-        LxmfError::MalformedPayload | LxmfError::OutputTooSmall => RsHandheldStatus::ErrInvalidArg,
-        _ => RsHandheldStatus::ErrInternal,
+    let mut fields = ctx
+        .lxmf_field_scratch
+        .try_borrow_mut()
+        .map_err(|_| RsHandheldStatus::ErrNotReady)?;
+    lxmf_codec::parse_link(id, data, source_public_key, scratch, &mut fields).map_err(|error| {
+        match error {
+            LxmfError::Crypto
+            | LxmfError::SignatureInvalid
+            | LxmfError::SourceHashMismatch
+            | LxmfError::DestinationMismatch => RsHandheldStatus::ErrCrypto,
+            LxmfError::MalformedPayload | LxmfError::DuplicateField | LxmfError::OutputTooSmall => {
+                RsHandheldStatus::ErrInvalidArg
+            }
+            LxmfError::TooManyFields => RsHandheldStatus::ErrCapacity,
+            _ => RsHandheldStatus::ErrInternal,
+        }
     })
 }
 
 /// Validated direct payload spans borrowing the immutable input. No body copy is retained.
 #[repr(C)]
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 pub struct RsHandheldLxmfView {
     pub message_id: [u8; 32],
     pub source_hash: [u8; DESTINATION_LENGTH],

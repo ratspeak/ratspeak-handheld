@@ -2,7 +2,7 @@
 
 #include <stdint.h>
 
-// Reticulum discriminants plus the two wire-neutral helpers that stay C++ policy.
+// Reticulum discriminants and the wire-neutral header-type helper for the C++ facade.
 // Packet byte construction is owned by rs_handheld_rns_packet_build.
 namespace RustWire {
 
@@ -18,9 +18,13 @@ enum Ctx : uint8_t {
     CTX_RESOURCE_PRF = 0x05,
     CTX_RESOURCE_ICL = 0x06,
     CTX_RESOURCE_RCL = 0x07,
+    CTX_REQUEST = 0x09,
+    CTX_RESPONSE = 0x0A,
     CTX_PATH_RESPONSE = 0x0B,  // Packet.PATH_RESPONSE: announce answering a path request (rate-exempt)
     CTX_KEEPALIVE = 0xFA,
+    CTX_LINKIDENTIFY = 0xFB,
     CTX_LINKCLOSE = 0xFC,
+    CTX_LINKPROOF = 0xFD,
     CTX_LRRTT = 0xFE,
     CTX_LRPROOF = 0xFF,
 };
@@ -28,20 +32,6 @@ enum Ctx : uint8_t {
 // header_type of a raw packet (top 2 bits of flags) — for rs_handheld_rns_packet_hash.
 inline int32_t headerTypeOf(const uint8_t* raw) {
     return ((raw[0] & 0x40) != 0) ? 1 : 0;
-}
-
-// Path-request self-response throttle (fix map §4), as a pure function so it is host-testable.
-// On an inbound path request for our own dest, schedule a re-announce after a grace window that
-// coalesces a burst (layer 2), unless one is already scheduled or we answered within the dedup
-// window (layer 3). Explicit presence facts allow every uint32 millis value,
-// including0. Returns true and advances the deadline iff a NEW answer was scheduled.
-inline bool schedulePathResponse(uint32_t now, uint32_t graceMs, uint32_t dedupMs,
-                                 uint32_t& pendingUntil, uint32_t lastRespMs,
-                                 bool pending, bool hasLastResponse) {
-    if (pending) return false;
-    if (hasLastResponse && uint32_t(now - lastRespMs) < dedupMs) return false;
-    pendingUntil = now + graceMs;
-    return true;
 }
 
 }  // namespace RustWire

@@ -3,6 +3,7 @@
 #include "RustInterfacePump.h"
 #include "RustLinkManager.h"
 #include "runtime/TaskOwner.h"
+#include "storage/AudioRecord.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -58,7 +59,7 @@ RustIncomingDelivery::IncomingRef RustIncomingDelivery::allocateRow(const Messag
 
 handheld::TxReceipt RustIncomingDelivery::allocateReceipt(const ReceiptSeed& seed, IncomingRef incoming) {
     auto* owner = row(incoming);
-    if (owner && __builtin_popcount(owner->proofMask) >= ReceiptsPerRow) return {};
+    if (owner && __builtin_popcount(owner->proofMask & ProofBits) >= ReceiptsPerRow) return {};
     if (seed.length > 128 || (seed.length && !seed.raw) || !seed.interfaceGeneration ||
         !seed.maxWaitMs || (seed.maxWaitMs > MaxWaitMs && seed.kind != Kind::ReservedResource)) return {};
     if (seed.kind == Kind::Control) {
@@ -123,10 +124,13 @@ RustIncomingDelivery::ReceiveResult RustIncomingDelivery::accept(const MessageVi
                                                                 const ReceiptSeed& seed) {
     handheld::assertDeviceOwner();
     if (!_accepting) return {ReceiveCode::Rejected, {}, ReceiveError::Stopped};
+    const bool held = seed.kind == Kind::Propagation;
     if (!message.messageId || !message.source || !std::isfinite(message.timestamp) ||
-        !Budget::validBody(message.titleLength, message.contentLength) ||
+        !audio::validBody(message.titleLength, message.contentLength, message.audio) || message.audio.checksum ||
         (message.titleLength && !message.title) || (message.contentLength && !message.content) ||
-        (seed.kind != Kind::NoProof && (!seed.raw || !seed.length || seed.length > 128)))
+        (message.audio.length && !message.audioBytes) ||
+        (seed.kind != Kind::NoProof && !held && (!seed.raw || !seed.length || seed.length > 128)) ||
+        (held && message.reaction))
         return {ReceiveCode::Rejected, {}, ReceiveError::Invalid};
     IncomingRef ref;
     for (uint8_t index = 0; index < RowCount; ++index) {
@@ -142,7 +146,7 @@ RustIncomingDelivery::ReceiveResult RustIncomingDelivery::accept(const MessageVi
     auto* incoming = row(ref);
     if (!incoming) return {ReceiveCode::Backpressured, {}, ReceiveError::Capacity};
     handheld::TxReceipt proof;
-    if (seed.kind != Kind::NoProof) {
+    if (seed.kind != Kind::NoProof && !held) {
         // Identical live receipts coalesce without a fourth context or a new clock.
         for (uint8_t index = 0; index < ReceiptCount; ++index) {
             const auto& value = _receipts[index];
@@ -155,7 +159,7 @@ RustIncomingDelivery::ReceiveResult RustIncomingDelivery::accept(const MessageVi
         if (!proof.valid() && seed.reserved.valid()) {
             auto* reserved = receipt(seed.reserved);
             if (reserved && reserved->kind() == Kind::PreparedResource && bindingLive(*reserved) &&
-                __builtin_popcount(incoming->proofMask) < ReceiptsPerRow && seed.kind == Kind::Resource &&
+                __builtin_popcount(incoming->proofMask & ProofBits) < ReceiptsPerRow && seed.kind == Kind::Resource &&
                 seed.length >= RS_HANDHELD_RESOURCE_PROOF_LEN && seed.length <= sizeof(reserved->raw) &&
                 seed.interfaceId == reserved->interfaceId && seed.interfaceGeneration == reserved->interfaceGeneration &&
                 seed.linkSlot == reserved->linkSlot() && seed.linkGeneration == reserved->linkGeneration &&
@@ -180,6 +184,7 @@ RustIncomingDelivery::ReceiveResult RustIncomingDelivery::accept(const MessageVi
         }
     }
     if (existing) {
+        if (held) incoming->proofMask |= HeldCommit;
         if (auto* context = receipt(proof))
             if (context->state() == State::Reserved &&
                 (incoming->phase == Phase::Committed || incoming->phase == Phase::Reaction)) context->state(State::Eligible);
@@ -196,8 +201,9 @@ RustIncomingDelivery::ReceiveResult RustIncomingDelivery::accept(const MessageVi
     memcpy(request.destination, _d.ourDestHash, 16); memcpy(request.messageId, message.messageId, 32);
     request.hasMessageId = true; request.timestamp = message.timestamp; request.status = uint8_t(LXMFStatus::DELIVERED);
     request.titleLength = uint16_t(message.titleLength); request.contentLength = uint16_t(message.contentLength);
+    request.audio = message.audio;
     request.identityGeneration = incoming->identityGeneration; request.peerGeneration = incoming->visibilityGeneration;
-    const auto admitted = _d.store->requestSave(request, message.title, message.content);
+    const auto admitted = _d.store->requestSave(request, message.title, message.content, message.audioBytes);
     if (!admitted.accepted()) {
         retireReceipt(proof); releaseRow(ref);
         const bool retry = admitted.rejection == Rejection::Busy || admitted.rejection == Rejection::NoMemory;
@@ -205,6 +211,7 @@ RustIncomingDelivery::ReceiveResult RustIncomingDelivery::accept(const MessageVi
     }
     incoming = row(ref);
     incoming->ticketSequence = admitted.ticket.sequence; incoming->ticketSlot = admitted.ticket.slot;
+    if (held) incoming->proofMask |= HeldCommit;
     incoming->phase = Phase::AwaitStore;
     return {ReceiveCode::Pending, ref, ReceiveError::None};
 }
@@ -250,7 +257,12 @@ void RustIncomingDelivery::poll() {
                 try { (*_d.onMessage)(notice); }
                 catch (...) { Serial.println("[RUST-LXMF] committed-message notification failed; record retained"); }
             }
-        } else value.phase = Phase::Invisible;
+        } else {
+            value.phase = Phase::Invisible;
+            // Failed rows have no commit revision. Reuse that scalar for the
+            // retained failure, keeping the established 80-byte row budget.
+            value.commitRevision = uint32_t(result.error == Error::None ? Error::Cancelled : result.error);
+        }
         auto* current = row(ref);
         if (current && current->phase == Phase::Committed) {
             for (uint8_t proof = 0; proof < ReceiptCount; ++proof)
@@ -357,6 +369,7 @@ void RustIncomingDelivery::dropPeer(const uint8_t peer[16]) {
         auto& value = _rows[index];
         if (value.phase == Phase::Free || memcmp(value.peer, peer, 16)) continue;
         value.phase = Phase::Invisible;
+        value.proofMask &= ~HeldCommit;
         if (value.ticketSequence) _d.store->cancel({value.ticketSequence, value.ticketSlot});
         for (uint8_t proof = 0; proof < ReceiptCount; ++proof)
             if (value.proofMask & (1u << proof)) retireReceipt({_receipts[proof].generation, proof});
@@ -384,6 +397,7 @@ void RustIncomingDelivery::stopAdmissions() {
     for (auto& value : _rows) {
         if (value.phase == Phase::Free) continue;
         value.phase = Phase::Invisible;
+        value.proofMask &= ~HeldCommit;
         if (value.ticketSequence && _d.store) _d.store->cancel({value.ticketSequence, value.ticketSlot});
     }
     for (uint8_t index = 0; index < ReceiptCount; ++index) retireReceipt({_receipts[index].generation, index});
@@ -400,4 +414,29 @@ void RustIncomingDelivery::detach() {
     handheld::assertDeviceOwner(); configASSERT(!_accepting && drained());
     if (_d.pump && _bindReceiptHook) _d.pump->setReceiptHook(nullptr, nullptr);
     _d = {};
+}
+
+RustIncomingDelivery::CommitState RustIncomingDelivery::heldCommit(IncomingRef ref, CommitResult& out) const {
+    handheld::assertDeviceOwner();
+    if (!_accepting || !ref.valid()) return CommitState::Invalid;
+    const auto& value = _rows[ref.slot];
+    if (value.generation != ref.generation || value.phase == Phase::Free ||
+        value.identityGeneration != _identityGeneration || !(value.proofMask & HeldCommit)) return CommitState::Invalid;
+    if (value.ticketSequence || value.phase == Phase::Reserved || value.phase == Phase::AwaitStore) return CommitState::Pending;
+    out = {};
+    if (value.phase != Phase::Committed || !value.committedCounter || !value.commitRevision) {
+        out.error = Error(value.commitRevision); return CommitState::Failed;
+    }
+    memcpy(out.key.peer, value.peer, 16); out.key.counter = value.committedCounter; out.key.incoming = true;
+    memcpy(out.messageId, value.messageId, 32); out.revision = value.commitRevision;
+    return CommitState::Committed;
+}
+
+bool RustIncomingDelivery::releaseHeld(IncomingRef ref) {
+    handheld::assertDeviceOwner();
+    auto* value = row(ref);
+    if (!value || !(value->proofMask & HeldCommit)) return false;
+    value->proofMask &= ~HeldCommit;
+    releaseRow(ref);
+    return true;
 }

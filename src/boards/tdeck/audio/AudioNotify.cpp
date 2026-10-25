@@ -1,5 +1,6 @@
 // Audio output for T-Deck Plus via I2S speaker amplifier
 #include "AudioNotify.h"
+#include "voice/AudioCoordinator.h"
 #include "config/BoardConfig.h"
 #include <driver/i2s.h>
 #include <math.h>
@@ -21,7 +22,7 @@ void AudioNotify::begin() {
     i2s_config.tx_desc_auto_clear = true;
 
     i2s_pin_config_t pin_config = {};
-    pin_config.mck_io_num = I2S_MCLK;
+    pin_config.mck_io_num = I2S_PIN_NO_CHANGE; // GPIO48 belongs to the microphone ADC
     pin_config.bck_io_num = I2S_BCK;
     pin_config.ws_io_num = I2S_WS;
     pin_config.data_out_num = I2S_DOUT;
@@ -95,6 +96,7 @@ void AudioNotify::writeSilence(uint16_t durationMs) {
 }
 
 void AudioNotify::playMessage() {
+    if (!handheld::voice::AudioCoordinator::instance().notifications()) return;
     if (!_enabled || !_i2sReady) return;
 
     const int sr = AUDIO_SAMPLE_RATE;
@@ -145,18 +147,21 @@ void AudioNotify::requestMessage() {
 }
 
 void AudioNotify::loop() {
+    if (!handheld::voice::AudioCoordinator::instance().poll([this] { end(); }, [this] { begin(); })) return;
     if (!_messagePending) return;
     _messagePending = false;
     playMessage();
 }
 
 void AudioNotify::playAnnounce() {
+    if (!handheld::voice::AudioCoordinator::instance().notifications()) return;
     if (!_enabled) return;
     writeTone(800, 30);
     writeSilence(20);
 }
 
 void AudioNotify::playError() {
+    if (!handheld::voice::AudioCoordinator::instance().notifications()) return;
     if (!_enabled) return;
     for (int i = 0; i < 3; i++) {
         writeTone(400, 100);
@@ -166,6 +171,7 @@ void AudioNotify::playError() {
 }
 
 void AudioNotify::playBoot() {
+    if (!handheld::voice::AudioCoordinator::instance().notifications()) return;
     if (!_enabled || !_i2sReady) return;
 
     // === RSDECK BOOT SEQUENCE ===

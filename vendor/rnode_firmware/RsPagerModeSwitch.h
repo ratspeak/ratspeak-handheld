@@ -1,12 +1,12 @@
 #pragma once
 
 #include <Arduino.h>
+#include <string.h>
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
 
 // Boot-mode selection for the rsPager dual-boot layout (launcher/standalone/rnode
-// in ota_0/1/2). On the legacy single-app layout ota_0 is the running standalone,
-// so re-arming the launcher is a harmless self-select.
+// in ota_0/1/2).
 namespace rs_pager {
 
 enum class FirmwareMode : uint8_t {
@@ -48,8 +48,7 @@ inline const char* modeName(FirmwareMode mode) {
     return "Unknown";
 }
 
-inline SwitchResult setNextBoot(FirmwareMode mode) {
-    const esp_partition_t* target = modePartition(mode);
+inline SwitchResult setBootPartition(const esp_partition_t* target) {
     if (!target) {
         return {false, "target partition not found"};
     }
@@ -62,8 +61,18 @@ inline SwitchResult setNextBoot(FirmwareMode mode) {
     return {true, "boot partition updated"};
 }
 
+inline SwitchResult setNextBoot(FirmwareMode mode) {
+    return setBootPartition(modePartition(mode));
+}
+
+// Other layouts (a single-app image, bmorcelli's Launcher) can hold another app
+// in ota_0, so only re-arm a slot labelled as our launcher.
 inline SwitchResult returnToLauncherNextBoot() {
-    return setNextBoot(FirmwareMode::Launcher);
+    const esp_partition_t* launcher = modePartition(FirmwareMode::Launcher);
+    if (launcher && strcmp(launcher->label, "launcher") != 0) {
+        return {true, "no launcher slot"};
+    }
+    return setBootPartition(launcher);
 }
 
 // Snake_case aliases for the launcher and RNode helper.

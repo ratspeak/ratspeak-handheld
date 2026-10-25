@@ -5,13 +5,16 @@
 #include "FlashStore.h"
 #include "SDStore.h"
 #include "config/Config.h"
+#include <Preferences.h>
 
 namespace handheld::storage {
 
-// Boot-only, under the filesystem lease and before queue admission. Reopening
-// directories for each lexical successor keeps memory independent of history.
-// Legacy names retain their numeric counter: mirrored donor bytes then resolve
-// to the same key, and .read_ctr keeps its original ordering meaning.
+// Boot-only, under the filesystem lease and before queue admission. Listings
+// reopen directories for each bounded batch of lexical successors, keeping
+// memory independent of history. Legacy names retain their numeric counter:
+// mirrored donor bytes then resolve to the same key, and .read_ctr keeps its
+// original ordering meaning. An item that cannot be proven or copied stays
+// where it is for a later boot; only an unlistable message root stops a medium.
 class MessageMigration {
     struct Medium {
         FlashStore* flash = nullptr;
@@ -48,10 +51,16 @@ class MessageMigration {
         uint32_t counter = 0;
         bool incoming = false, canonical = false, backup = false;
     };
+    // Retry: may succeed on a later boot (I/O, memory). Skipped: these bytes never will.
+    enum class Item : uint8_t { Routed, Skipped, Retry };
+    static constexpr size_t Batch = 8;
+    using Names = char[Batch][40];
     FlashStore* _flash;
     SDStore* _sd;
     bool _external;
     bool _scanFailed = false;
+    uint32_t _floor = 0;
+    unsigned _skipped = 0;
     Medium medium(unsigned n) const { return n ? Medium{nullptr,_external ? _sd : nullptr} : Medium{_flash,nullptr}; }
     static const char* root(unsigned n) { return n ? SD_PATH_MESSAGES : PATH_MESSAGES; }
     static const char* basename(const char* path) { const char* slash = strrchr(path,'/'); return slash ? slash+1 : path; }
@@ -82,18 +91,23 @@ class MessageMigration {
             !decimal(name,length-7,out.counter) || !out.counter) return false;
         out.incoming=name[length-6]=='i'; out.canonical=length==20; return true;
     }
-    // The caller stores one bounded successor, never a list of directories/files.
-    bool next(Medium store, const char* directory, const char* after, char (&out)[40], bool dirs) {
-        out[0]=0; File dir=store.open(directory);
-        if (!dir || !dir.isDirectory()) { if (store.exists(directory)) _scanFailed = true; return false; }
-        for (File entry=dir.openNextFile();entry;entry=dir.openNextFile()) {
-            const char* name=basename(entry.name()); const size_t length=strnlen(name,sizeof(out));
-            if (!dirs && !entry.isDirectory() && length>=sizeof(out) && messageLike(name)) { _scanFailed=true; return false; }
-            if (entry.isDirectory()!=dirs || length>=sizeof(out) || strcmp(name,after)<=0 ||
-                (out[0] && strcmp(name,out)>=0)) continue;
-            memcpy(out,name,length+1);
+    // One pass keeps the next Batch names after `after`, in order. Names come
+    // from readdir: the SDK's File per entry costs a stat and an open, each a
+    // linear FAT directory scan, for every entry visited.
+    size_t next(Medium store, const char* directory, const char* after, Names& out, bool dirs) {
+        File dir=store.open(directory); size_t count=0;
+        if (!dir || !dir.isDirectory()) { if (store.exists(directory)) _scanFailed = true; return 0; }
+        bool isDir=false;
+        for (String entry=dir.getNextFileName(&isDir);entry.length();entry=dir.getNextFileName(&isDir)) {
+            const char* name=basename(entry.c_str()); const size_t length=strlen(name);
+            if (isDir!=dirs || length>=sizeof(out[0]) || strcmp(name,after)<=0) continue;
+            size_t at=count; while (at && strcmp(name,out[at-1])<0) --at;
+            if (at==Batch) continue;
+            if (count<Batch) ++count;
+            for (size_t i=count-1;i>at;--i) memcpy(out[i],out[i-1],sizeof(out[0]));
+            memcpy(out[at],name,length+1);
         }
-        return out[0]!=0;
+        return count;
     }
     static bool equal(Medium store, const char* a, Medium other, const char* b) {
         File source=store.open(a), target=other.open(b);
@@ -110,13 +124,13 @@ class MessageMigration {
         SliceSink(uint8_t* bytes,size_t offset,size_t capacity) : _bytes(bytes),_offset(offset),_capacity(capacity) {}
         size_t write(const uint8_t* bytes,size_t length) override {
             const size_t first=std::max(_position,_offset),last=std::min(_position+length,_offset+_capacity);
-            if (last>first) memcpy(_bytes+first-_offset,bytes+first-_position,last-first);
+            if (last>first) memcpy(_bytes+(first-_offset),bytes+(first-_position),last-first);
             _position+=length; return length;
         }
     };
     static bool normalized(Medium store,const char* path,MessageDocument& document,uint32_t& revision,size_t& length,double* timestamp = nullptr) {
         StoredRecordHeader record;
-        if (!header(store,path,document,record)) return false;
+        if (header(store,path,document,record)!=Error::None) return false;
         revision=record.revision;
         if (timestamp) *timestamp=record.timestamp;
         // Unknown schema remains byte-verified only. Do not collapse unknown
@@ -134,7 +148,8 @@ class MessageMigration {
         document.document().remove("read");
         JsonSource source(document); length=source.length(); return source.error()==Error::None;
     }
-    // Unequal revisions may differ in the three mutable storage fields. Compare
+    // Copies may differ in the three mutable storage fields, even at one revision:
+    // legacy rsCardputer rewrote status on each medium separately. Compare
     // every other known field, including exact timestamp values,
     // with one parser arena and 512 bytes of fixed slice scratch. This slower fallback is
     // only used when ordinary byte comparison differs; no second body/document
@@ -144,7 +159,7 @@ class MessageMigration {
         double sourceTime=0,targetTime=0;
         if (!normalized(sourceStore,sourcePath,document,sourceRevision,sourceLength,&sourceTime) ||
             !normalized(targetStore,targetPath,document,targetRevision,targetLength,&targetTime) ||
-            sourceRevision==targetRevision || sourceLength!=targetLength || sourceTime!=targetTime) return false;
+            sourceLength!=targetLength || sourceTime!=targetTime) return false;
         uint8_t sourceBytes[256],targetBytes[256];
         for (size_t offset=0;offset<sourceLength;offset+=sizeof(sourceBytes)) {
             const size_t count=std::min(sizeof(sourceBytes),sourceLength-offset);
@@ -174,44 +189,60 @@ class MessageMigration {
         }
         return true;
     }
-    // Never overwrite a surviving target or its rollback copy. A cut after
-    // verified copy but before removal retries by exact comparison at this key.
-    static bool move(Medium store, const char* source, const char* target) {
-        if (!strcmp(source,target)) return true;
+    // Never overwrite a surviving target or its rollback copy: a different
+    // record there is another message. A copy verified before a cut may since
+    // have gained read or status state; it still proves the source redundant.
+    static Item move(Medium store, const char* source, const char* target) {
+        if (!strcmp(source,target)) return Item::Routed;
+        bool copied=false;
         if (!store.exists(target)) {
             char backup[128]; const int n=snprintf(backup,sizeof(backup),"%s.bak",target);
-            if (n<0 || n>=int(sizeof(backup))) return false;
+            if (n<0 || n>=int(sizeof(backup))) return Item::Skipped;
             if (store.exists(backup)) {
-                if (!equal(store,source,backup) || !store.rename(backup,target)) return false;
+                if (!equal(store,source,backup) && !sameContent(store,source,store,backup)) return Item::Skipped;
+                if (!store.rename(backup,target)) return Item::Retry;
             } else {
-                File file=store.open(source); if (!file || !file.size() || file.size()>Budget::MaxStoredFile) return false;
-                FileSource bytes(file); if (!store.write(target,bytes)) return false;
+                File file=store.open(source); if (!file) return Item::Retry;
+                FileSource bytes(file); if (!store.write(target,bytes)) return Item::Retry;
+                copied=true;
             }
         }
-        return equal(store,source,target) && store.remove(source);
+        if (!equal(store,source,target)) {
+            if (copied) { store.remove(target); return Item::Retry; }
+            if (!sameContent(store,source,store,target)) return Item::Skipped;
+        }
+        return store.remove(source) ? Item::Routed : Item::Retry;
     }
+    // Valid copies raise value. An unparsable copy never lowers a cutoff: it is
+    // reported through corrupt and left in place. False: an existing copy could not be read.
     static bool marker(Medium store, const char* directory, const char* name, bool json,
-                       uint32_t& value, bool& found, bool* backupBest = nullptr) {
+                       uint32_t& value, bool& found, bool* backupBest = nullptr, bool* corrupt = nullptr) {
         value=0; found=false;
         if (backupBest) *backupBest=false;
+        if (corrupt) *corrupt=false;
         bool primaryFound=false;
         for (const char* suffix : {"",".bak"}) {
             char path[128]; const int n=snprintf(path,sizeof(path),"%s/%s%s",directory,name,suffix);
             if (n<0 || n>=int(sizeof(path))) return false;
             if (!store.exists(path)) continue;
-            found=true; File file=store.open(path); if (!file) return false;
-            uint32_t current=0;
+            File file=store.open(path); if (!file) return false;
+            uint32_t current=0; bool valid=false;
             if (json) {
                 MessageDocument document;
-                if (file.size()>512 || document.parse(file)!=Error::None ||
-                    !document.document()["through"].is<uint32_t>()) return false;
-                current=document.document()["through"].as<uint32_t>();
+                const auto parsed=file.size()>512 ? Error::InvalidRecord : document.parse(file);
+                if (parsed==Error::Read || parsed==Error::Allocation) return false;
+                valid=parsed==Error::None && document.document()["through"].is<uint32_t>();
+                if (valid) current=document.document()["through"].as<uint32_t>();
             } else {
                 char bytes[32]; const size_t size=file.size();
-                if (!size || size>=sizeof(bytes) || file.read(reinterpret_cast<uint8_t*>(bytes),size)!=size) return false;
-                size_t end=size; while (end && (bytes[end-1]=='\n' || bytes[end-1]=='\r' || bytes[end-1]==' ')) --end;
-                if (!decimal(bytes,end,current)) return false;
+                if (size && size<sizeof(bytes)) {
+                    if (file.read(reinterpret_cast<uint8_t*>(bytes),size)!=size) return false;
+                    size_t end=size; while (end && (bytes[end-1]=='\n' || bytes[end-1]=='\r' || bytes[end-1]==' ')) --end;
+                    valid=decimal(bytes,end,current);
+                }
             }
+            if (!valid) { if (corrupt) *corrupt=true; continue; }
+            found=true;
             if (!suffix[0]) primaryFound=true;
             else if (backupBest && (!primaryFound || current>value)) *backupBest=true;
             value=std::max(value,current);
@@ -226,8 +257,9 @@ class MessageMigration {
         return true;
     }
     static bool mergeMarker(Medium store,const char* directory,const char* name,bool json,uint32_t value) {
-        uint32_t current=0; bool found=false,backupBest=false;
-        if (!marker(store,directory,name,json,current,found,&backupBest)) return false;
+        uint32_t current=0; bool found=false,backupBest=false,corrupt=false;
+        // An unreadable marker may hold a higher cutoff; never overwrite it.
+        if (!marker(store,directory,name,json,current,found,&backupBest,&corrupt) || corrupt) return false;
         if (found && current>=value) return true;
         char path[128]; if (!join(directory,name,path)) return false;
         // Preserve the newest backup before the ordinary atomic writer can
@@ -252,81 +284,114 @@ class MessageMigration {
         }
         return false;
     }
-    static bool header(Medium store,const char* path,MessageDocument& document,StoredRecordHeader& out) {
+    // InvalidRecord is a property of the bytes; any other error may clear by a later boot.
+    static Error header(Medium store,const char* path,MessageDocument& document,StoredRecordHeader& out) {
         File file=store.open(path); out={};
-        return file && document.parse(file)==Error::None && recordHeader(document.document(),out);
+        if (!file) return Error::Read;
+        const auto error=document.parse(file);
+        if (error!=Error::None) return error;
+        return recordHeader(document.document(),out) ? Error::None : Error::InvalidRecord;
     }
-    bool truncated(unsigned which,const char* shortPeer) {
+    void notImported(const char* path, const char* reason) {
+        if (++_skipped<=16) Serial.printf("[MSGSTORE] Legacy item not imported (%s): %s\n", reason, path);
+    }
+    // A counter that is or may later be imported is never issued to a new message.
+    Item retry(const char* path, uint32_t counter) { notImported(path,"retry"); _floor=std::max(_floor,counter); return Item::Retry; }
+    Item route(unsigned which,const char* shortPeer,const char* directory,const char* name,
+               uint32_t readThrough,bool haveRead,uint32_t deleteThrough,bool haveDelete) {
+        auto store=medium(which); char source[128]; Name parsed;
+        if (!join(directory,name,source)) return Item::Skipped;
+        if (!filename(name,parsed) || (!parsed.canonical && !LEGACY_MSG_FILENAME_MIGRATION)) {
+            notImported(source,"name"); return Item::Skipped;
+        }
+        MessageDocument document; StoredRecordHeader record;
+        const auto error=header(store,source,document,record);
+        if (error!=Error::None && error!=Error::InvalidRecord) return retry(source,parsed.counter);
+        if (error!=Error::None || record.incoming!=parsed.incoming) { notImported(source,"record"); return Item::Skipped; }
+        char fullPeer[33]; encodeHex(parsed.incoming ? record.source : record.destination,16,fullPeer);
+        if (strncmp(fullPeer,shortPeer,16) || (!parsed.canonical && (haveDelete || deleted(fullPeer)))) {
+            notImported(source,"peer"); return Item::Skipped;
+        }
+        document.reset(); char targetDir[128],target[128];
+        snprintf(targetDir,sizeof(targetDir),"%s/%s",root(which),fullPeer);
+        if (!join(targetDir,name,target)) return Item::Skipped;
+        if (parsed.canonical && !otherCopy(which,fullPeer,name,source)) { notImported(source,"conflict"); return Item::Skipped; }
+        if (!store.mkdir(targetDir) || (haveRead && !mergeMarker(store,targetDir,".read_ctr",false,readThrough)))
+            return retry(source,parsed.counter);
+        if (haveDelete) {
+            char flashDir[128]; snprintf(flashDir,sizeof(flashDir),"%s/%s",PATH_MESSAGES,fullPeer);
+            auto flash=medium(0);
+            if (!flash.mkdir(flashDir) || !mergeMarker(flash,flashDir,".deleted",true,deleteThrough)) return retry(source,parsed.counter);
+        }
+        const auto moved=move(store,source,target);
+        if (moved==Item::Retry) return retry(source,parsed.counter);
+        if (moved==Item::Skipped) notImported(source,"conflict");
+        else _floor=std::max(_floor,parsed.counter);
+        return moved;
+    }
+    void truncated(unsigned which,const char* shortPeer) {
         auto store=medium(which); char directory[128]; snprintf(directory,sizeof(directory),"%s/%s",root(which),shortPeer);
-        uint32_t readThrough=0,deleteThrough=0; bool haveRead=false,haveDelete=false;
-        if (!marker(store,directory,".read_ctr",false,readThrough,haveRead) ||
-            !marker(store,directory,".deleted",true,deleteThrough,haveDelete)) return false;
-        bool sawRecord=false; char after[40]={},name[40];
-        while (next(store,directory,after,name,false)) {
-            memcpy(after,name,sizeof(after)); if (!messageLike(name)) continue;
-            Name parsed; if (!filename(name,parsed) || (!parsed.canonical && !LEGACY_MSG_FILENAME_MIGRATION)) return false;
-            char source[128]; if (!join(directory,name,source)) return false;
-            MessageDocument document; StoredRecordHeader record;
-            if (!header(store,source,document,record) || record.incoming!=parsed.incoming) return false;
-            char fullPeer[33]; encodeHex(parsed.incoming ? record.source : record.destination,16,fullPeer);
-            if (strncmp(fullPeer,shortPeer,16) || (!parsed.canonical && (haveDelete || deleted(fullPeer)))) return false;
-            document.reset(); char targetDir[128],target[128];
-            snprintf(targetDir,sizeof(targetDir),"%s/%s",root(which),fullPeer);
-            if (!store.mkdir(targetDir) || !join(targetDir,name,target)) return false;
-            if (parsed.canonical && !otherCopy(which,fullPeer,name,source)) return false;
-            if (haveRead && !mergeMarker(store,targetDir,".read_ctr",false,readThrough)) return false;
-            if (haveDelete) {
-                char flashDir[128]; snprintf(flashDir,sizeof(flashDir),"%s/%s",PATH_MESSAGES,fullPeer);
-                auto flash=medium(0);
-                if (!flash.mkdir(flashDir) || !mergeMarker(flash,flashDir,".deleted",true,deleteThrough)) return false;
+        uint32_t readThrough=0,deleteThrough=0; bool haveRead=false,haveDelete=false,badDelete=false;
+        const bool readable=marker(store,directory,".read_ctr",false,readThrough,haveRead) &&
+            marker(store,directory,".deleted",true,deleteThrough,haveDelete,nullptr,&badDelete);
+        // Without a readable deletion cutoff, importing could resurrect deleted
+        // history. Held items still bound the counter for a later import.
+        const bool held=!readable || badDelete;
+        if (held) notImported(directory,readable ? "marker" : "retry");
+        // Markers reach each routed record's conversation before it moves, and
+        // retire once nothing left here can be routed by a later boot.
+        bool seen=false,routed=false,retrying=false; char after[40]={}; Names names;
+        for (size_t count;(count=next(store,directory,after,names,false));) {
+            memcpy(after,names[count-1],sizeof(after));
+            for (size_t i=0;i<count;++i) {
+                if (!messageLike(names[i])) continue;
+                Name parsed; seen=true;
+                if (held) { if (filename(names[i],parsed)) _floor=std::max(_floor,parsed.counter); continue; }
+                const auto item=route(which,shortPeer,directory,names[i],readThrough,haveRead,deleteThrough,haveDelete);
+                routed|=item==Item::Routed; retrying|=item==Item::Retry; yield();
             }
-            // Copy first, but keep the last source until routing metadata has
-            // been retired. A power cut cannot leave only an ambiguous marker.
-            if (!store.exists(target)) {
-                File file=store.open(source);
-                if (!file || !file.size() || file.size()>Budget::MaxStoredFile) return false;
-                FileSource bytes(file);
-                char backup[128]; snprintf(backup,sizeof(backup),"%s.bak",target);
-                if (store.exists(backup)) {
-                    if (!equal(store,source,backup) || !store.rename(backup,target)) return false;
-                } else if (!store.write(target,bytes)) return false;
-            }
-            if (!equal(store,source,target)) return false;
-            char later[40],cursor[40]; memcpy(cursor,name,sizeof(cursor)); bool more=false;
-            while (next(store,directory,cursor,later,false)) {
-                memcpy(cursor,later,sizeof(cursor)); if (messageLike(later)) { more=true; break; }
-            }
-            if (_scanFailed) return false;
-            if (!more && (!removeMarker(store,directory,".read_ctr") || !removeMarker(store,directory,".deleted"))) return false;
-            if (!store.remove(source)) return false;
-            sawRecord=true; yield();
         }
-        if (_scanFailed || (!sawRecord && (haveRead || haveDelete))) return false;
-        store.rmdir(directory); return true; // Empty remnants are harmless.
+        if (_scanFailed) { _scanFailed=false; notImported(directory,"retry"); return; }
+        if (held) return;
+        if (routed ? !retrying : !seen) { removeMarker(store,directory,".read_ctr"); removeMarker(store,directory,".deleted"); }
+        else if (haveDelete && !retrying) notImported(directory,"deletion");
+        store.rmdir(directory); // Empty remnants are harmless.
     }
-    bool filenames(unsigned which,const char* peer) {
+    void filenames(unsigned which,const char* peer) {
         auto store=medium(which); char directory[128]; snprintf(directory,sizeof(directory),"%s/%s",root(which),peer);
-        char after[40]={},name[40];
-        while (next(store,directory,after,name,false)) {
-            memcpy(after,name,sizeof(after)); if (!messageLike(name)) continue;
-            Name parsed; if (!filename(name,parsed)) return false;
-            if (parsed.canonical) continue;
-            // Earlier donor migration renumbered files. Without a proven old
-            // mapping, assigning this late import past a deletion cutoff would
-            // resurrect history. Keep the source for explicit recovery instead.
-            if (deleted(peer)) return false;
-            char source[128]; if (!join(directory,name,source)) return false;
-            MessageDocument document; StoredRecordHeader record;
-            if (!header(store,source,document,record) || record.incoming!=parsed.incoming) return false;
-            char fullPeer[33]; encodeHex(parsed.incoming ? record.source : record.destination,16,fullPeer);
-            if (strcmp(peer,fullPeer)) return false;
-            document.reset(); char target[128],canonical[32];
-            snprintf(canonical,sizeof(canonical),"%013lu_%c.json%s",(unsigned long)parsed.counter,parsed.incoming?'i':'o',parsed.backup?".bak":"");
-            if (!otherCopy(which,peer,canonical,source) ||
-                !join(directory,canonical,target) || !move(store,source,target)) return false;
-            yield();
+        char after[40]={}; Names names;
+        for (size_t count;(count=next(store,directory,after,names,false));) {
+            memcpy(after,names[count-1],sizeof(after));
+            for (size_t i=0;i<count;++i) {
+                const char* name=names[i]; char source[128]; Name parsed;
+                if (!messageLike(name) || !join(directory,name,source)) continue;
+                if (!filename(name,parsed)) { notImported(source,"name"); continue; }
+                if (parsed.canonical) continue;
+                // Earlier donor migration renumbered files. Without a proven old
+                // mapping, assigning this late import past a deletion cutoff would
+                // resurrect history. Keep the source for explicit recovery instead.
+                if (deleted(peer)) { notImported(source,"peer"); continue; }
+                MessageDocument document; StoredRecordHeader record;
+                const auto error=header(store,source,document,record);
+                if (error!=Error::None && error!=Error::InvalidRecord) { retry(source,parsed.counter); continue; }
+                char fullPeer[33]={};
+                if (error==Error::None) encodeHex(parsed.incoming ? record.source : record.destination,16,fullPeer);
+                if (error!=Error::None || record.incoming!=parsed.incoming || strcmp(peer,fullPeer)) {
+                    notImported(source,"record"); continue;
+                }
+                document.reset(); char target[128],canonical[32];
+                snprintf(canonical,sizeof(canonical),"%013lu_%c.json%s",(unsigned long)parsed.counter,parsed.incoming?'i':'o',parsed.backup?".bak":"");
+                if (!otherCopy(which,peer,canonical,source) || !join(directory,canonical,target)) {
+                    notImported(source,"conflict"); continue;
+                }
+                const auto moved=move(store,source,target);
+                if (moved==Item::Retry) retry(source,parsed.counter);
+                else if (moved==Item::Skipped) notImported(source,"conflict");
+                else _floor=std::max(_floor,parsed.counter);
+                yield();
+            }
         }
-        return true;
+        if (_scanFailed) { _scanFailed=false; notImported(directory,"retry"); }
     }
 public:
     MessageMigration(FlashStore* flash,SDStore* sd,bool external) : _flash(flash),_sd(sd),_external(external) {}
@@ -335,46 +400,60 @@ public:
         // failed source removal cannot race a later rewrite of its target.
         for (unsigned phase=0;phase<2;++phase) for (unsigned which=0;which<2;++which) {
             auto store=medium(which); if (!store.ready()) continue;
-            char after[40]={},peer[40];
-            while (next(store,root(which),after,peer,true)) {
-                memcpy(after,peer,sizeof(after)); uint8_t decoded[16]; const size_t length=strlen(peer);
-                if ((length!=16 && length!=32) || !decodeHex(peer,length,decoded,length/2)) continue;
-                if (phase==0 && length==16) { if (!truncated(which,peer)) return false; }
-                if (phase==1 && length==32 && LEGACY_MSG_FILENAME_MIGRATION) { if (!filenames(which,peer)) return false; }
-
+            char after[40]={}; Names peers;
+            for (size_t count;(count=next(store,root(which),after,peers,true));) {
+                memcpy(after,peers[count-1],sizeof(after));
+                for (size_t i=0;i<count;++i) {
+                    uint8_t decoded[16]; const size_t length=strlen(peers[i]);
+                    if ((length!=16 && length!=32) || !decodeHex(peers[i],length,decoded,length/2)) continue;
+                    if (phase==0 && length==16) truncated(which,peers[i]);
+                    if (phase==1 && length==32 && LEGACY_MSG_FILENAME_MIGRATION) filenames(which,peers[i]);
+                }
             }
+            if (_scanFailed) return false;
         }
-        return !_scanFailed;
+        if (_skipped>16) Serial.printf("[MSGSTORE] %u legacy items not imported\n",_skipped);
+        return true;
     }
-    bool foldReadMarkers(MessageTransactions& executor) {
-        if (!LEGACY_READ_CTR_MIGRATION) return true;
+    // Recovery scans see only routed names, so the counter must clear every
+    // imported or retried one even when this boot stops before that scan.
+    void persistFloor() const {
+        if (!_floor) return;
+        const uint32_t next=_floor==UINT32_MAX ? UINT32_MAX : _floor+1;
+        Preferences preferences;
+        if (!preferences.begin(NVS_NS_MSG,false)) return;
+        if (preferences.getUInt("msgctr",0)<next) preferences.putUInt("msgctr",next);
+        preferences.end();
+    }
+    // Best effort: a marker that cannot be applied stays for a later boot.
+    void foldReadMarkers(MessageTransactions& executor) {
+        if (!LEGACY_READ_CTR_MIGRATION) return;
         char after[33]={},peer[33]; Error scanError=Error::None;
         while (executor.nextPeer(after,peer,scanError)) {
-            memcpy(after,peer,sizeof(after)); uint32_t cutoff=0; bool any=false;
-            for (unsigned which=0;which<2;++which) {
+            memcpy(after,peer,sizeof(after)); uint32_t cutoff=0; bool any=false,readable=true;
+            for (unsigned which=0;which<2 && readable;++which) {
                 auto store=medium(which); if (!store.ready()) continue;
                 char directory[128]; snprintf(directory,sizeof(directory),"%s/%s",root(which),peer);
                 uint32_t current=0; bool found=false;
-                if (!marker(store,directory,".read_ctr",false,current,found)) return false;
+                readable=marker(store,directory,".read_ctr",false,current,found);
                 cutoff=std::max(cutoff,current); any=any||found;
             }
-            if (!any) continue;
+            if (!readable || !any) continue;
             if (cutoff) {
                 // Reuse the semantic highest-revision, backup recovery and
-                // optional-mirror writer. This runs on the boot owner before
-                // enabling deferred execution or admitting queue work.
-                Request request; request.operation=Operation::MarkRead; request.key.counter=cutoff;
-                if (!decodeHex(peer,32,request.key.peer,16)) return false;
+                // optional-mirror writer, but only over existing copies: a
+                // card-only history must not be copied into internal flash.
+                Request request; request.operation=Operation::MarkRead; request.key.counter=cutoff; request.existingOnly=true;
+                if (!decodeHex(peer,32,request.key.peer,16)) continue;
                 Result result; executor.execute(request,nullptr,0,0,result);
-                if (result.outcome!=Outcome::Committed || result.error!=Error::None) return false;
+                if (result.outcome!=Outcome::Committed || result.error!=Error::None) continue;
             }
             for (unsigned which=0;which<2;++which) {
                 auto store=medium(which); if (!store.ready()) continue;
                 char directory[128]; snprintf(directory,sizeof(directory),"%s/%s",root(which),peer);
-                if (!removeMarker(store,directory,".read_ctr")) return false;
+                removeMarker(store,directory,".read_ctr");
             }
         }
-        return scanError==Error::None;
     }
 
 };

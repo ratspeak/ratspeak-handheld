@@ -19,9 +19,10 @@ bool MessageStore::loadStartupMetadata() {
         memcpy(after, peer, sizeof(after));
         uint8_t peerBytes[16]; decodeHex(peer, 32, peerBytes, 16);
         ConversationView row; ConversationSelector selector;
-        if (transactions().summarize(peerBytes, row, selector, &recent, STARTUP_RECENT_CAP) != Error::None) {
-            releaseStartupSeeds(); return false;
-        }
+        const auto error = transactions().summarize(peerBytes, row, selector, &recent, STARTUP_RECENT_CAP);
+        // Lists show an unreadable conversation as a placeholder; it must not stop startup.
+        if (error == Error::InvalidRecord) continue;
+        if (error != Error::None) { releaseStartupSeeds(); return false; }
         if (!row.totalCount) continue;
         if (total < UINT32_MAX) ++total;
         const auto count = int(std::min(row.unreadCount, uint32_t(INT_MAX)));

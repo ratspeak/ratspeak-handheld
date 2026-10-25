@@ -17,10 +17,11 @@ concurrency:
 env:
   ARDUINO_CLI_VERSION: 1.4.1
   # Generated source mirrors: tools/release_identity.py sync
-  RNS_LITE_COMMIT: fe9144945fa9cddb3aa6ae967bf8e0d0e5fa4227
-  LXMF_LITE_COMMIT: e8c19f18338263be9bb801f563509759d91482f3
-  RNS_FULL_COMMIT: 25c69c6f378a745d5a3ae93558ebdf8f0de901b7
-  LXMF_FULL_COMMIT: d7da7f34aaf14761566cc2fb446b503093fd1612
+  RNS_LITE_COMMIT: 1af3d84b6452f554dcc2fbaa17e938a20bf79a95
+  LXMF_LITE_COMMIT: 48c4071d101cbd43c52e35e36b27ad0a8726f3a5
+  RNS_FULL_COMMIT: d738238b4e81783811eada8deffe063f3dc547c4
+  LXST_COMMIT: 07ab7d79559864a5756ec8cb90c92456a31e259e
+  LXMF_FULL_COMMIT: 769d0eb0a33eb4ea7a89dc234facbe292cd711c7
 
 jobs:
   protocol-quality:
@@ -49,6 +50,13 @@ jobs:
           path: source/rsLXMFLite
           token: ${{ secrets.PRIVATE_LITE_READ_TOKEN || github.token }}
           persist-credentials: false
+      - name: Check out exact rsLXST voice sources
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ratspeak/rsLXST
+          ref: ${{ env.LXST_COMMIT }}
+          path: source/rsLXST
+          persist-credentials: false
       - name: Check out trusted rsReticulum
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -63,12 +71,23 @@ jobs:
           ref: ${{ env.LXMF_FULL_COMMIT }}
           path: source/rsLXMF
           persist-credentials: false
+      # rsLXMFLite formats, lints and tests on the pinned release toolchain.
+      - name: Install Rust 1.96 for the Lite gates
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: 1.96.0
+          components: clippy, rustfmt
       - name: Install Rust 1.87
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
           toolchain: 1.87.0
           components: clippy, rustfmt
           targets: thumbv7em-none-eabihf, riscv32imc-unknown-none-elf
+      - name: Install Rust 1.89 for host parity checks
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: 1.89.0
+          components: clippy
       - name: Cache Rust builds
         uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
         with:
@@ -201,6 +220,13 @@ jobs:
           repository: ratspeak/rsLXMF
           ref: ${{ env.LXMF_FULL_COMMIT }}
           path: source/rsLXMF
+          persist-credentials: false
+      - name: Check out exact rsLXST voice sources for source packaging
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ratspeak/rsLXST
+          ref: ${{ env.LXST_COMMIT }}
+          path: source/rsLXST
           persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:

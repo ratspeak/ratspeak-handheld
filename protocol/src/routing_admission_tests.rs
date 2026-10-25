@@ -58,7 +58,15 @@ fn foreign_next_hop_cannot_surface_local_or_poison_final_hop_copy() {
                 destination_hash: destination,
                 context,
             };
-            let payload = b"same encrypted payload survives relay header rewriting";
+            // Routing fixtures still need a structurally valid handshake shape;
+            // authentication belongs to the endpoint owner after local dispatch.
+            let payload: &[u8] = if packet_type == PacketType::LinkRequest {
+                &[0x42; 64]
+            } else if context == PacketContext::Lrproof {
+                &[0x43; 96]
+            } else {
+                b"same encrypted payload survives relay header rewriting"
+            };
             let final_hop = build_packet(header, payload).unwrap();
             let overheard = build_packet(
                 PacketHeader {

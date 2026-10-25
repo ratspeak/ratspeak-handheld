@@ -1,17 +1,16 @@
 #include "UserConfig.h"
+#include "ConfigJsonWriter.h"
 #include "config/AnnounceInterval.h"
 #include "config/BoardConfig.h"
 #include "radio/RadioFrequency.h"
 #include "radio/RadioBandwidth.h"
-#include "storage/StorageJsonAllocator.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <new>
-#if USERCONFIG_NVS_BACKUP
-#include <Preferences.h>
+#if USERCONFIG_NVS_LEGACY_READ
 #include <nvs.h>
 #endif
 
@@ -67,17 +66,8 @@ bool reserveConfigVector(std::vector<T>& values, size_t count) {
     return handheld::config::Memory::admits(0);
 }
 
-#if USERCONFIG_NVS_BACKUP
-// Full-JSON NVS backup tier — internal flash, no SPI bus, wear-leveled
-bool saveToNVS(const String& json) {
-    Preferences prefs;
-    if (!prefs.begin(NVS_NS_CFG, false)) return false;
-    bool ok = prefs.putString("json", json) > 0;
-    prefs.end();
-    if (ok) Serial.println("[CONFIG] Saved to NVS");
-    return ok;
-}
-
+#if USERCONFIG_NVS_LEGACY_READ
+// Read-only compatibility for settings written by older firmware.
 using ConfigBytes = std::unique_ptr<char, decltype(&std::free)>;
 ConfigBytes loadFromNVS(bool& available, bool& present, size_t& length) {
     ConfigBytes bytes(nullptr, &std::free);
@@ -120,23 +110,28 @@ bool UserConfig::tryAssign(const UserConfig& source) {
     // Every valid stored record fits this aggregate source-byte allowance.
     // Check counts/bytes before copying a mutable UI candidate's allocations.
     size_t charge = 0;
-    if (!configCopyFits(source._settings, charge) || !handheld::config::Memory::admits(charge)) return false;
+    if (!configCopyFits(source._settings, charge)) return false;
+    const auto memoryFailure = [charge]() {
+        Serial.printf("[CONFIG] Copy memory unavailable: free=%u largest=%u charge=%u\n",
+            unsigned(ESP.getFreeHeap()), unsigned(ESP.getMaxAllocHeap()), unsigned(charge));
+        return false;
+    };
+    if (!handheld::config::Memory::admits(charge)) return memoryFailure();
     try {
         // Compiler-generated scalar/member copying stays the single value map.
         // Verify the SDK's nonthrowing String failures before swapping values.
         UserSettings prepared = source._settings;
-        if (!sameConfigStrings(prepared, source._settings) || !handheld::config::Memory::admits(0)) return false;
+        if (!sameConfigStrings(prepared, source._settings) || !handheld::config::Memory::admits(0)) return memoryFailure();
         std::swap(_settings, prepared);
         copyStateFrom(source);
         return true;
-    } catch (const std::bad_alloc&) { return false; }
+    } catch (const std::bad_alloc&) { return memoryFailure(); }
 }
 
 void UserConfig::copyStateFrom(const UserConfig& source) noexcept {
     std::memcpy(_nameIdentity, source._nameIdentity, sizeof _nameIdentity);
     _nameBound = source._nameBound; _namePending = source._namePending;
-    _source = source._source; _mirrorPending = source._mirrorPending;
-    _nvsMirrorPending = source._nvsMirrorPending; _recoveryRequired = source._recoveryRequired;
+    _source = source._source; _recoveryRequired = source._recoveryRequired;
 }
 
 void UserConfig::swap(UserConfig& other) noexcept {
@@ -145,12 +140,11 @@ void UserConfig::swap(UserConfig& other) noexcept {
     std::swap(_settings, other._settings);
     std::swap(_nameIdentity, other._nameIdentity);
     std::swap(_nameBound, other._nameBound); std::swap(_namePending, other._namePending);
-    std::swap(_source, other._source); std::swap(_mirrorPending, other._mirrorPending);
-    std::swap(_nvsMirrorPending, other._nvsMirrorPending);
+    std::swap(_source, other._source);
     std::swap(_recoveryRequired, other._recoveryRequired);
 }
 
-void UserConfig::sanitizeSettings(UserSettings& settings) {
+void UserConfig::sanitizeScalars(UserScalars& settings) {
     if (settings.radioRegion >= REGION_COUNT) settings.radioRegion = REGION_AMERICAS;
     // Region selects a default; it must not override a supported manual tune,
     // including after the developer controls are locked again.
@@ -186,7 +180,10 @@ void UserConfig::sanitizeSettings(UserSettings& settings) {
     if (settings.timezoneIdx >= 21) settings.timezoneIdx = 6;
     settings.autoIfaceMaxPeers = constrain(settings.autoIfaceMaxPeers, 1, 16);
     settings.announceInterval = handheld::announce::normalizeMinutes(settings.announceInterval);
+}
 
+void UserConfig::sanitizeSettings(UserSettings& settings) {
+    sanitizeScalars(settings);
     size_t retained = 0;
     for (size_t i = 0; i < settings.tcpConnections.size(); ++i) {
         auto& ep = settings.tcpConnections[i];
@@ -362,6 +359,30 @@ bool UserConfig::parseJson(const char* json, size_t length, bool persisted, bool
         parsed.announceInterval = handheld::announce::normalizeMinutes(doc["announce_int"] | 30);
         parsed.devMode     = doc["dev_mode"]     | false;
 
+        // Absent fields migrate to OFF/AUTO/AUTO. Invalid new policy values
+        // refuse the whole candidate instead of silently changing delivery mode.
+        if ((!doc["prop_on"].isNull() && !doc["prop_on"].is<bool>()) ||
+            (!doc["prop_select"].isNull() && !doc["prop_select"].is<uint8_t>()) ||
+            (!doc["prop_delivery"].isNull() && !doc["prop_delivery"].is<uint8_t>()) ||
+            (!doc["prop_node"].isNull() && !doc["prop_node"].is<const char*>())) return false;
+        parsed.voice.enabled=doc["voice_on"] | false;
+        parsed.voice.contactsOnly=doc["voice_contacts"] | true;
+        const int voiceVolume=doc["voice_volume"] | 70;
+        const int voiceRoute=doc["voice_route"] | 0;
+        if(voiceVolume<0 || voiceVolume>100 || voiceRoute<0 || voiceRoute>2) return false;
+        if(!doc["voice_max_messages"].isNull() && !doc["voice_max_messages"].is<uint8_t>()) return false;
+        const unsigned voiceMax=doc["voice_max_messages"] | 2u;
+        if(voiceMax<1 || voiceMax>50) return false;
+        parsed.voice.maxMessages=uint8_t(voiceMax);
+        parsed.voice.volume=static_cast<uint8_t>(voiceVolume);
+        parsed.voice.route=static_cast<handheld::voice::Route>(voiceRoute);
+        parsed.propagation.enabled = doc["prop_on"] | false;
+        parsed.propagation.selection = static_cast<handheld::propagation::Selection>(doc["prop_select"] | 0);
+        parsed.propagation.delivery = static_cast<handheld::propagation::Delivery>(doc["prop_delivery"] | 0);
+        const JsonString node = doc["prop_node"].as<JsonString>();
+        if (!parsed.propagation.valid() ||
+            !parsed.propagation.setManual(node.c_str(), node.size())) return false;
+
         sanitizeSettings(parsed);
         if (!handheld::config::Memory::admits(0)) return memoryFailure();
         // Swapping whole values also releases old String capacities. Arduino's
@@ -376,102 +397,168 @@ bool UserConfig::parseJson(const char* json, size_t length, bool persisted, bool
     } catch (const std::bad_alloc&) { return memoryFailure(); }
 }
 
-String UserConfig::serializeToJson(bool persisted, size_t limit, bool* unavailable) {
-    if (unavailable) *unavailable = false;
-    const auto memoryFailure = [unavailable]() {
-        if (unavailable) *unavailable = true;
-        return String();
-    };
-    sanitizeSettings(_settings);
-    handheld::config::JsonAllocator allocator(JsonAllocationLimit);
-    JsonDocument doc(&allocator);
+void UserConfig::writeJson(handheld::config::JsonWriter& writer, bool persisted, const UserScalars& scalars) const {
+    writer.object();
+    writer.member("radio_region", scalars.radioRegion);
+    writer.member("lora_freq", scalars.loraFrequency);
+    writer.member("lora_sf", scalars.loraSF);
+    writer.member("lora_bw", scalars.loraBW);
+    writer.member("lora_cr", scalars.loraCR);
+    writer.member("lora_txp", scalars.loraTxPower);
+    writer.member("lora_pre", scalars.loraPreamble);
+    writer.member("lora_on", scalars.loraEnabled);
 
-    doc["radio_region"] = _settings.radioRegion;
-    doc["lora_freq"] = _settings.loraFrequency;
-    doc["lora_sf"]   = _settings.loraSF;
-    doc["lora_bw"]   = _settings.loraBW;
-    doc["lora_cr"]   = _settings.loraCR;
-    doc["lora_txp"]  = _settings.loraTxPower;
-    doc["lora_pre"]  = _settings.loraPreamble;
-    doc["lora_on"]   = _settings.loraEnabled;
-
-    doc["wifi_mode"] = (int)_settings.wifiMode;
-    doc["wifi_restore_mode"] = (int)_settings.wifiRestoreMode;
-    doc["wifi_ap_ssid"] = _settings.wifiAPSSID;
-    doc["wifi_ap_pass"] = _settings.wifiAPPassword;
-    doc["wifi_sta_selected"] = (int)constrain((int)_settings.wifiSTASelected, 0, (int)WIFI_STA_MAX_NETWORKS - 1);
-    JsonArray staArr = doc["wifi_sta_networks"].to<JsonArray>();
+    writer.member("wifi_mode", (int)scalars.wifiMode);
+    writer.member("wifi_restore_mode", (int)scalars.wifiRestoreMode);
+    writer.member("wifi_ap_ssid", _settings.wifiAPSSID);
+    writer.member("wifi_ap_pass", _settings.wifiAPPassword);
+    writer.member("wifi_sta_selected", (int)constrain((int)scalars.wifiSTASelected, 0, (int)WIFI_STA_MAX_NETWORKS - 1));
+    writer.array("wifi_sta_networks");
     for (size_t slot = 0; slot < WIFI_STA_MAX_NETWORKS; slot++) {
-        JsonObject obj = staArr.add<JsonObject>();
+        writer.object();
         if (slot < _settings.wifiSTANetworks.size()) {
-            obj["ssid"] = _settings.wifiSTANetworks[slot].ssid;
-            obj["pass"] = _settings.wifiSTANetworks[slot].password;
+            writer.member("ssid", _settings.wifiSTANetworks[slot].ssid);
+            writer.member("pass", _settings.wifiSTANetworks[slot].password);
         } else {
-            obj["ssid"] = "";
-            obj["pass"] = "";
+            writer.member("ssid", "");
+            writer.member("pass", "");
         }
+        writer.endObject();
     }
 
-    doc["autoiface_en"]    = _settings.autoIfaceEnabled;
-    doc["autoiface_group"] = _settings.autoIfaceGroupId;
-    doc["autoiface_max"]   = _settings.autoIfaceMaxPeers;
+    writer.endArray();
 
-    JsonArray tcpArr = doc["tcp_connections"].to<JsonArray>();
+    writer.member("autoiface_en", scalars.autoIfaceEnabled);
+    writer.member("autoiface_group", _settings.autoIfaceGroupId);
+    writer.member("autoiface_max", scalars.autoIfaceMaxPeers);
+
+    writer.array("tcp_connections");
     for (auto& ep : _settings.tcpConnections) {
-        JsonObject obj = tcpArr.add<JsonObject>();
-        obj["host"] = ep.host;
-        obj["port"] = ep.port;
-        obj["auto"] = ep.autoConnect;
+        writer.object();
+        writer.member("host", ep.host);
+        writer.member("port", ep.port);
+        writer.member("auto", ep.autoConnect);
+        writer.endObject();
     }
 
-    doc["screen_dim"] = _settings.screenDimTimeout;
-    doc["screen_off"] = _settings.screenOffTimeout;
-    doc["brightness"] = _settings.brightness;
-    doc["dense_font"] = _settings.denseFontMode;
-    doc["theme_light"] = _settings.themeLight;
-    doc["kb_brightness"] = _settings.keyboardBrightness;
-    doc["kb_auto_on"] = _settings.keyboardAutoOn;
-    doc["kb_auto_off"] = _settings.keyboardAutoOff;
-    doc["trackball_speed"] = _settings.trackballSpeed;
-    doc["touch_sens"] = _settings.touchSensitivity;
-    doc["ble_enabled"] = false;
+    writer.endArray();
+
+    writer.member("screen_dim", scalars.screenDimTimeout);
+    writer.member("screen_off", scalars.screenOffTimeout);
+    writer.member("brightness", scalars.brightness);
+    writer.member("dense_font", scalars.denseFontMode);
+    writer.member("theme_light", scalars.themeLight);
+    writer.member("kb_brightness", scalars.keyboardBrightness);
+    writer.member("kb_auto_on", scalars.keyboardAutoOn);
+    writer.member("kb_auto_off", scalars.keyboardAutoOff);
+    writer.member("trackball_speed", scalars.trackballSpeed);
+    writer.member("touch_sens", scalars.touchSensitivity);
+    writer.member("ble_enabled", false);
 
     // battery settings
-    doc["batt_display"] = _settings.batteryDisplay;
-    doc["batt_model"]   = _settings.batteryModel;
-    doc["charge_thresh_v"] = _settings.chargeThresholdV;
-    doc["full_battery_v"]  = _settings.fullBatteryV;
+    writer.member("batt_display", scalars.batteryDisplay);
+    writer.member("batt_model", scalars.batteryModel);
+    writer.member("charge_thresh_v", scalars.chargeThresholdV);
+    writer.member("full_battery_v", scalars.fullBatteryV);
 
-    doc["gps_time"]     = _settings.gpsTimeEnabled;
-    doc["gps_location"] = _settings.gpsLocationEnabled;
-    doc["tz_idx"]       = _settings.timezoneIdx;
-    doc["tz_set"]       = _settings.timezoneSet;
-    doc["time_24h"]     = _settings.use24HourTime;
+    writer.member("gps_time", scalars.gpsTimeEnabled);
+    writer.member("gps_location", scalars.gpsLocationEnabled);
+    writer.member("tz_idx", scalars.timezoneIdx);
+    writer.member("tz_set", scalars.timezoneSet);
+    writer.member("time_24h", scalars.use24HourTime);
 
-    doc["audio_on"]  = _settings.audioEnabled;
-    doc["audio_vol"] = _settings.audioVolume;
+    writer.member("audio_on", scalars.audioEnabled);
+    writer.member("audio_vol", scalars.audioVolume);
 
-    doc["display_name"] = _settings.displayName;
-    doc["name_complete"] = _settings.nameComplete;
+    writer.member("display_name", _settings.displayName);
+    writer.member("name_complete", scalars.nameComplete);
     if (persisted && _nameBound) {
         static constexpr char digits[] = "0123456789abcdef";
         char hex[33]{};
         for (size_t i = 0; i < 16; ++i) { hex[2*i] = digits[_nameIdentity[i] >> 4]; hex[2*i+1] = digits[_nameIdentity[i] & 15]; }
-        doc["name_identity"] = hex;
-        doc["name_pending"] = _namePending;
+        writer.member("name_identity", hex);
+        writer.member("name_pending", _namePending);
     }
-    doc["sd_storage"] = _settings.sdStorageEnabled;
-    doc["announce_int"] = _settings.announceInterval;
-    doc["dev_mode"]     = _settings.devMode;
+    writer.member("sd_storage", scalars.sdStorageEnabled);
+    writer.member("announce_int", scalars.announceInterval);
+    writer.member("dev_mode", scalars.devMode);
+    writer.member("voice_on", scalars.voice.enabled);
+    writer.member("voice_contacts", scalars.voice.contactsOnly);
+    writer.member("voice_volume", scalars.voice.volume);
+    writer.member("voice_max_messages", scalars.voice.maxMessages);
+    writer.member("voice_route", uint8_t(scalars.voice.route));
+    writer.member("prop_on", scalars.propagation.enabled);
+    writer.member("prop_select", static_cast<uint8_t>(scalars.propagation.selection));
+    writer.member("prop_delivery", static_cast<uint8_t>(scalars.propagation.delivery));
+    char propagationNode[33]{};
+    scalars.propagation.manualHex(propagationNode);
+    writer.member("prop_node", propagationNode);
+    writer.endObject();
+}
 
+UserConfig::SaveResult UserConfig::prepareJson(bool persisted, size_t limit, size_t& length) {
+    sanitizeSettings(_settings);
+    return measureJson(persisted, limit, _settings, length);
+}
+
+UserConfig::SaveResult UserConfig::measureJson(bool persisted, size_t limit, const UserScalars& scalars,
+                                               size_t& length) const {
+    length = 0;
+    if (!scalars.propagation.valid() || scalars.voice.volume > 100 ||
+        uint8_t(scalars.voice.route) > 2 || scalars.voice.maxMessages < 1 ||
+        scalars.voice.maxMessages > 50) return SaveResult::Invalid;
+    if (!handheld::config::Memory::admits(0)) return SaveResult::NoMemory;
+    handheld::config::JsonWriter measured(limit);
+    writeJson(measured, persisted, scalars);
+    if (measured.unavailable() || !handheld::config::Memory::admits(0)) return SaveResult::NoMemory;
+    if (!measured.ok() || !measured.size()) return SaveResult::Invalid;
+    length = measured.size();
+    return SaveResult::Complete;
+}
+
+String UserConfig::serializeToJson(bool persisted, size_t limit, bool* unavailable) {
+    if (unavailable) *unavailable = false;
+    const auto memoryFailure = [unavailable]() {
+        if (unavailable) *unavailable = true;
+        Serial.printf("[CONFIG] Encode memory unavailable: free=%u largest=%u\n",
+            unsigned(ESP.getFreeHeap()), unsigned(ESP.getMaxAllocHeap()));
+        return String();
+    };
+    size_t length = 0;
+    const auto prepared = prepareJson(persisted, limit, length);
+    if (prepared == SaveResult::NoMemory) return memoryFailure();
+    if (prepared != SaveResult::Complete) return "";
     String json;
-    if (doc.overflowed()) return memoryFailure();
-    const size_t length = measureJson(doc);
-    if (!length || length > limit) return "";
     if (!handheld::config::Memory::reserveString(json, length)) return memoryFailure();
-    if (serializeJson(doc, json) != length) return memoryFailure();
+    handheld::config::JsonWriter output(length, &json);
+    writeJson(output, persisted, _settings);
+    if (output.unavailable()) return memoryFailure();
+    if (!output.ok() || output.size() != length || json.length() != length) return "";
     return json;
 }
+
+// The caller sanitizes and measures first. This synchronous source borrows
+// those fixed values through write and readback; neither emission mutates
+// settings or retains a complete encoded record.
+class UserConfig::JsonSource final : public handheld::storage::AtomicSource {
+public:
+    JsonSource(const UserConfig& config, const UserScalars& scalars, size_t length)
+        : _config(config), _scalars(scalars), _length(length) {}
+    size_t length() const override { return _length; }
+    bool unavailable() const { return _unavailable; }
+    bool emit(handheld::storage::ByteSink& sink) const override {
+        if (!handheld::config::Memory::admits(0)) { _unavailable = true; return false; }
+        handheld::config::JsonWriter writer(_length, sink);
+        _config.writeJson(writer, true, _scalars);
+        _unavailable = _unavailable || writer.unavailable() || !handheld::config::Memory::admits(0);
+        return !_unavailable && writer.ok() && writer.size() == _length;
+    }
+private:
+    const UserConfig& _config;
+    const UserScalars& _scalars;
+    size_t _length;
+    mutable bool _unavailable = false;
+};
 
 bool UserConfig::load(FlashStore& flash) {
     _recoveryRequired = false;
@@ -482,9 +569,6 @@ bool UserConfig::load(FlashStore& flash) {
         bool unavailable = false;
         if (parseJson(json, true, &unavailable)) {
             _source = source == FlashStore::RecordSource::Primary ? Source::Flash : Source::FlashBackup;
-#if USERCONFIG_NVS_BACKUP
-            _nvsMirrorPending = !_namePending;
-#endif
             return true;
         }
         _source = unavailable ? Source::Unavailable : Source::Invalid;
@@ -494,7 +578,7 @@ bool UserConfig::load(FlashStore& flash) {
         _source = source == FlashStore::RecordSource::Invalid ? Source::Invalid : Source::Unavailable;
         _recoveryRequired = true; return false;
     }
-#if USERCONFIG_NVS_BACKUP
+#if USERCONFIG_NVS_LEGACY_READ
     bool available = false, present = false;
     size_t length = 0;
     const auto bytes = loadFromNVS(available, present, length);
@@ -511,16 +595,27 @@ bool UserConfig::load(FlashStore& flash) {
 }
 
 bool UserConfig::saveRequired(FlashStore& flash) {
-    return saveRequired(flash, serializeToJson());
+    size_t length = 0;
+    const auto prepared = prepareJson(true, StoredLimit, length);
+    if (prepared == SaveResult::NoMemory) saveMemoryFailure("prepare", length);
+    return prepared == SaveResult::Complete && savePrepared(flash, length) == SaveResult::Complete;
 }
 
-bool UserConfig::saveRequired(FlashStore& flash, const String& json) {
-    if (json.isEmpty() || _recoveryRequired || !flash.writeString(PATH_USER_CONFIG, json)) return false;
+UserConfig::SaveResult UserConfig::saveMemoryFailure(const char* phase, size_t length) {
+    Serial.printf("[CONFIG] %s memory unavailable: free=%u largest=%u bytes=%u\n",
+        phase, unsigned(ESP.getFreeHeap()), unsigned(ESP.getMaxAllocHeap()), unsigned(length));
+    return SaveResult::NoMemory;
+}
+
+UserConfig::SaveResult UserConfig::savePrepared(FlashStore& flash, size_t length, const UserScalars& scalars) {
+    if (!length || length > StoredLimit || _recoveryRequired) return SaveResult::Invalid;
+    if (!handheld::config::Memory::admits(0)) return saveMemoryFailure("write", length);
+    const JsonSource source(*this, scalars, length);
+    const auto result = flash.writeAtomic(PATH_USER_CONFIG, source);
+    if (source.unavailable()) return saveMemoryFailure("write", length);
+    if (result != handheld::storage::Error::None) return SaveResult::StorageError;
     _source = Source::Flash;
-#if USERCONFIG_NVS_BACKUP
-    if (!_namePending) _nvsMirrorPending = !saveToNVS(json);
-#endif
-    return true;
+    return SaveResult::Complete;
 }
 
 bool UserConfig::save(FlashStore& flash) {
@@ -528,11 +623,8 @@ bool UserConfig::save(FlashStore& flash) {
 }
 
 bool UserConfig::load(SDStore& sd, FlashStore& flash) {
-    if (load(flash)) {
-        // A stale/removable mirror must never override a committed flash value.
-        _mirrorPending = _settings.sdStorageEnabled;
-        return true;
-    }
+    // Legacy settings must never override a committed flash value.
+    if (load(flash)) return true;
     if (!flash.isReady() || _recoveryRequired) return false;
     String backup;
     if (sd.isReady()) {
@@ -565,9 +657,8 @@ bool UserConfig::load(SDStore& sd, FlashStore& flash) {
         _settings.sdStorageEnabled = true;
         _recoveryRequired = false;
         if (save(flash)) {
-            _mirrorPending = true;
             _source = Source::Sd;
-            Serial.println("[CONFIG] Restored settings from SD backup");
+            Serial.println("[CONFIG] Imported legacy SD settings");
             return true;
         }
         // The SD record was valid; canonical write/admission failure must not
@@ -582,37 +673,6 @@ bool UserConfig::load(SDStore& sd, FlashStore& flash) {
     return false;
 }
 
-bool UserConfig::save(SDStore& sd, FlashStore& flash) {
-    // Publish one authoritative commit before touching any secondary copy.
-    // A failed flash commit leaves both the live settings and SD unchanged.
-    if (!save(flash)) return false;
-    _mirrorPending = _settings.sdStorageEnabled;
-    flushPending(sd, flash);
-    return true;
-}
-
-bool UserConfig::flushPending(SDStore& sd, FlashStore& flash) {
-    (void)flash;
-    if (_namePending || _recoveryRequired) return false;
-    if (!_settings.sdStorageEnabled) _mirrorPending = false;
-    if (!_mirrorPending && !_nvsMirrorPending) return true;
-    const String json = serializeToJson();
-    if (json.isEmpty()) return false;
-#if USERCONFIG_NVS_BACKUP
-    if (_nvsMirrorPending) _nvsMirrorPending = !saveToNVS(json);
-#endif
-    // Optional absent media cannot prevent a safe shutdown: flash is durable.
-    if (_mirrorPending && sd.isReady()) {
-        bool refused = false;
-        bool matches = false;
-        {
-            const String previous = sd.readString(SD_PATH_USER_CONFIG, handheld::config::Memory::reserveString, &refused);
-            matches = previous == json;
-        }
-        if (refused) return false;
-        if (matches) _mirrorPending = false;
-        else if (sd.ensureDir(SD_PATH_ROOT) && sd.ensureDir(SD_PATH_CONFIG_DIR) &&
-                 sd.writeString(SD_PATH_USER_CONFIG, json)) _mirrorPending = false;
-    }
-    return !_nvsMirrorPending && (!_mirrorPending || !sd.isReady());
+bool UserConfig::save(SDStore&, FlashStore& flash) {
+    return save(flash);
 }

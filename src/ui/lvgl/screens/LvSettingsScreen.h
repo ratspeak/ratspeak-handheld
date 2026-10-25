@@ -1,6 +1,7 @@
 #pragma once
 
 #include "UIManager.h"
+#include "SettingsIdentity.h"
 #include "runtime/ServiceClient.h"
 #include "transport/WiFiInterface.h"
 #include "config/UserConfig.h"
@@ -25,7 +26,10 @@ enum class SettingType : uint8_t {
 enum class SettingsView : uint8_t {
     CATEGORY_LIST,
     ITEM_LIST,
-    WIFI_PICKER
+    WIFI_PICKER,
+    PROPAGATION_CHOICE,
+    PROPAGATION_NODES,
+    PROPAGATION_ENTRY
 };
 
 struct SettingItem {
@@ -43,6 +47,7 @@ struct SettingItem {
     std::function<bool(const String&)> textSetter;
     int maxTextLen = 16;
     bool allowOff = false; // INTEGER: zero is OFF; minVal is the minimum enabled value.
+    SettingId id = SettingId::None;
 };
 
 struct SettingsCategory {
@@ -50,6 +55,7 @@ struct SettingsCategory {
     int startIdx;
     int count;
     std::function<String()> summary;
+    SettingsCategoryId id = SettingsCategoryId::None;
 };
 
 class LvSettingsScreen : public LvScreen {
@@ -57,6 +63,7 @@ public:
     void setService(handheld::ServiceClient* service) { _service = service; }
     void createUI(lv_obj_t* parent) override;
     void onEnter() override;
+    void onExit() override;
     void refreshUI() override;
     bool handleKey(const KeyEvent& event) override;
     bool handleLongPress() override;
@@ -66,7 +73,6 @@ public:
         _cfg = cfg;
         // Bind once at boot, before Home or Settings can change reboot-only values.
         snapshotRebootSettings();
-        snapshotTCPSettings();
     }
     void setAudio(AudioNotify* audio) { _audio = audio; }
     void setPower(Power* power) { _power = power; }
@@ -84,7 +90,22 @@ public:
 private:
     handheld::ServiceClient* _service = nullptr;
     void buildItems();
-    void applyAndSave();
+    void buildPropagationItems(int&);
+    void buildVoiceItems(int&);
+    void showPropagationDialog(SettingsView);
+    void rebuildPropagationDialog();
+    void activatePropagationRow(int);
+    bool handlePropagationKey(const KeyEvent&);
+    void pollPropagationUI();
+    void savePropagationAddress(const uint8_t address[16]);
+    handheld::propagation::NodeView _propNodes[handheld::propagation::NodeViewCapacity]{};
+    char _propInput[33]{};
+    uint32_t _propGeneration = 0;
+    int _propCategory = -1, _propSelected = 0;
+    size_t _propCount = 0;
+    bool _propLoading = false, _propFailed = false, _propChoicePending = false;
+    handheld::propagation::SyncStatus _propStatus = handheld::propagation::SyncStatus::Off;
+    bool applyAndSave(bool rebuildItems = false);
     void applyPreset(int presetIdx);
     int detectPreset() const;
     bool isEditable(int idx) const;
@@ -139,6 +160,10 @@ private:
     int _catRangeEnd = 0;
 
     // Edit state
+    bool _itemsNeedRebuild = false;
+    bool _rebuildingList = false;
+    bool _itemRefreshPending = false;
+    bool _viewActive = false;
     bool _editing = false;
     int _editValue = 0;
     bool _numericTyping = false;   // true once user types digits in INTEGER edit
@@ -175,6 +200,7 @@ private:
     int _wifiPickerIdx = 0;
     size_t _wifiTargetSlot = 0;
     bool _wifiScanActive = false;
+    uint32_t _wifiScanGeneration = 0;
     handheld::Outcome _wifiScanOutcome = handheld::Outcome::Ok;
 
     // Reboot-required tracking
@@ -183,7 +209,6 @@ private:
         RatWiFiMode wifiMode;
         std::vector<WiFiNetwork> wifiSTANetworks;
         uint8_t wifiSTASelected;
-        bool autoIfaceEnabled;
         bool sdStorageEnabled;
         bool loraEnabled;
     };
@@ -194,13 +219,6 @@ private:
     bool storageSettingsChanged() const;
     bool rebootSettingsChanged() const;
 
-    // TCP change detection
-    std::vector<TCPEndpoint> _tcpSnap;
-    void snapshotTCPSettings();
-    bool tcpSettingsChanged() const;
-
-    // Keyboard backlight change detection
-    uint8_t _kbBrightness = 0;
     uint32_t _lastIdentityRevision = 0;
     std::vector<std::string> _identityHashes;
     uint32_t _fwViewGeneration = 0, _fwRequestGeneration = 0;

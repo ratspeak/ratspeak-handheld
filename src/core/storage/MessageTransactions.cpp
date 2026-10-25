@@ -1,4 +1,9 @@
 #include "MessageTransactions.h"
+#include "PreparedEnvelope.h"
+#include "RrcRecord.h"
+#include "MemoDraft.h"
+#include "protocol/RrcPreferences.h"
+#include "PurgeJournal.h"
 #include "config/Config.h"
 #include <Preferences.h>
 #include <limits>
@@ -78,6 +83,8 @@ bool MessageTransactions::filename(const char* name, uint32_t& counter, bool& in
     counter = uint32_t(value); incoming = name[14] == 'i'; return true;
 }
 
+#include "DeleteRecord.inc"
+
 uint32_t MessageTransactions::deletedThrough(const uint8_t peer[16]) {
     MessageDocument document; return deletedThrough(peer, document);
 }
@@ -138,7 +145,7 @@ Error MessageTransactions::openDirectory(unsigned which, const char* path, bool 
 
 bool MessageTransactions::nextRecord(Cursor& cursor, RecordKey& key) {
     if (cursor.error != Error::None) return false;
-    for (; cursor.medium < 2;) {
+    for (; cursor.medium < (cursor.flashOnly ? 1 : 2);) {
         auto store = medium(cursor.medium);
         if (!cursor.opened) {
             char parent[96]; directory(cursor.peer, cursor.medium, parent);
@@ -157,8 +164,40 @@ bool MessageTransactions::nextRecord(Cursor& cursor, RecordKey& key) {
             cursor.directory.close(); cursor.opened = false; ++cursor.medium; continue;
         }
         uint32_t counter = 0; bool incoming = false;
-        if (file.isDirectory() || !filename(file.name(), counter, incoming) || counter <= cursor.cutoff) continue;
+        if(file.isDirectory()) continue;
+        char name[32];snprintf(name,sizeof name,"%s",file.name());
+        const size_t length=strlen(name);
+        // Retention visits sidecar-bearing records only. Text-only history and
+        // already-cleaned audio tombstones need no JSON parse or deletion read.
+        const char* audioSuffixes[] = {".audio", ".audio.bak", ".audio.tmp", ".prop", ".prop.bak", ".prop.tmp"};
+        size_t audioSuffix = 0;
+        if (cursor.audioOnly) {
+            while (audioSuffix < 6 && (length <= 20 || strcmp(name + 20, audioSuffixes[audioSuffix]))) ++audioSuffix;
+            if (audioSuffix == 6) continue;
+            name[20] = 0;
+        }
+        const bool tombstone=(length==24 && !strcmp(name+20,".del")) || (length==28 && !strcmp(name+20,".del.bak"));
+        if(tombstone && cursor.includeDeleted) name[20]=0;
+        if(!filename(name,counter,incoming) || counter<=cursor.cutoff) continue;
         key = {}; memcpy(key.peer, cursor.peer, 16); key.counter = counter; key.incoming = incoming;
+        if (cursor.audioOnly) {
+            bool duplicate = false;
+            for (size_t i = 0; i < audioSuffix; ++i) {
+                char candidate[128]; path(key, cursor.medium, candidate, audioSuffixes[i]);
+                if (store.exists(candidate)) { duplicate = true; break; }
+            }
+            if (duplicate) continue;
+            char record[128]; path(key, cursor.medium, record);
+            if (!store.exists(record)) {
+                path(key, cursor.medium, record, ".bak");
+                if (!store.exists(record)) continue; // Uncommitted orphan, not a retained message.
+            }
+        }
+        if(!cursor.includeDeleted) {
+            bool deleted=false;cursor.error=recordDeletion(key,deleted);
+            if(cursor.error!=Error::None) return false;
+            if(deleted) continue;
+        } else if(tombstone) return true;
         // A key is visited once even when it has a backup or an optional mirror.
         char primary[128]; path(key, cursor.medium, primary);
         const bool backup = strlen(file.name()) == 24;
@@ -176,7 +215,7 @@ bool MessageTransactions::nextRecord(Cursor& cursor, RecordKey& key) {
 bool MessageTransactions::nextPeer(Cursor& cursor, char output[33]) {
     output[0] = 0;
     if (cursor.error != Error::None) return false;
-    while (cursor.medium < 2) {
+    while (cursor.medium < (cursor.flashOnly ? 1 : 2)) {
         if (!cursor.opened) {
             cursor.error = openDirectory(cursor.medium, cursor.medium == 0 ? PATH_MESSAGES : SD_PATH_MESSAGES,
                                          true, cursor.directory);
@@ -232,11 +271,16 @@ Error MessageTransactions::inspect(const RecordKey& key, unsigned which, const c
     return Error::None;
 }
 
-Error MessageTransactions::load(const RecordKey& key, MessageDocument& document, StoredRecordHeader& header) {
+Error MessageTransactions::load(const RecordKey& key, MessageDocument& document, StoredRecordHeader& header,
+                                uint8_t* selectedMedium) {
+    if (selectedMedium) *selectedMedium = UINT8_MAX;
     Error markerError;
     const auto cutoff = deletedThrough(key.peer, document, nullptr, &markerError);
     if (markerError != Error::None) return markerError;
     if (key.counter <= cutoff) return Error::Stale;
+    bool deleted=false;markerError=recordDeletion(key,deleted);
+    if(markerError!=Error::None) return markerError;
+    if(deleted) return Error::Stale;
     int best = -1, loaded = -1; uint32_t revision = 0; _blockedMedia = _preferBackup = 0;
     uint32_t primaryRevision[2] = {}, backupRevision[2] = {};
     bool primaryValid[2] = {}, backupValid[2] = {};
@@ -276,8 +320,10 @@ Error MessageTransactions::load(const RecordKey& key, MessageDocument& document,
     for (unsigned which = 0; which < 2; ++which)
         if (primaryValid[which] && backupValid[which] && backupRevision[which] > primaryRevision[which])
             _preferBackup |= uint8_t(1u << which);
-    if (loaded == best) return Error::None;
-    return inspect(key, unsigned(best) / 2, best % 2 ? ".bak" : "", document, header);
+    const auto error = loaded == best ? Error::None :
+        inspect(key, unsigned(best) / 2, best % 2 ? ".bak" : "", document, header);
+    if (error == Error::None && selectedMedium) *selectedMedium = uint8_t(best / 2);
+    return error;
 }
 
 bool MessageTransactions::begin(FlashStore* flash, SDStore* sd, bool external, bool deferred) {
@@ -300,7 +346,10 @@ bool MessageTransactions::initializeCounter() {
     char previous[33] = {}, peerHex[33]; Error scanError = Error::None;
     while (nextPeer(previous, peerHex, scanError)) {
         memcpy(previous, peerHex, 33); uint8_t peer[16]; decodeHex(peerHex, 32, peer, 16);
-        Cursor cursor; beginRecords(cursor, peer); RecordKey key;
+        Cursor cursor; beginRecords(cursor, peer);cursor.includeDeleted=true; RecordKey key;
+        // An unreadable deletion marker blocks only its own peer (create/erase
+        // refuse it); its record names still bound the shared counter.
+        if (cursor.error == Error::InvalidRecord) { cursor.error = Error::None; cursor.cutoff = 0; }
         if (cursor.cutoff == UINT32_MAX) { _nextCounter = UINT32_MAX; return true; }
         _nextCounter = std::max(_nextCounter, cursor.cutoff + 1);
         while (nextRecord(cursor, key)) {
@@ -329,13 +378,57 @@ bool MessageTransactions::reserveCounter(uint32_t& counter) {
     return true;
 }
 
-Error MessageTransactions::commit(const RecordKey& key, MessageDocument& document, bool creating, Result& result) {
+File MessageTransactions::openAudio(const RecordKey& key, unsigned which, const StoredRecordHeader& header,
+                                   uint8_t* output, size_t offset, size_t length) {
+    auto store = medium(which);
+    if (!store.isReady() || header.audio.state != 1) return {};
+    for (const char* suffix : {".audio", ".audio.bak"}) {
+        char candidate[128]; path(key, which, candidate, suffix);
+        File file = store.open(candidate);
+        if (audio::verify(file, key, header, output, offset, length)) return file;
+    }
+    return {};
+}
+
+Error MessageTransactions::ensureAudio(const RecordKey& key, unsigned which,
+                                      const StoredRecordHeader& header, const uint8_t* bytes) {
+    if (header.audio.state != 1) return Error::None;
+    if (openAudio(key, which, header)) return Error::None;
+    auto store = medium(which); char target[128]; path(key, which, target, ".audio");
+    if (bytes) {
+        if (audio::digest(key, header.source, header.destination, header.audio, bytes) != header.audio.checksum)
+            return Error::Verify;
+        MemorySource source(bytes, header.audio.length);
+        return store.write(target, source);
+    }
+    auto original = openAudio(key, 1 - which, header);
+    if (!original) return Error::Read;
+    audio::FileSource source(original, header.audio.length,
+        audio::seed(key, header.source, header.destination, header.audio), header.audio.checksum);
+    return store.write(target, source);
+}
+
+bool MessageTransactions::removeAudio(const RecordKey& key, unsigned which) {
+    auto store = medium(which); bool removed = true;
+    for (const char* suffix : {".audio", ".audio.bak", ".audio.tmp"}) {
+        char candidate[128]; path(key, which, candidate, suffix);
+        if (store.exists(candidate) && !store.remove(candidate)) removed = false;
+    }
+    return removed;
+}
+
+Error MessageTransactions::commit(const RecordKey& key, MessageDocument& document, bool creating, Result& result,
+                                  const uint8_t* media, uint8_t referenceOnlyMedium, bool requireFlash,
+                                  bool existingOnly) {
     JsonSource source(document);
     if (source.error() != Error::None) return source.error();
     if (document.document().overflowed() || source.length() > (creating ? Budget::MaxNewJson : Budget::MaxStoredFile))
         return Error::InvalidRecord;
+    StoredRecordHeader header;
+    if (!recordHeader(document.document(), header)) return Error::InvalidRecord;
     bool committed = false; Error error = Error::Unavailable;
     for (unsigned which = 0; which < 2; ++which) {
+        if (which == 1 && requireFlash && !result.flash.committed) return error;
         auto store = medium(which); auto& outcome = which == 0 ? result.flash : result.sd;
         if (which == 1 && !_external) continue;
         outcome.attempted = true;
@@ -343,13 +436,26 @@ Error MessageTransactions::commit(const RecordKey& key, MessageDocument& documen
         try {
             char parent[96], filePath[128]; directory(key.peer, which, parent); path(key, which, filePath);
             char backup[128]; path(key, which, backup, ".bak");
+            if (existingOnly && !creating && !store.exists(filePath) && !store.exists(backup)) {
+                outcome.attempted = false; continue;
+            }
             if (!creating && retainedCopy(key, which, document)) outcome.error = Error::None;
             else if (!creating && (_blockedMedia & (1u << which))) outcome.error = Error::InvalidRecord;
             else if (creating && (store.exists(filePath) || store.exists(backup))) outcome.error = Error::Stale;
             else if (!creating && (_preferBackup & (1u << which)) &&
                      (!store.remove(filePath) || !store.rename(backup, filePath))) outcome.error = Error::Rename;
             else if (!store.ensureDir(parent)) outcome.error = Error::Write;
-            else outcome.error = store.write(filePath, source);
+            else {
+                // Each medium commits its immutable blob before the referencing
+                // JSON. Neither a partial mirror nor an orphan is delivery proof.
+                outcome.error = ensureAudio(key, which, header, media);
+                // Read/status changes may retain an already committed media
+                // reference on the copy load() selected, even if its audio was
+                // subsequently lost. They cannot create a new mirror or prove
+                // receipt of a new/resubmitted message without durable audio.
+                if (!creating && which == referenceOnlyMedium) outcome.error = Error::None;
+                if (outcome.error == Error::None) outcome.error = store.write(filePath, source);
+            }
         } catch (const std::bad_alloc&) { outcome.error = Error::Allocation; }
         catch (...) { outcome.error = Error::Internal; }
         outcome.committed = outcome.error == Error::None;
@@ -359,14 +465,31 @@ Error MessageTransactions::commit(const RecordKey& key, MessageDocument& documen
     return committed ? Error::None : error;
 }
 
-void MessageTransactions::create(const Request& request, uint8_t* bytes, Result& result) {
+void MessageTransactions::create(const Request& request, uint8_t* bytes, Result& result, uint32_t reservedCounter) {
     const uint32_t cutoff = deletedThrough(request.key.peer);
     if (cutoff == UINT32_MAX) { result.error = Error::CounterExhausted; return; }
+    if (reservedCounter) {
+        RecordKey reserved=request.key;reserved.counter=reservedCounter;bool deleted=false;
+        result.error=recordDeletion(reserved,deleted);
+        if(result.error!=Error::None) return;
+        if(deleted) {result.error=Error::Stale;return;}
+    }
     MessageDocument document;
     bool conversationExists = false;
     {
         Cursor cursor; beginRecords(cursor, request.key.peer, &document); RecordKey key;
+        cursor.includeDeleted=request.key.incoming && request.hasMessageId;
         while (nextRecord(cursor, key)) {
+            bool deleted=false;StoredRecordHeader deletedHeader;
+            result.error=recordDeletion(key,deleted,&deletedHeader);if(result.error!=Error::None) return;
+            if(deleted) {
+                if(request.key.incoming && request.hasMessageId && deletedHeader.incoming && deletedHeader.hasMessageId &&
+                   !memcmp(deletedHeader.destination,request.destination,16) && !memcmp(deletedHeader.messageId,request.messageId,32)) {
+                    result.key=key;result.revision=deletedHeader.revision;result.duplicate=true;
+                    result.oldStatus=result.newStatus=deletedHeader.status;result.outcome=Outcome::Committed;return;
+                }
+                continue;
+            }
             conversationExists = true;
             if (!request.key.incoming || !request.hasMessageId) break;
             StoredRecordHeader header;
@@ -376,7 +499,25 @@ void MessageTransactions::create(const Request& request, uint8_t* bytes, Result&
                 !memcmp(header.messageId, request.messageId, 32)) {
                 result.key = key; result.revision = header.revision; result.duplicate = true;
                 result.oldStatus = result.newStatus = header.status;
-                result.error = commit(key, document, false, result);
+                auto media = request.audio;
+                const auto* audioBytes = bytes + request.titleLength + request.contentLength;
+                if (media.state == 1) media.checksum = audio::digest(key, request.source, request.destination, media, audioBytes);
+                if (!header.audio.state && media.state) {
+                    // Older firmware stored authenticated text but discarded the
+                    // audio field. A verified resend can enrich that same MID.
+                    if (header.revision == UINT32_MAX) { result.error = Error::RevisionExhausted; return; }
+                    if (!recordAudio(document.document(), media)) { result.error = Error::Allocation; return; }
+                    document.document()["store_revision"] = ++header.revision;
+                    result.revision = header.revision;
+                    result.enriched = true;
+                } else if (header.audio.state==3 && media.state==1 && media.mode==header.audio.mode &&
+                           media.length==header.audio.length && media.checksum==header.audio.checksum) {
+                    // An authenticated duplicate must not resurrect locally expired audio.
+                    media.state=3;
+                } else if (memcmp(&media, &header.audio, sizeof(media))) {
+                    result.error = Error::Verify; return;
+                }
+                result.error = commit(key, document, false, result, media.state == 1 ? audioBytes : nullptr);
                 if (result.error == Error::None) result.outcome = Outcome::Committed;
                 return;
             }
@@ -385,11 +526,19 @@ void MessageTransactions::create(const Request& request, uint8_t* bytes, Result&
     }
     document.normal();
     if (!createRecord(document.document(), request, bytes)) { result.error = Error::Allocation; return; }
+    if (reservedCounter) document.document()["memo_draft"] = request.peerGeneration;
     _nextCounter = std::max(_nextCounter, cutoff + 1);
-    if (!reserveCounter(result.key.counter)) {
+    if (reservedCounter && reservedCounter <= cutoff) { result.error = Error::Stale; return; }
+    result.key.counter = reservedCounter;
+    if (!reservedCounter && !reserveCounter(result.key.counter)) {
         result.error = _nextCounter == UINT32_MAX ? Error::CounterExhausted : Error::Write; return;
     }
-    result.error = commit(result.key, document, true, result);
+    auto media = request.audio;
+    const auto* audioBytes = bytes + request.titleLength + request.contentLength;
+    if (media.state == 1) media.checksum = audio::digest(result.key, request.source, request.destination, media, audioBytes);
+    if (!recordAudio(document.document(), media)) { result.error = Error::Allocation; return; }
+    result.error = commit(result.key, document, true, result, media.state == 1 ? audioBytes : nullptr,
+                          UINT8_MAX, reservedCounter != 0);
     if (result.error != Error::None) return;
     result.revision = 1; result.countDelta = 1; result.conversationDelta = conversationExists ? 0 : 1;
     result.unreadDelta = request.key.incoming && !request.read ? 1 : 0;
@@ -399,20 +548,38 @@ void MessageTransactions::create(const Request& request, uint8_t* bytes, Result&
 
 void MessageTransactions::update(const Request& request, Result& result) {
     MessageDocument document; StoredRecordHeader header;
-    result.error = load(request.key, document, header);
+    uint8_t selectedMedium;
+    result.error = load(request.key, document, header, &selectedMedium);
     if (result.error != Error::None) return;
-    result.oldStatus = header.status; result.newStatus = request.status;
-    if (header.status == request.status) {
-        result.revision = header.revision; result.error = commit(request.key, document, false, result);
+    const bool retry=request.operation==Operation::RetryOutgoing;
+    uint8_t target=request.status;
+    if(retry) {
+        if(header.incoming || header.revision!=request.offset || memcmp(header.source,request.source,16) ||
+           (!messaging::retryableStatus(header.status) || header.audio.state==3)) {result.error=Error::Stale;return;}
+        target=uint8_t(header.deliveryPolicy==messaging::DeliveryPolicy::Always || messaging::relayStatus(header.status)?
+            LXMFStatus::PROP_QUEUED:LXMFStatus::QUEUED);
+    }
+    result.oldStatus = header.status; result.newStatus = target;
+    result.audioBecameRetainable = header.audio.state == 1 && messaging::pendingStatus(header.status) &&
+        !messaging::pendingStatus(target) && target != uint8_t(LXMFStatus::DRAFT);
+    if (!messaging::validDelivery(target, header.deliveryPolicy, header.incoming) ||
+        (messaging::relayStatus(header.status) && target < 7 && target != 4 && target != 5)) {
+        result.error = Error::Stale; return;
+    }
+    if (header.status == target) {
+        result.revision = header.revision; result.error = commit(request.key, document, false, result, nullptr, selectedMedium);
         if (result.error == Error::None) result.outcome = Outcome::Committed;
         return;
     }
-    // A proof-confirmed record cannot regress; resend creates another record.
-    if (header.status == 4) { result.error = Error::Stale; return; }
+    // Retry applies only to a failed/unconfirmed exact revision. A recipient or
+    // propagation receipt remains authoritative and cannot be made pending.
+    if (header.status == 4 || (header.status == 9 && target != 4)) {
+        result.error = Error::Stale; return;
+    }
     if (header.revision == UINT32_MAX) { result.error = Error::RevisionExhausted; return; }
-    document.document()["status"] = request.status;
+    document.document()["status"] = target;
     document.document()["store_revision"] = header.revision + 1;
-    result.error = commit(request.key, document, false, result);
+    result.error = commit(request.key, document, false, result, nullptr, selectedMedium, retry);
     if (result.error == Error::None) { result.revision = header.revision + 1; result.outcome = Outcome::Committed; }
 }
 
@@ -422,13 +589,15 @@ void MessageTransactions::markRead(const Request& request, Result& result) {
     MessageDocument document; StoredRecordHeader header; Error failure = Error::None;
     while (nextRecord(cursor, key)) {
         if (!key.incoming || (request.key.counter && key.counter > request.key.counter)) continue;
-        const auto error = load(key, document, header);
+        uint8_t selectedMedium;
+        const auto error = load(key, document, header, &selectedMedium);
+        if (error == Error::InvalidRecord) continue; // An unreadable record has no read state to change.
         if (error != Error::None) { failure = error; continue; }
         if (header.read) continue;
         if (header.revision == UINT32_MAX) { failure = Error::RevisionExhausted; continue; }
         document.document()["read"] = true; document.document()["store_revision"] = header.revision + 1;
         Result changed;
-        const auto saved = commit(key, document, false, changed);
+        const auto saved = commit(key, document, false, changed, nullptr, selectedMedium, false, request.existingOnly);
         if (saved != Error::None) { failure = saved; continue; }
         ++result.total; result.outcome = Outcome::Committed;
         if (result.unreadDelta > INT32_MIN) --result.unreadDelta;
@@ -521,9 +690,31 @@ void MessageTransactions::read(const Request& request, uint8_t* bytes, size_t ca
     result.revision = header.revision; result.outcome = Outcome::Committed;
 }
 
+void MessageTransactions::readAudio(const Request& request, uint8_t* bytes, size_t capacity, Result& result) {
+    capacity = std::min(capacity, size_t(request.readCapacity));
+    if (capacity <= sizeof(StoredRecordHeader)) { result.error = Error::InvalidRecord; return; }
+    MessageDocument document; StoredRecordHeader header;
+    result.error = load(request.key, document, header);
+    if (result.error != Error::None) return;
+    if (header.audio.state != 1 || request.offset > header.audio.length) {
+        result.error = Error::InvalidRecord; return;
+    }
+    const size_t count = std::min(size_t(header.audio.length) - request.offset, capacity - sizeof(header));
+    File file = openAudio(request.key, 0, header, bytes + sizeof(header), request.offset, count);
+    if (!file) file = openAudio(request.key, 1, header, bytes + sizeof(header), request.offset, count);
+    if (!file) { result.error = Error::Read; return; }
+    memcpy(bytes, &header, sizeof(header));
+    result.length = uint16_t(sizeof(header) + count); result.total = header.audio.length;
+    result.nextOffset = request.offset + uint32_t(count); result.more = result.nextOffset < result.total;
+    result.revision = header.revision; result.outcome = Outcome::Committed;
+}
+
 bool MessageTransactions::retainedCopy(const RecordKey& key, unsigned which, MessageDocument& document) {
     auto store = medium(which); JsonSource source(document);
     if (source.error() != Error::None) return false;
+    StoredRecordHeader header;
+    if (!recordHeader(document.document(), header) ||
+        (header.audio.state == 1 && !openAudio(key, which, header))) return false;
     uint8_t scratch[Budget::IoScratch];
     for (const char* suffix : {"", ".bak"}) {
         char candidate[128]; path(key, which, candidate, suffix); File file = store.open(candidate);
@@ -593,8 +784,8 @@ Error MessageTransactions::summarize(const uint8_t peer[16], ConversationView& r
                 row.lastOutgoingCounter = key.counter; row.outgoingRevision = header.revision;
                 row.status = row.durableStatus = header.status;
             }
-            if ((header.status == 1 || header.status == 2) && row.pendingCount < UINT16_MAX) ++row.pendingCount;
-            if (header.status == 5 && row.failedCount < UINT16_MAX) ++row.failedCount;
+            if (messaging::pendingStatus(header.status) && row.pendingCount < UINT16_MAX) ++row.pendingCount;
+            if (messaging::failedStatus(header.status) && row.failedCount < UINT16_MAX) ++row.failedCount;
         }
         // Retain the existing bounded counter-only boot hint policy exactly.
         if (recent && recentCapacity && header.hasMessageId) {
@@ -784,8 +975,10 @@ void MessageTransactions::pending(const Request& request, uint8_t* bytes, size_t
         while (nextRecord(cursor, key)) {
             if (key.incoming || (request.key.counter && !less(request.key, key))) continue;
             StoredRecordHeader header; const auto error = load(key, document, header);
+            if (error == Error::InvalidRecord) continue; // No readable copy can be resent.
             if (error != Error::None) { result.error = error; return; }
-            if (header.status != 1 && header.status != 2) continue;
+            // Revision 0 is imported history; legacy firmware never resent it after a restart.
+            if (!header.revision || !messaging::pendingStatus(header.status)) continue;
             if (found) result.more = true;
             if (found && !less(key, result.key)) continue;
             found = true; selected = header; result.key = key;
@@ -800,6 +993,113 @@ void MessageTransactions::pending(const Request& request, uint8_t* bytes, size_t
     result.outcome = Outcome::Committed;
 }
 
+void MessageTransactions::prepared(const Request& request, uint8_t* bytes, size_t length,
+                                   size_t capacity, Result& result) {
+    namespace prep = handheld::storage::prepared;
+    capacity = std::min(capacity, size_t(request.readCapacity));
+    const bool writing = request.operation == Operation::WritePrepared;
+    if (!bytes || capacity < prep::Max || !request.key.counter || request.key.incoming ||
+        (writing && (!request.hasMessageId || !prep::valid(bytes, length, request.key,
+                                                         request.source, request.messageId)))) {
+        result.error = Error::InvalidRecord; return;
+    }
+    auto flash = medium(0);
+    if (!flash.isReady()) { result.error = Error::Unavailable; return; }
+    MessageDocument document; StoredRecordHeader header;
+    result.error = load(request.key, document, header);
+    if (result.error != Error::None) return;
+    if (header.incoming || memcmp(header.source, request.source, 16) ||
+        memcmp(header.destination, request.key.peer, 16) ||
+        (header.status != 7 && header.status != 8) ||
+        (writing && header.hasMessageId && memcmp(header.messageId, request.messageId, 32))) {
+        result.error = Error::Stale; return;
+    }
+    result.revision = header.revision;
+    char primary[128], backup[128];
+    path(request.key, 0, primary, ".prop"); path(request.key, 0, backup, ".prop.bak");
+    auto markReady = [&]() {
+        if (header.prepared) return true;
+        // The binding write may have promoted a newer backup. Reload before a
+        // second commit so its medium-selection flags cannot describe the old
+        // primary/backup topology.
+        result.error = load(request.key, document, header);
+        if (result.error != Error::None) return false;
+        if (!header.hasMessageId || memcmp(header.messageId, bytes + 40, 32) ||
+            memcmp(header.source, request.source, 16) || (header.status != 7 && header.status != 8)) {
+            result.error = Error::Stale; return false;
+        }
+        if (header.prepared) return true;
+        if (header.revision == UINT32_MAX) { result.error = Error::RevisionExhausted; return false; }
+        document.document()["prop_prepared"] = true;
+        document.document()["store_revision"] = header.revision + 1;
+        result.error = commit(request.key, document, false, result);
+        result.sd = {};
+        if (result.error != Error::None || !result.flash.committed) {
+            if (result.error == Error::None) result.error = Error::Write;
+            return false;
+        }
+        result.revision = ++header.revision; header.prepared = true;
+        return true;
+    };
+    // Never replace an existing encrypted entry, even when a writer retried
+    // after losing its completion. A corrupt primary cannot roll back to a
+    // different backup or silently regenerate ciphertext.
+    const char* existing = flash.exists(primary) ? primary : flash.exists(backup) ? backup : nullptr;
+    if (existing) {
+        if (!retainedCopy(request.key, 0, document)) {
+            result.error = commit(request.key, document, false, result);
+            result.sd = {};
+            if (result.error != Error::None || !result.flash.committed) {
+                if (result.error == Error::None) result.error = Error::Write;
+                return;
+            }
+        }
+        File file = flash.open(existing);
+        if (!file) { result.error = Error::Read; return; }
+        const size_t size = file.size();
+        if (size > capacity || size < prep::Header + 112) { result.error = Error::InvalidRecord; return; }
+        size_t received = 0;
+        while (received < size) {
+            const size_t part = file.read(bytes + received, size - received);
+            if (!part || part > size - received) { result.error = Error::Read; return; }
+            received += part;
+        }
+        if (!header.hasMessageId || !prep::valid(bytes, size, request.key, request.source, header.messageId)) {
+            result.error = Error::InvalidRecord; return;
+        }
+        const bool alreadyReady = header.prepared;
+        if (!markReady()) return;
+        result.length = uint16_t(size); result.duplicate = alreadyReady;
+        result.outcome = Outcome::Committed; return;
+    }
+    if (header.prepared) { result.error = Error::InvalidRecord; return; }
+    if (!writing) { result.duplicate = true; result.outcome = Outcome::Committed; return; }
+    if (!header.hasMessageId) {
+        if (header.revision == UINT32_MAX) { result.error = Error::RevisionExhausted; return; }
+        char id[65]; encodeHex(request.messageId, 32, id);
+        document.document()["msgid"] = JsonString(id, size_t(64), false);
+        document.document()["store_revision"] = header.revision + 1;
+        if (document.document().overflowed()) { result.error = Error::Allocation; return; }
+        ++header.revision;
+    }
+    // The record binding must be durable on the same authoritative medium
+    // before an envelope can authorize any transmission.
+    result.error = commit(request.key, document, false, result);
+    result.sd = {}; // This operation's envelope is flash-authoritative.
+    if (result.error != Error::None || !result.flash.committed) {
+        if (result.error == Error::None) result.error = Error::Write;
+        return;
+    }
+    result.revision = header.revision;
+    const MemorySource source(bytes, length);
+    result.flash.committed = false;
+    result.flash.error = result.error = flash.write(primary, source);
+    if (result.error != Error::None) return;
+    result.flash.committed = true;
+    if (!markReady()) return;
+    result.length = uint16_t(length); result.outcome = Outcome::Committed;
+}
+
 void MessageTransactions::trim(const Request& request, Result& result) {
     if (deletedThrough(request.key.peer) == UINT32_MAX) { result.error = Error::Stale; return; }
     MessageDocument document;
@@ -811,8 +1111,27 @@ void MessageTransactions::trim(const Request& request, Result& result) {
         if (!dir || !dir.isDirectory()) continue;
         for (File entry = dir.openNextFile(); entry; entry = dir.openNextFile()) {
             if (entry.isDirectory()) continue;
-            const char* name = entry.name(); const size_t length = strnlen(name, 25);
+            const char* name = entry.name(); const size_t length = strnlen(name, 31);
             uint32_t counter = 0; bool incoming = false;
+            if ((length == 26 || length == 30) && memcmp(name + 20, ".audio", 6) == 0) {
+                char canonical[21]; memcpy(canonical, name, 20); canonical[20] = 0;
+                if (!filename(canonical, counter, incoming) ||
+                    (length == 30 && memcmp(name + 26, ".bak", 4) && memcmp(name + 26, ".tmp", 4))) continue;
+                RecordKey key; memcpy(key.peer, request.key.peer, 16); key.counter = counter; key.incoming = incoming;
+                char artifact[128]; snprintf(artifact, sizeof(artifact), "%s/%s", parent, name);
+                const bool temporary = length == 30 && memcmp(name + 26, ".tmp", 4) == 0;
+                entry.close();
+                // An unavailable configured mirror may own the only reference.
+                bool referenced = !medium(0).isReady() || (_external && !medium(1).isReady());
+                for (unsigned copy = 0; copy < 2 && !referenced; ++copy) {
+                    for (const char* suffix : {"", ".bak"}) {
+                        char record[128]; path(key, copy, record, suffix);
+                        referenced |= medium(copy).exists(record);
+                    }
+                }
+                if (temporary || !referenced) store.remove(artifact);
+                continue;
+            }
             if (length == 24 && memcmp(name + 20, ".tmp", 4) == 0) {
                 char canonical[21]; memcpy(canonical, name, 20); canonical[20] = 0;
                 if (filename(canonical, counter, incoming)) {
@@ -852,7 +1171,7 @@ void MessageTransactions::trim(const Request& request, Result& result) {
                 if (after.counter && !historyLess(after, entry)) continue;
                 StoredRecordHeader header; const auto error = load(key, document, header);
                 if (error != Error::None) { result.error = error; continue; }
-                if (!header.incoming && header.status != 4 && header.status != 5) continue;
+                if (!removable(key, header, document)) continue;
                 size_t at = 0;
                 while (at < selected && historyLess({oldest[at].counter, oldest[at].incoming}, entry)) ++at;
                 if (at == 8) continue;
@@ -866,19 +1185,20 @@ void MessageTransactions::trim(const Request& request, Result& result) {
             for (size_t index = 0; index < needed; ++index) {
                 key = oldest[index]; StoredRecordHeader header;
                 if (load(key, document, header) != Error::None) continue;
-                if (target == 0 && _external && _sd && _sd->isReady() && !retainedCopy(key, 1, document)) {
-                    // Repair a missing/stale optional mirror from the committed
-                    // chosen record before dropping the cache's retained copy.
-                    if (_blockedMedia & 2) continue;
-                    char parent[96], candidate[128]; directory(key.peer, 1, parent); path(key, 1, candidate);
-                    auto mirror = medium(1); JsonSource source(document);
-                    if (source.error() != Error::None) { result.error = source.error(); continue; }
-                    if (!mirror.ensureDir(parent) || mirror.write(candidate, source) != Error::None ||
-                        !retainedCopy(key, 1, document)) continue;
-                }
+                if (target == 0 && _external && _sd && _sd->isReady() && !mirrorVerified(key, document, header, result))
+                    continue;
                 char primary[128], backup[128]; path(key, unsigned(target), primary); path(key, unsigned(target), backup, ".bak");
+                if (target == 0) {
+                    bool removed = true;
+                    for (const char* suffix : {".prop", ".prop.bak", ".prop.tmp"}) {
+                        char preparedPath[128]; path(key, 0, preparedPath, suffix);
+                        if (store.exists(preparedPath) && !store.remove(preparedPath)) removed = false;
+                    }
+                    if (!removed) { result.error = Error::Write; continue; }
+                }
                 const bool primaryRemoved = !store.exists(primary) || store.remove(primary);
                 const bool backupRemoved = !store.exists(backup) || store.remove(backup);
+                if (primaryRemoved && backupRemoved && !removeAudio(key, unsigned(target))) result.error = Error::Write;
                 if (primaryRemoved && backupRemoved) { progress = true; ++result.total; result.outcome = Outcome::Committed; }
                 else result.error = Error::Write;
                 if (target == 1 && primaryRemoved && backupRemoved) {
@@ -888,6 +1208,7 @@ void MessageTransactions::trim(const Request& request, Result& result) {
                     const bool removedPrimary = !flash.exists(primary) || flash.remove(primary);
                     const bool removedBackup = !flash.exists(backup) || flash.remove(backup);
                     if (!removedPrimary || !removedBackup) { result.error = Error::Write; continue; }
+                    if (!removeAudio(key, 0)) result.error = Error::Write;
                 }
                 const bool cacheOnly = target == 0 && _external && _sd && _sd->isReady();
                 if (primaryRemoved && backupRemoved && !cacheOnly) {
@@ -907,6 +1228,101 @@ void MessageTransactions::trim(const Request& request, Result& result) {
     if (result.error == Error::None || result.total) result.outcome = Outcome::Committed;
 }
 
+void MessageTransactions::purgeJournal(const Request& request, uint8_t* bytes, size_t length,
+                                       size_t capacity, Result& result) {
+    const bool loading = request.operation == Operation::LoadPurge;
+    const bool clearing = request.operation == Operation::ClearPurge;
+    purge::Journal supplied;
+    if (!bytes || std::min(capacity, size_t(request.readCapacity)) < purge::Size ||
+        (!loading && length != purge::Size)) { result.error = Error::InvalidRecord; return; }
+    if (!loading) {
+        memcpy(supplied.bytes, bytes, purge::Size);
+        if (!supplied.valid() || memcmp(supplied.local(), request.destination, 16) ||
+            !request.key.incoming || supplied.key().counter != request.key.counter ||
+            memcmp(supplied.key().peer, request.key.peer, 16)) {
+            result.error = Error::InvalidRecord; return;
+        }
+    }
+    auto flash = medium(0);
+    if (!flash.isReady()) { result.error = Error::Unavailable; return; }
+    char identity[33], primary[96], backup[100], temporary[100];
+    encodeHex(request.destination, 16, identity);
+    snprintf(primary, sizeof(primary), "/transport/propagation/%s.purge", identity);
+    snprintf(backup, sizeof(backup), "%s.bak", primary);
+    snprintf(temporary, sizeof(temporary), "%s.tmp", primary);
+    purge::Journal journal;
+    const char* existing = flash.exists(primary) ? primary : flash.exists(backup) ? backup : nullptr;
+    if (existing) {
+        File file = flash.open(existing);
+        if (!file) { result.error = Error::Read; return; }
+        if (file.size() != purge::Size) { result.error = Error::InvalidRecord; return; }
+        size_t received = 0;
+        while (received < purge::Size) {
+            const size_t part = file.read(journal.bytes + received, purge::Size - received);
+            if (!part || part > purge::Size - received) { result.error = Error::Read; return; }
+            received += part;
+        }
+        file.close();
+        if (!journal.valid() || memcmp(journal.local(), request.destination, 16)) {
+            result.error = Error::InvalidRecord; return;
+        }
+        // A lost completion may replay the same journal. It cannot replace an
+        // outstanding item or clear a later item after the owner has moved on.
+        if (!loading && memcmp(supplied.bytes, journal.bytes, purge::Size)) {
+            result.error = Error::Stale; return;
+        }
+    } else if (loading || clearing) {
+        result.outcome = Outcome::Committed; result.duplicate = true; return;
+    } else journal = supplied;
+
+    if (clearing) {
+        // Delete possible resurrecting copies before the selected primary.
+        // A partial cleanup can only leave the same item for an idempotent retry.
+        result.flash.attempted = true;
+        if ((flash.exists(temporary) && !flash.remove(temporary)) ||
+            (flash.exists(backup) && !flash.remove(backup)) ||
+            (flash.exists(primary) && !flash.remove(primary))) {
+            result.flash.error = result.error = Error::Write; return;
+        }
+        result.flash.committed = true; result.outcome = Outcome::Committed; return;
+    }
+    // Return a structurally valid journal even when its local message is gone;
+    // callers may abandon it locally, but a failed result never permits purge.
+    memcpy(bytes, journal.bytes, purge::Size); result.length = purge::Size;
+    result.key = journal.key();
+    MessageDocument document; StoredRecordHeader header;
+    result.error = load(result.key, document, header);
+    if (result.error != Error::None) return;
+    if (!header.incoming || !header.hasMessageId || header.revision < journal.revision() ||
+        memcmp(header.source, result.key.peer, 16) || memcmp(header.destination, journal.local(), 16) ||
+        memcmp(header.messageId, journal.messageId(), 32)) { result.error = Error::Stale; return; }
+    // Purge permission survives SD removal: require the matching message on
+    // authoritative flash before publishing or replaying the flash journal.
+    result.error = commit(result.key, document, false, result);
+    result.sd = {};
+    if (result.error != Error::None || !result.flash.committed) {
+        if (result.error == Error::None) result.error = Error::Write;
+        return;
+    }
+    result.revision = header.revision;
+    if (!existing) {
+        result.flash.committed = false;
+        if (!flash.ensureDir("/transport/propagation")) {
+            result.flash.error = result.error = Error::Write; return;
+        }
+        const MemorySource source(bytes, purge::Size);
+        result.flash.error = result.error = flash.write(primary, source);
+        if (result.error != Error::None) return;
+        result.flash.committed = true;
+    } else result.duplicate = true;
+    result.outcome = Outcome::Committed;
+}
+
+#include "RrcTransactions.inc"
+#include "MemoTransactions.inc"
+#include "AudioRetention.inc"
+#include "SpaceReclaim.inc"
+
 void MessageTransactions::execute(const Request& request, uint8_t* bytes, size_t length, size_t capacity, Result& result) {
     if (_deferred && !bindWorker()) {
         result.key = request.key; result.error = Error::Unavailable; return;
@@ -914,37 +1330,62 @@ void MessageTransactions::execute(const Request& request, uint8_t* bytes, size_t
     StorageLease lease;
     result.key = request.key;
     if (!lease.held()) { result.error = Error::Unavailable; return; }
+    if (rrc::operation(request.operation)) {
+        rrcTransaction(request, bytes, length, capacity, result); return;
+    }
+    if (memo::operation(request.operation) && request.operation != Operation::MemoPromote) {
+        memoTransaction(request, bytes, length, capacity, result); return;
+    }
     checkSummaryMedia();
-    if (request.operation != Operation::ReadRecord && request.operation != Operation::ReadPending &&
+    // An unchanged, fully read conversation needs no directory scan or cache
+    // invalidation. Every real mutation already invalidates its peer summary.
+    if (request.operation == Operation::MarkRead) {
+        if (const auto* summary = findSummary(request.key.peer)) if (!summary->row.unreadCount) {
+            result.outcome = Outcome::Committed; return;
+        }
+    }
+    if (request.operation != Operation::ReadRecord && request.operation != Operation::ReadAudio && request.operation != Operation::ReadPending &&
         request.operation != Operation::ReadHistoryPage && request.operation != Operation::ReadConversationPage &&
-        request.operation != Operation::ReadConversation) {
+        request.operation != Operation::ReadConversation && request.operation != Operation::LoadPurge &&
+        request.operation != Operation::WritePurge && request.operation != Operation::ClearPurge) {
         if (_mutationEpoch == UINT64_MAX) { result.error = Error::RevisionExhausted; return; }
         ++_mutationEpoch;
         // Invalidate before attempting a write: partial mirrors, failed cleanup
         // and exceptions can all change persistent state even on failure.
-        invalidateSummary(request.key.peer);
+        // Retention keys name the protected clip; those passes invalidate what they change.
+        if(request.operation!=Operation::RetainAudio && request.operation!=Operation::Reclaim) invalidateSummary(request.key.peer);
     }
     switch (request.operation) {
+    case Operation::MemoPromote: memoTransaction(request, bytes, length, capacity, result); break;
     case Operation::CreateIncoming: case Operation::CreateOutgoing:
-        if (!Budget::validBody(request.titleLength, request.contentLength) ||
-            length != size_t(request.titleLength) + request.contentLength || request.status > 6 ||
+        if (request.audio.state==3 || !audio::validBody(request.titleLength, request.contentLength, request.audio) || request.audio.checksum ||
+            length != size_t(request.titleLength) + request.contentLength + request.audio.length ||
+            !messaging::validDelivery(request.status, request.deliveryPolicy, request.key.incoming) ||
             !std::isfinite(request.timestamp) ||
             request.key.incoming != (request.operation == Operation::CreateIncoming) ||
             memcmp(request.key.peer, request.key.incoming ? request.source : request.destination, 16)) {
             result.error = Error::InvalidRecord; return;
         }
         create(request, bytes, result); break;
-    case Operation::UpdateStatus:
-        if (request.status > 6) { result.error = Error::InvalidRecord; return; }
+    case Operation::UpdateStatus: case Operation::RetryOutgoing:
+        if (request.status > messaging::LastStatus) { result.error = Error::InvalidRecord; return; }
         update(request, result); break;
     case Operation::MarkRead: markRead(request, result); break;
     case Operation::DeleteConversation: erase(request, result); break;
+    case Operation::DeleteRecord: eraseRecord(request,result);break;
     case Operation::ReadRecord: read(request, bytes, capacity, result); break;
+    case Operation::ReadAudio: readAudio(request, bytes, capacity, result); break;
     case Operation::ReadPending: pending(request, bytes, capacity, result); break;
     case Operation::ReadHistoryPage: history(request, bytes, capacity, result); break;
     case Operation::ReadConversationPage: conversationPage(request, bytes, capacity, result); break;
     case Operation::ReadConversation: conversation(request, bytes, capacity, result); break;
     case Operation::Trim: trim(request, result); break;
+    case Operation::RetainAudio: retainAudio(request,result);break;
+    case Operation::Reclaim: reclaim(request, result); break;
+    case Operation::LoadPrepared: case Operation::WritePrepared:
+        prepared(request, bytes, length, capacity, result); break;
+    case Operation::LoadPurge: case Operation::WritePurge: case Operation::ClearPurge:
+        purgeJournal(request, bytes, length, capacity, result); break;
     default: result.error = Error::InvalidRecord;
     }
 }

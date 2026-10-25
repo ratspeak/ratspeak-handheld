@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include <string.h>
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
 
@@ -45,8 +46,7 @@ inline const char* modeName(FirmwareMode mode) {
     return "Unknown";
 }
 
-inline SwitchResult setNextBoot(FirmwareMode mode) {
-    const esp_partition_t* target = modePartition(mode);
+inline SwitchResult setBootPartition(const esp_partition_t* target) {
     if (!target) {
         return {false, "target partition not found"};
     }
@@ -59,8 +59,18 @@ inline SwitchResult setNextBoot(FirmwareMode mode) {
     return {true, "boot partition updated"};
 }
 
+inline SwitchResult setNextBoot(FirmwareMode mode) {
+    return setBootPartition(modePartition(mode));
+}
+
+// Other layouts (a single-app image, bmorcelli's Launcher) can hold another app
+// in ota_0, so only re-arm a slot labelled as our launcher.
 inline SwitchResult returnToLauncherNextBoot() {
-    return setNextBoot(FirmwareMode::Launcher);
+    const esp_partition_t* launcher = modePartition(FirmwareMode::Launcher);
+    if (launcher && strcmp(launcher->label, "launcher") != 0) {
+        return {true, "no launcher slot"};
+    }
+    return setBootPartition(launcher);
 }
 
 // Compatibility aliases for the launcher and RNode helper.

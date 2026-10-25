@@ -1,4 +1,6 @@
 #pragma once
+#include "voice/VoiceTypes.h"
+#include "voice/MemoTypes.h"
 
 // Narrow protocol facade shared by the device frontends. Conversation reads
 // remain store-backed; protocol sends, status, and lifecycle pass through here.
@@ -8,6 +10,9 @@
 #include <stdint.h>
 #include "reticulum/LXMFManager.h"
 #include "protocol/OutgoingContract.h"
+#include "config/PropagationSettings.h"
+#include "protocol/RrcTypes.h"
+#include "storage/RrcRecord.h"
 
 class ProtocolBackend {
 public:
@@ -44,6 +49,29 @@ public:
     virtual unsigned long lastAnnounceTime() const = 0;
     virtual uint32_t announceFilterCount() const = 0;
 
+    virtual void configureVoice(const handheld::voice::Settings&) {}
+    virtual handheld::voice::Status voiceStatus() const { return {}; }
+    virtual handheld::voice::Code voiceCommand(const handheld::voice::Command&) { return handheld::voice::Code::Off; }
+    virtual bool voiceDrained() const { return true; }
+    virtual void voiceStop() {}
+    virtual handheld::memo::Status memoStatus() const { return {}; }
+    virtual handheld::memo::Code memoCommand(const handheld::memo::Command&) { return handheld::memo::Code::Invalid; }
+    virtual void configurePropagation(const handheld::propagation::Settings&) {}
+    virtual size_t propagationNodes(handheld::propagation::NodeView*, size_t) const { return 0; }
+    virtual handheld::propagation::SyncView propagationStatus() const { return {}; }
+    virtual bool propagationSync() { return false; }
+
+    virtual handheld::rrc::Status rrcStatus() const { return {}; }
+    virtual void rrcStopAdmissions() {}
+    virtual bool rrcDrained() const { return true; }
+    virtual size_t rrcHubs(handheld::rrc::HubView*, size_t) const { return 0; }
+    virtual size_t rrcRooms(handheld::rrc::RoomView*, size_t) const { return 0; }
+    virtual size_t rrcChannels(handheld::rrc::RoomView*, size_t, size_t = 0) const { return 0; }
+    virtual size_t rrcPeople(const char*, handheld::rrc::PersonView*, size_t) const { return 0; }
+    virtual size_t rrcDirectory(handheld::rrc::DirectoryView*, size_t, size_t = 0) const { return 0; }
+    virtual handheld::rrc::Code rrcCommand(const handheld::rrc::Command&, const uint8_t*, size_t) { return handheld::rrc::Code::Offline; }
+    virtual bool rrcContext(const uint8_t[16], const char*, const uint8_t*, handheld::storage::rrc::Context&) const { return false; }
+
     // Admission copies spans and reserves a terminal persistence result. Only a
     // Ready/Committed result means saved; each accepted ticket must be acknowledged.
     virtual handheld::outgoing::Submission lxmfSubmit(const uint8_t dest[16],
@@ -59,6 +87,8 @@ public:
     virtual void lxmfStopAdmissions() = 0;
     virtual bool lxmfDrained() const = 0;
     virtual handheld::storage::Error lxmfDrainError() const = 0;
+    virtual bool lxmfBeginRecordDelete(const handheld::storage::RecordKey&) {return false;}
+    virtual void lxmfFinishRecordDelete(const handheld::storage::RecordKey&,const handheld::storage::Result&) {}
     virtual bool lxmfBeginPeerDelete(const uint8_t peer[16]) = 0;
     virtual void lxmfFinishPeerDelete(const uint8_t peer[16],
         const handheld::storage::Result&) = 0;

@@ -673,8 +673,8 @@ fn ffi_context_and_micro_node_stay_inside_cardputer_heap_budget() {
     let small_node = core::mem::size_of::<rns_lite_core::SmallNode>();
     let micro_node = core::mem::size_of::<rns_lite_core::MicroNode>();
     println!("ffi context={context} B, small node={small_node} B, micro node={micro_node} B");
-    assert!(context <= 9 * 1024);
-    assert!(context + micro_node <= 41 * 1024);
+    assert!(context <= 10 * 1024);
+    assert!(context + micro_node <= 42 * 1024);
 }
 
 #[test]
@@ -1101,7 +1101,7 @@ fn packet_ingest_rejects_hops_at_pathfinder_m_for_all_types() {
 }
 
 #[test]
-fn packet_ingest_suppresses_non_lxmf_delivery_aspect_contact() {
+fn packet_ingest_separates_voice_aspect_from_delivery_contact() {
     let ctx = loaded_ctx();
     let _node = open_transport_into(ctx, 1);
     // A valid announce for a DIFFERENT aspect of the same identity (e.g. lxst.telephony):
@@ -1133,9 +1133,9 @@ fn packet_ingest_suppresses_non_lxmf_delivery_aspect_contact() {
         },
         RsHandheldStatus::Ok
     );
-    // Non-delivery aspect -> ANNOUNCE_OTHER (not LearnedAnnounce/Scheduled); event unfilled.
-    assert_eq!(action, INGEST_ANNOUNCE_OTHER);
-    assert_eq!(ev.identity_hash, [0u8; 16]);
+    // Telephone has its own event, never LearnedAnnounce/Scheduled contacts.
+    assert_eq!(action, INGEST_ANNOUNCE_VOICE);
+    assert_eq!(ev.identity_hash, *id.identity_hash());
     // But the path IS learned (transport learns every aspect, for every aspect).
     let mut has = 0;
     assert_eq!(
@@ -1144,6 +1144,232 @@ fn packet_ingest_suppresses_non_lxmf_delivery_aspect_contact() {
     );
     assert_eq!(has, 1);
     unsafe { rs_handheld_rns_shutdown(ctx) };
+}
+
+#[test]
+fn propagation_announce_has_separate_event_and_never_resurrects_a_replay() {
+    let ctx = loaded_ctx();
+    let _node = open_transport_into(ctx, 0);
+    let id = LocalIdentity::from_private_key(&[0x67; 64]);
+    let dest = id.destination_hash("lxmf.propagation");
+    let metadata = [0x97, 0xc2, 1, 0xc3, 0xcc, 255, 1, 0x93, 16, 3, 18, 0x80];
+    let mut data = [0; 600];
+    let rh = compose_random_hash(&RNG_SEED, UNIX_SECS);
+    let n = id
+        .create_announce_named("lxmf.propagation", &rh, None, &metadata, &mut data)
+        .unwrap();
+    let packet = frame_announce(&data[..n], &dest);
+    let mut action = -1;
+    let mut event: RsHandheldAnnounceEvent = unsafe { std::mem::zeroed() };
+    assert_eq!(
+        unsafe {
+            rs_handheld_rns_packet_ingest(
+                ctx,
+                packet.as_ptr(),
+                packet.len(),
+                1,
+                1000,
+                &mut action,
+                &mut event,
+                core::ptr::null_mut(),
+            )
+        },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!(action, INGEST_ANNOUNCE_PROPAGATION);
+    assert_eq!(event.destination_hash, dest);
+    assert_eq!(event.public_key, *id.public_key());
+    assert_eq!(&event.app_data[..event.app_data_len as usize], metadata);
+    let mut parsed: RsHandheldPropagationNode = unsafe { std::mem::zeroed() };
+    assert_eq!(
+        unsafe {
+            rs_handheld_lxmf_propagation_node(
+                event.app_data.as_ptr(),
+                event.app_data_len as usize,
+                &mut parsed,
+            )
+        },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!(
+        (parsed.enabled, parsed.stamp_cost, parsed.transfer_limit_kb),
+        (1, 16, 255)
+    );
+    event.destination_hash = [0; 16];
+    assert_eq!(
+        unsafe {
+            rs_handheld_rns_packet_ingest(
+                ctx,
+                packet.as_ptr(),
+                packet.len(),
+                1,
+                2000,
+                &mut action,
+                &mut event,
+                core::ptr::null_mut(),
+            )
+        },
+        RsHandheldStatus::Ok
+    );
+    assert_ne!(action, INGEST_ANNOUNCE_PROPAGATION);
+    assert_eq!(event.destination_hash, [0; 16]);
+    // New packet bytes with an older accepted ordering value remain suppressed.
+    let old_rh = compose_random_hash(&[9; 5], UNIX_SECS - 1);
+    let n = id
+        .create_announce_named("lxmf.propagation", &old_rh, None, &metadata, &mut data)
+        .unwrap();
+    let stale = frame_announce(&data[..n], &dest);
+    assert_eq!(
+        unsafe {
+            rs_handheld_rns_packet_ingest(
+                ctx,
+                stale.as_ptr(),
+                stale.len(),
+                1,
+                3000,
+                &mut action,
+                &mut event,
+                core::ptr::null_mut(),
+            )
+        },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!(action, 12);
+    assert_eq!(event.destination_hash, [0; 16]);
+    unsafe { rs_handheld_rns_shutdown(ctx) };
+}
+
+#[test]
+fn rrc_announce_has_separate_event_and_never_resurrects_a_replay() {
+    let ctx = loaded_ctx();
+    let _node = open_transport_into(ctx, 0);
+    let id = LocalIdentity::from_private_key(&[0x67; 64]);
+    let dest = id.destination_hash("rrc.hub");
+    let metadata = [0xa1, 0x63, b'h', b'u', b'b', 0x64, b'H', b'i', b'l', b'l'];
+    let mut data = [0; 600];
+    let rh = compose_random_hash(&RNG_SEED, UNIX_SECS);
+    let n = id
+        .create_announce_named("rrc.hub", &rh, None, &metadata, &mut data)
+        .unwrap();
+    let packet = frame_announce(&data[..n], &dest);
+    let mut action = -1;
+    let mut event: RsHandheldAnnounceEvent = unsafe { std::mem::zeroed() };
+    assert_eq!(
+        unsafe {
+            rs_handheld_rns_packet_ingest(
+                ctx,
+                packet.as_ptr(),
+                packet.len(),
+                1,
+                1000,
+                &mut action,
+                &mut event,
+                core::ptr::null_mut(),
+            )
+        },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!(action, INGEST_ANNOUNCE_RRC);
+    assert_eq!(event.destination_hash, dest);
+    assert_eq!(event.public_key, *id.public_key());
+    assert_eq!(&event.app_data[..event.app_data_len as usize], metadata);
+    let mut name = RrcSpan::default();
+    assert_eq!(
+        unsafe {
+            rs_handheld_rrc_announce_name(
+                event.app_data.as_ptr(),
+                event.app_data_len as usize,
+                &mut name,
+            )
+        },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!(
+        &event.app_data[name.offset as usize..name.offset as usize + name.length as usize],
+        b"Hill"
+    );
+    event.destination_hash = [0; 16];
+    assert_eq!(
+        unsafe {
+            rs_handheld_rns_packet_ingest(
+                ctx,
+                packet.as_ptr(),
+                packet.len(),
+                1,
+                2000,
+                &mut action,
+                &mut event,
+                core::ptr::null_mut(),
+            )
+        },
+        RsHandheldStatus::Ok
+    );
+    assert_ne!(action, INGEST_ANNOUNCE_RRC);
+    assert_eq!(event.destination_hash, [0; 16]);
+    // New packet bytes with an older accepted ordering value remain suppressed.
+    let old_rh = compose_random_hash(&[9; 5], UNIX_SECS - 1);
+    let n = id
+        .create_announce_named("rrc.hub", &old_rh, None, &metadata, &mut data)
+        .unwrap();
+    let stale = frame_announce(&data[..n], &dest);
+    assert_eq!(
+        unsafe {
+            rs_handheld_rns_packet_ingest(
+                ctx,
+                stale.as_ptr(),
+                stale.len(),
+                1,
+                3000,
+                &mut action,
+                &mut event,
+                core::ptr::null_mut(),
+            )
+        },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!(action, 12);
+    assert_eq!(event.destination_hash, [0; 16]);
+    unsafe { rs_handheld_rns_shutdown(ctx) };
+}
+
+#[test]
+fn propagation_metadata_ffi_has_bounded_names_and_atomic_outputs() {
+    let bytes = [
+        0x97, 0xc2, 1, 0xc3, 1, 1, 0x93, 16, 3, 18, 0x81, 1, 0xc4, 4, b'a', 0, b'b', 0x1b,
+    ];
+    let mut node: RsHandheldPropagationNode = unsafe { std::mem::zeroed() };
+    assert_eq!(
+        unsafe { rs_handheld_lxmf_propagation_node(bytes.as_ptr(), bytes.len(), &mut node) },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!(&node.name[..3], b"ab\0");
+    node.timebase = 999;
+    assert_eq!(
+        unsafe { rs_handheld_lxmf_propagation_node(bytes.as_ptr(), 1, &mut node) },
+        RsHandheldStatus::ErrInvalidArg
+    );
+    assert_eq!(node.timebase, 999);
+    let mut known = 2;
+    let mut cost = 99;
+    assert_eq!(
+        unsafe { rs_handheld_lxmf_delivery_cost(core::ptr::null(), 0, &mut known, &mut cost) },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!((known, cost), (0, 0));
+    let nil = [0x92, 0xc0, 0xc0];
+    assert_eq!(
+        unsafe { rs_handheld_lxmf_delivery_cost(nil.as_ptr(), nil.len(), &mut known, &mut cost) },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!((known, cost), (1, 0));
+    let valid = [0x92, 0xc0, 16];
+    assert_eq!(
+        unsafe {
+            rs_handheld_lxmf_delivery_cost(valid.as_ptr(), valid.len(), &mut known, &mut cost)
+        },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!((known, cost), (1, 16));
 }
 
 #[test]
@@ -1668,6 +1894,13 @@ fn lxmf_build_byte_exact_with_python() {
     assert_eq!(st, RsHandheldStatus::Ok);
     assert_eq!(to_hex(&out[..out_len]), LXMF_ECIES_DET);
     assert_eq!(to_hex(&dest), LXMF_DEST_HASH);
+    let peer = rns_lite_core::identity::identity_hash(&unhex::<64>(LXMF_RECIPIENT_PUB));
+    let mut derived = [0; 16];
+    assert_eq!(
+        unsafe { rs_handheld_lxmf_destination_for_identity(&peer, &mut derived) },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!(to_hex(&derived), LXMF_DEST_HASH);
     assert_eq!(to_hex(&mid), LXMF_MESSAGE_ID);
     unsafe { rs_handheld_rns_shutdown(ctx) };
 }
@@ -2075,6 +2308,290 @@ fn link_handshake_and_session_through_ffi() {
     unsafe { rs_handheld_rns_shutdown(responder) };
 }
 
+#[test]
+fn checked_link_endpoint_admission_through_ffi() {
+    let responder = loaded_ctx();
+    let mut request = [0u8; 67];
+    let mut length = 0;
+    assert_eq!(
+        unsafe {
+            rs_handheld_rns_link_request_build(
+                &[3; 32],
+                &[4; 32],
+                1,
+                500,
+                request.as_mut_ptr(),
+                request.len(),
+                &mut length,
+            )
+        },
+        RsHandheldStatus::Ok
+    );
+
+    // Public builders never mask a bad mode or silently resize a fixed endpoint.
+    for (mode, mtu, expected) in [
+        (9, 500, RsHandheldStatus::ErrUnsupported),
+        (0, 500, RsHandheldStatus::ErrUnsupported),
+        (1, 1, RsHandheldStatus::ErrInvalidArg),
+        (1, 499, RsHandheldStatus::ErrInvalidArg),
+        (1, 501, RsHandheldStatus::ErrInvalidArg),
+        (1, 0x20_0000, RsHandheldStatus::ErrInvalidArg),
+        (1, u32::MAX, RsHandheldStatus::ErrInvalidArg),
+    ] {
+        let mut output = [0xa5; 99];
+        let mut out_len = 123;
+        assert_eq!(
+            unsafe {
+                rs_handheld_rns_link_request_build(
+                    &[3; 32],
+                    &[4; 32],
+                    mode,
+                    mtu,
+                    output.as_mut_ptr(),
+                    output.len(),
+                    &mut out_len,
+                )
+            },
+            expected
+        );
+        assert_eq!(output, [0xa5; 99]);
+        assert_eq!(out_len, 123);
+        assert_eq!(
+            unsafe {
+                rs_handheld_rns_link_proof_build(
+                    responder,
+                    &[5; 32],
+                    &[6; 16],
+                    mode,
+                    mtu,
+                    output.as_mut_ptr(),
+                    output.len(),
+                    &mut out_len,
+                )
+            },
+            expected
+        );
+        assert_eq!(output, [0xa5; 99]);
+        assert_eq!(out_len, 123);
+    }
+    let mut zero_request = [0; 67];
+    assert_eq!(
+        unsafe {
+            rs_handheld_rns_link_request_build(
+                &[3; 32],
+                &[4; 32],
+                1,
+                0,
+                zero_request.as_mut_ptr(),
+                zero_request.len(),
+                &mut length,
+            )
+        },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!(zero_request, request);
+
+    // The raw parser is transit-capable, but the FFI boundary is AES256-only and
+    // selects exactly500 from a valid larger offer. It never mutates peer bytes.
+    for mtu in [0, 500, 501, 0x1f_ffff] {
+        request[64..].copy_from_slice(&SignallingData::new(1, mtu).pack());
+        let before = request;
+        let mut public = [0; 32];
+        let mut mode = 99;
+        let mut selected = 99;
+        assert_eq!(
+            unsafe {
+                rs_handheld_rns_link_request_parse(
+                    request.as_ptr(),
+                    request.len(),
+                    &mut public,
+                    core::ptr::null_mut(),
+                    &mut mode,
+                    &mut selected,
+                )
+            },
+            RsHandheldStatus::Ok
+        );
+        assert_eq!(mode, 1);
+        assert_eq!(selected, 500);
+        assert_eq!(request, before);
+    }
+    for (mode, mtu, expected) in [
+        (0, 500, RsHandheldStatus::ErrUnsupported),
+        (7, 500, RsHandheldStatus::ErrUnsupported),
+        (1, 499, RsHandheldStatus::ErrInvalidArg),
+        (1, 1, RsHandheldStatus::ErrInvalidArg),
+    ] {
+        request[64..].copy_from_slice(&SignallingData::new(mode, mtu).pack());
+        let mut public = [0xa5; 32];
+        let mut out_mode = 99;
+        let mut selected = 99;
+        assert_eq!(
+            unsafe {
+                rs_handheld_rns_link_request_parse(
+                    request.as_ptr(),
+                    request.len(),
+                    &mut public,
+                    core::ptr::null_mut(),
+                    &mut out_mode,
+                    &mut selected,
+                )
+            },
+            expected
+        );
+        assert_eq!(public, [0xa5; 32]);
+        assert_eq!((out_mode, selected), (99, 99));
+    }
+    // No permissive partial/trailing extension parsing at the C boundary.
+    for len in [63, 65, 66, 68] {
+        let raw = [0; 68];
+        assert_eq!(
+            unsafe {
+                rs_handheld_rns_link_request_parse(
+                    raw.as_ptr(),
+                    len,
+                    &mut [0; 32],
+                    core::ptr::null_mut(),
+                    core::ptr::null_mut(),
+                    core::ptr::null_mut(),
+                )
+            },
+            RsHandheldStatus::ErrInvalidArg
+        );
+    }
+    let mut selected = 99;
+    assert_eq!(
+        unsafe {
+            rs_handheld_rns_link_request_parse(
+                request.as_ptr(),
+                64,
+                &mut [0; 32],
+                core::ptr::null_mut(),
+                core::ptr::null_mut(),
+                &mut selected,
+            )
+        },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!(selected, 500);
+
+    // Sign exact raw modern/legacy fixtures ourselves: the endpoint builder may
+    // not manufacture unsupported offers just to make a validation test pass.
+    let identity = unsafe { &*responder }.identity.as_ref().unwrap();
+    let public = *identity.public_key();
+    let link_id = [6; 16];
+    let ephemeral = [7; 32];
+    let mut signed = [0; 83];
+    signed[..16].copy_from_slice(&link_id);
+    signed[16..48].copy_from_slice(&ephemeral);
+    signed[48..80].copy_from_slice(&public[32..]);
+    for (mode, mtu, legacy, expected) in [
+        (1, 500, false, 1),
+        (1, 0, false, 1),
+        (1, 500, true, 1),
+        (1, 501, false, 0),
+        (1, 499, false, 0),
+        (0, 500, false, 0),
+    ] {
+        let trailer = SignallingData::new(mode, mtu).pack();
+        signed[80..].copy_from_slice(&trailer);
+        let signature = identity.sign(&signed[..if legacy { 80 } else { 83 }]);
+        let mut proof = [0; 100];
+        proof[..64].copy_from_slice(&signature);
+        proof[64..96].copy_from_slice(&ephemeral);
+        proof[96..99].copy_from_slice(&trailer);
+        let mut peer = [0xa5; 32];
+        let mut valid = -1;
+        assert_eq!(
+            unsafe {
+                rs_handheld_rns_link_proof_validate(
+                    &public,
+                    &link_id,
+                    proof.as_ptr(),
+                    if legacy { 96 } else { 99 },
+                    &mut peer,
+                    &mut valid,
+                )
+            },
+            RsHandheldStatus::Ok
+        );
+        assert_eq!(valid, expected, "mode={mode} mtu={mtu} legacy={legacy}");
+        assert_eq!(peer, if expected == 1 { ephemeral } else { [0xa5; 32] });
+        proof[0] ^= 1;
+        peer = [0xa5; 32];
+        assert_eq!(
+            unsafe {
+                rs_handheld_rns_link_proof_validate(
+                    &public,
+                    &link_id,
+                    proof.as_ptr(),
+                    if legacy { 96 } else { 99 },
+                    &mut peer,
+                    &mut valid,
+                )
+            },
+            RsHandheldStatus::Ok
+        );
+        assert_eq!(valid, 0);
+        assert_eq!(peer, [0xa5; 32]);
+        assert_eq!(
+            unsafe {
+                rs_handheld_rns_link_proof_validate(
+                    &public,
+                    &link_id,
+                    proof.as_ptr(),
+                    100,
+                    &mut peer,
+                    &mut valid,
+                )
+            },
+            RsHandheldStatus::Ok
+        );
+        assert_eq!(valid, 0);
+    }
+    unsafe { rs_handheld_rns_shutdown(responder) };
+}
+
+#[test]
+fn interface_capacity_updates_require_current_owner_through_ffi() {
+    let ctx = loaded_ctx();
+    let _node = open_transport_into(ctx, 1);
+    assert_eq!(
+        unsafe { rs_handheld_rns_update_interface(ctx, 0, 1, RS_HANDHELD_IFACE_MODE_FULL, 0, 1) },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!(
+        unsafe { rs_handheld_rns_update_interface_capacity(ctx, 0, 1, 499) },
+        RsHandheldStatus::Ok
+    );
+    let node = || unsafe { (*ctx).node.unwrap().as_ref() };
+    assert_eq!(node().interface_clear_mtu(0), 499);
+    assert!(node().require_link_capacity(0).is_err());
+    assert_eq!(
+        unsafe { rs_handheld_rns_update_interface(ctx, 0, 2, RS_HANDHELD_IFACE_MODE_FULL, 0, 1) },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!(
+        unsafe { rs_handheld_rns_update_interface_capacity(ctx, 0, 2, 500) },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!(
+        unsafe { rs_handheld_rns_update_interface_capacity(ctx, 0, 1, 400) },
+        RsHandheldStatus::ErrNotReady
+    );
+    assert_eq!(
+        unsafe { rs_handheld_rns_update_interface_capacity(ctx, 0, 0, 400) },
+        RsHandheldStatus::ErrNotReady
+    );
+    assert_eq!(
+        unsafe { rs_handheld_rns_update_interface_capacity(ctx, 0, 2, 501) },
+        RsHandheldStatus::ErrInvalidArg
+    );
+    assert_eq!(node().interface_clear_mtu(0), 500);
+    assert!(node().require_link_capacity(0).is_ok());
+    unsafe { rs_handheld_rns_shutdown(ctx) };
+}
+
 // ---- Resource — pinned vs ../rsReticulumLite/vectors/resource_vectors.json
 // (RNS 1.3.8; same fixed handshake material as the lite compat tests). ----
 
@@ -2218,6 +2735,22 @@ fn resource_full_transfer_through_ffi() {
                 },
                 RsHandheldStatus::Ok
             );
+            let mut unknown = part;
+            unknown[0] ^= 0xff;
+            let (mut untouched_new, mut untouched_complete) = (-1, -1);
+            assert_eq!(
+                unsafe {
+                    rs_handheld_rns_resource_part_ingest(
+                        rx,
+                        unknown.as_ptr(),
+                        part_len,
+                        &mut untouched_new,
+                        &mut untouched_complete,
+                    )
+                },
+                RsHandheldStatus::ErrInvalidArg
+            );
+            assert_eq!((untouched_new, untouched_complete), (-1, -1));
             let mut is_new = -1i32;
             assert_eq!(
                 unsafe {
@@ -2253,6 +2786,22 @@ fn resource_full_transfer_through_ffi() {
     // Assemble + proof; sender validates -> DELIVERED.
     let mut data = [0u8; RS_HANDHELD_RESOURCE_DATA_MAX];
     let mut data_len = 0usize;
+    assert_eq!(
+        unsafe {
+            rs_handheld_rns_resource_assemble(
+                rx,
+                &key,
+                data.as_mut_ptr(),
+                data.len(),
+                &mut data_len,
+            )
+        },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!(&data[..data_len], &payload[..]);
+    // Identity lookup may defer application admission. The authenticated Rust
+    // assembly remains readable without decrypting the in-place plaintext twice.
+    data.fill(0);
     assert_eq!(
         unsafe {
             rs_handheld_rns_resource_assemble(
@@ -2504,9 +3053,9 @@ fn resource_negative_paths_through_ffi() {
                 &mut complete,
             )
         },
-        RsHandheldStatus::Ok
+        RsHandheldStatus::ErrInvalidArg
     );
-    assert_eq!((is_new, complete), (0, 0));
+    assert_eq!((is_new, complete), (-1, -1));
 
     // Out-of-range part index -> ErrInvalidArg; undersized part buffer -> ErrCapacity.
     assert_eq!(
@@ -3115,6 +3664,13 @@ fn lxmf_build_link_and_parse_link_roundtrip() {
         RsHandheldStatus::Ok
     );
     assert_eq!(to_hex(&dest), LXMF_DEST_HASH);
+    let peer = rns_lite_core::identity::identity_hash(&unhex::<64>(LXMF_RECIPIENT_PUB));
+    let mut derived = [0; 16];
+    assert_eq!(
+        unsafe { rs_handheld_lxmf_destination_for_identity(&peer, &mut derived) },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!(to_hex(&derived), LXMF_DEST_HASH);
     assert_eq!(&out[..16], &dest); // full packed form carries dest prefix
 
     // Recipient parses.
@@ -3843,4 +4399,170 @@ fn retained_outbound_ffi_retirement_and_invalid_transfer_do_not_consume() {
         RsHandheldStatus::ErrInvalidArg
     );
     unsafe { rs_handheld_rns_shutdown(ctx) };
+}
+
+#[test]
+fn voice_endpoint_admission_is_explicit_identity_bound_and_separate_from_delivery() {
+    let ctx = loaded_ctx();
+    let _node = open_transport_into(ctx, 1);
+    let identity = LocalIdentity::from_private_key(&unhex::<64>(INCREMENTING));
+    let mut dest = [0; 16];
+    assert_eq!(
+        unsafe { rs_handheld_voice_destination(identity.public_key(), &mut dest) },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!(dest, identity.destination_hash("lxst.telephony"));
+    let mut packet = [0; 200];
+    let mut length = 999;
+    assert_eq!(
+        unsafe {
+            rs_handheld_voice_announce(
+                ctx,
+                &RNG_SEED,
+                UNIX_SECS,
+                0,
+                packet.as_mut_ptr(),
+                packet.len(),
+                &mut length,
+            )
+        },
+        RsHandheldStatus::ErrNotReady
+    );
+    assert_eq!(length, 999);
+    assert_eq!(
+        unsafe { rs_handheld_voice_enable(ctx, 1) },
+        RsHandheldStatus::Ok
+    );
+    for response in [0, 1] {
+        assert_eq!(
+            unsafe {
+                rs_handheld_voice_announce(
+                    ctx,
+                    &RNG_SEED,
+                    UNIX_SECS,
+                    response,
+                    packet.as_mut_ptr(),
+                    packet.len(),
+                    &mut length,
+                )
+            },
+            RsHandheldStatus::Ok
+        );
+        let view = PacketView::parse(&packet[..length]).unwrap();
+        assert_eq!(view.header.destination_hash, dest);
+        assert_eq!(
+            view.header.context,
+            if response == 1 {
+                PacketContext::PathResponse
+            } else {
+                PacketContext::None
+            }
+        );
+        let mut scratch = [0; SIGNED_DATA_MAX];
+        let announce = AnnounceView::parse(view.payload, false, MAX_ANNOUNCE_APP_DATA).unwrap();
+        assert!(announce.validate(&dest, None, &mut scratch).is_ok());
+        assert!(announce.app_data.is_empty());
+    }
+    let mut request = dest.to_vec();
+    request.extend([0x23; 16]);
+    assert_eq!(
+        ingest_action(ctx, &frame_path_request(&request), 10),
+        INGEST_PATH_REQUEST_SELF
+    );
+    let mut tag = [0; 16];
+    let mut tag_len = 0;
+    let mut endpoint = 99;
+    assert_eq!(
+        unsafe { rs_handheld_rns_take_own_path_request_tag(ctx, &mut tag, &mut tag_len) },
+        RsHandheldStatus::ErrUnsupported
+    );
+    assert_eq!(
+        unsafe {
+            rs_handheld_rns_take_own_path_request(ctx, &mut tag, &mut tag_len, &mut endpoint)
+        },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!((tag, tag_len, endpoint), ([0x23; 16], 16, 1));
+    let frame = |kind, destination_type| {
+        let header = PacketHeader {
+            flags: PacketFlags {
+                header_type: HeaderType::Header1,
+                context_flag: false,
+                transport_type: TransportType::Broadcast,
+                destination_type,
+                packet_type: kind,
+            },
+            hops: 0,
+            transport_id: None,
+            destination_hash: dest,
+            context: PacketContext::None,
+        };
+        build_packet(header, &[1; 64]).unwrap()
+    };
+    let mut local: RsHandheldLocalFrame = unsafe { core::mem::zeroed() };
+    assert!(classify_local_frame(
+        unsafe { &*ctx },
+        frame(PacketType::LinkRequest, DestinationType::Single).as_slice(),
+        &mut local
+    ));
+    assert!(!classify_local_frame(
+        unsafe { &*ctx },
+        frame(PacketType::Data, DestinationType::Single).as_slice(),
+        &mut local
+    ));
+    assert!(!classify_local_frame(
+        unsafe { &*ctx },
+        frame(PacketType::LinkRequest, DestinationType::Plain).as_slice(),
+        &mut local
+    ));
+    assert_eq!(
+        unsafe { rs_handheld_voice_enable(ctx, 0) },
+        RsHandheldStatus::Ok
+    );
+    assert!(!classify_local_frame(
+        unsafe { &*ctx },
+        frame(PacketType::LinkRequest, DestinationType::Single).as_slice(),
+        &mut local
+    ));
+    assert!(
+        unsafe { (*ctx).node.unwrap().as_ref() }.is_own_destination(&identity.lxmf_delivery_hash())
+    );
+    assert!(!unsafe { (*ctx).node.unwrap().as_ref() }.is_own_destination(&dest));
+    assert_eq!(
+        unsafe { rs_handheld_voice_enable(ctx, 1) },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!(
+        unsafe { rs_handheld_rns_load_identity(ctx, &[0x98; 64]) },
+        RsHandheldStatus::Ok
+    );
+    assert!(!unsafe { (*ctx).voice_enabled });
+    assert!(!unsafe { (*ctx).node.unwrap().as_ref() }.is_own_destination(&dest));
+    unsafe { rs_handheld_rns_shutdown(ctx) };
+}
+
+#[test]
+fn persistent_lxmf_field_scratch_is_bounded_and_reentrant_parse_is_refused() {
+    assert_eq!(core::mem::size_of::<lxmf_codec::LxmfFieldScratch>(), 1024);
+    println!(
+        "protocol context={} micro aggregate={}",
+        core::mem::size_of::<RsHandheldRns>(),
+        core::mem::size_of::<RsHandheldRns>() + core::mem::size_of::<rns_lite_core::MicroNode>()
+    );
+    let mut context = core::ptr::null_mut();
+    unsafe {
+        assert_eq!(rs_handheld_rns_init(&mut context), RsHandheldStatus::Ok);
+        assert_eq!(
+            rs_handheld_rns_load_identity(context, &[1; 64]),
+            RsHandheldStatus::Ok
+        );
+        let held = (*context).lxmf_field_scratch.borrow_mut();
+        let mut message = core::mem::zeroed();
+        assert_eq!(
+            rs_handheld_rns_lxmf_parse(context, [0u8; 1].as_ptr(), 1, &[0; 64], &mut message),
+            RsHandheldStatus::ErrNotReady
+        );
+        drop(held);
+        rs_handheld_rns_shutdown(context);
+    }
 }

@@ -87,6 +87,8 @@ SettingsTransaction::Result SettingsTransaction::apply(UserConfig& effective, Us
     if (&effective == &candidate) return {State::Invalid, "Settings candidate must be separate"};
     if (effective._recoveryRequired) return Recovery;
     if (effective._namePending) return Pending;
+    if (!candidate.settings().propagation.valid())
+        return {State::Invalid, "Invalid propagation settings"};
     if (const char* error = changedCredentialError(effective.settings(), candidate.settings()))
         return {State::Invalid, error};
     const int index = identities.activeIndex();
@@ -102,32 +104,68 @@ SettingsTransaction::Result SettingsTransaction::apply(UserConfig& effective, Us
     candidate.settings().nameComplete = candidate.settings().nameComplete || slot.nameComplete || !candidate.settings().displayName.isEmpty();
     candidate._namePending = candidate.settings().displayName != slot.displayName ||
         candidate.settings().nameComplete != slot.nameComplete;
-    UserConfig publication;
-    {
-        bool unavailable = false;
-        const String json = candidate.serializeToJson(true, PersistedLimit, &unavailable);
-        if (unavailable) return NoMemory;
-        if (json.isEmpty() || json.length() > PersistedLimit)
-            return {State::Invalid, "Settings exceed saved record capacity"};
-        if (!publication.tryAssign(candidate)) return NoMemory;
-        if (!candidate.saveRequired(flash, json)) return {State::Invalid, "Save failed; settings unchanged"};
+    size_t length = 0;
+    const auto prepared = candidate.prepareJson(true, PersistedLimit, length);
+    if (prepared == UserConfig::SaveResult::NoMemory) {
+        UserConfig::saveMemoryFailure("prepare", length);
+        return NoMemory;
     }
+    if (prepared != UserConfig::SaveResult::Complete)
+        return {State::Invalid, "Settings exceed saved record capacity"};
+    const auto saved = candidate.savePrepared(flash, length);
+    if (saved == UserConfig::SaveResult::NoMemory) return NoMemory;
+    if (saved != UserConfig::SaveResult::Complete)
+        return {State::Invalid, "Save failed; settings unchanged"};
     if (candidate._namePending) {
         // Do not replace effective values until both required records agree.
         effective._namePending = true;
         memcpy(effective._nameIdentity, candidate._nameIdentity, sizeof effective._nameIdentity);
         effective._nameBound = true;
-        return settle(effective, candidate, publication, identities, sd, flash);
+        return settle(effective, candidate, identities, sd, flash);
     }
-    publication.copyStateFrom(candidate);
-    effective.swap(publication);
-    effective._mirrorPending = effective.settings().sdStorageEnabled;
-    effective.flushPending(sd, flash);
+    // A swap cannot fail after the durable commit, so no publication copy.
+    effective.swap(candidate);
     return Complete;
 }
 
-SettingsTransaction::Result SettingsTransaction::settle(UserConfig& effective, UserConfig& candidate, UserConfig& publication,
+SettingsTransaction::Result SettingsTransaction::applyScalars(UserConfig& effective, UserScalars scalars,
         IdentityManager& identities, SDStore& sd, FlashStore& flash) {
+    handheld::assertDeviceOwner();
+    if (effective._recoveryRequired) return Recovery;
+    if (effective._namePending) return Pending;
+    if (!scalars.propagation.valid()) return {State::Invalid, "Invalid propagation settings"};
+    const int index = identities.activeIndex();
+    if (!identities.validateSlot(index)) return Recovery;
+    const auto& slot = identities.identities()[index];
+    const String& name = effective.settings().displayName;
+    scalars.nameComplete = scalars.nameComplete || slot.nameComplete || !name.isEmpty();
+    // Only a reconciled binding skips the staged two-record name transaction.
+    if (!matches(effective, slot.hash) || !sameBytes(name, slot.displayName) ||
+        scalars.nameComplete != slot.nameComplete) {
+        UserConfig candidate;
+        if (!candidate.tryAssign(effective)) return NoMemory;
+        static_cast<UserScalars&>(candidate.settings()) = scalars;
+        return apply(effective, candidate, identities, sd, flash);
+    }
+    UserConfig::sanitizeScalars(scalars);
+    size_t length = 0;
+    const auto prepared = effective.measureJson(true, PersistedLimit, scalars, length);
+    if (prepared == UserConfig::SaveResult::NoMemory) {
+        UserConfig::saveMemoryFailure("prepare", length);
+        return NoMemory;
+    }
+    if (prepared != UserConfig::SaveResult::Complete)
+        return {State::Invalid, "Settings exceed saved record capacity"};
+    const auto saved = effective.savePrepared(flash, length, scalars);
+    if (saved == UserConfig::SaveResult::NoMemory) return NoMemory;
+    if (saved != UserConfig::SaveResult::Complete)
+        return {State::Invalid, "Save failed; settings unchanged"};
+    static_cast<UserScalars&>(effective._settings) = scalars;
+    return Complete;
+}
+
+SettingsTransaction::Result SettingsTransaction::settle(UserConfig& effective, UserConfig& candidate,
+        IdentityManager& identities, SDStore&, FlashStore& flash) {
     const int index = identities.activeIndex();
     if (!identities.validateSlot(index) || !matches(candidate, identities.identities()[index].hash)) return Recovery;
     const auto& slot = identities.identities()[index];
@@ -135,10 +173,7 @@ SettingsTransaction::Result SettingsTransaction::settle(UserConfig& effective, U
         !identities.setDisplayName(index, candidate.settings().displayName, candidate.settings().nameComplete)) return Pending;
     candidate._namePending = false;
     if (!candidate.saveRequired(flash)) { candidate._namePending = true; return Pending; }
-    publication.copyStateFrom(candidate);
-    effective.swap(publication);
-    effective._mirrorPending = effective.settings().sdStorageEnabled;
-    effective.flushPending(sd, flash);
+    effective.swap(candidate);
     return Complete;
 }
 
@@ -152,9 +187,7 @@ SettingsTransaction::Result SettingsTransaction::recover(UserConfig& effective, 
         UserConfig candidate;
         if (!candidate.load(flash) || !candidate._namePending ||
             (candidate._source != UserConfig::Source::Flash && candidate._source != UserConfig::Source::FlashBackup)) return Recovery;
-        UserConfig publication;
-        if (!publication.tryAssign(candidate)) return Pending;
-        return settle(effective, candidate, publication, identities, sd, flash);
+        return settle(effective, candidate, identities, sd, flash);
     }
     const auto& slot = identities.identities()[index];
     if (matches(effective, slot.hash) && effective.settings().displayName == slot.displayName &&
@@ -169,14 +202,9 @@ SettingsTransaction::Result SettingsTransaction::recover(UserConfig& effective, 
     if (!bind(candidate, slot.hash)) return Recovery;
     candidate._namePending = false;
     UserConfig::sanitizeSettings(candidate._settings);
-    UserConfig publication;
-    if (!publication.tryAssign(candidate)) return NoMemory;
     // Legacy settings may exceed the new UI transfer limit: preserve them on
     // reconciliation rather than imposing a new limit on already stored data.
     if (!candidate.saveRequired(flash)) return {State::Invalid, "Name mirror save failed"};
-    publication.copyStateFrom(candidate);
-    effective.swap(publication);
-    effective._mirrorPending = effective.settings().sdStorageEnabled;
-    effective.flushPending(sd, flash);
+    effective.swap(candidate);
     return Complete;
 }

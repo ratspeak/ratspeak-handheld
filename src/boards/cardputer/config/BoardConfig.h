@@ -52,7 +52,7 @@
 #define BOARD_DEFAULT_WIFI_MODE      RAT_WIFI_OFF
 #define BOARD_DEFAULT_AUTOIFACE_MAX_PEERS 4
 #define STORAGE_ASYNC_WRITES         1      // WriteQueue task defers 0.5-4s LittleFS writes
-#define USERCONFIG_NVS_BACKUP        1      // Tier-3 full-JSON config copy in NVS
+#define USERCONFIG_NVS_LEGACY_READ   1      // Read settings left in NVS by older firmware
 #define LEGACY_READ_CTR_MIGRATION    1      // One-time .read_ctr -> read:true rewrite
 #define LEGACY_MSG_FILENAME_MIGRATION 1     // Pre-2.0 filenames; scan every available medium at boot
 #define LEGACY_GPS_LOC_MIGRATION     1      // Donor v2.0.3 wrote gps_loc
@@ -85,11 +85,11 @@
 #define LORA_USE_DCDC_REGULATOR false  // M5 Cap LoRa-1262 examples use LDO-only regulator mode
 #define LORA_OCP_TUNED          0x28   // RNode Cardputer Adv board tuning
 #define LORA_DEFAULT_FREQ       915000000
-#define LORA_DEFAULT_BW         250000   // Long Fast preset (matches rsDeck)
-#define LORA_DEFAULT_SF         11
+#define LORA_DEFAULT_BW         250000   // Medium Fast preset
+#define LORA_DEFAULT_SF         9
 #define LORA_DEFAULT_CR         5
 #define LORA_MAX_TX_POWER       22       // Cap LoRa-1262 documented maximum
-#define LORA_DEFAULT_TX_POWER   22       // Long Fast preset
+#define LORA_DEFAULT_TX_POWER   17       // Medium Fast preset
 #define LORA_DEFAULT_PREAMBLE   18
 
 // Cap LoRa-1262 RF antenna switch enable (PI4IOE5V6408 on Cardputer I2C).

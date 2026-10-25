@@ -31,12 +31,15 @@ private:
     enum class State { Disabled, Waiting, Connecting, Connected };
     void retry(uint32_t now);
     void pollActiveScan();
+    void cancelActiveScan();
     void releaseScan();
     State _state = State::Disabled;
     String _ssid, _password;
     uint32_t _deadline = 0, _scanDeadline = 0, _scanStartedAt = 0;
     uint8_t _attempt = 0;
     bool _scanRequested = false, _scanning = false;
+    bool _scanRetiring = false, _scanRestore = true, _scanReset = false;
+    uint32_t _scanRetireDeadline = 0, _scanRestoreAt = 0;
     ScanResult _scanOutcome = ScanResult::Pending;
     wifi_mode_t _scanPreviousMode = WIFI_OFF;
     uint32_t _observedDisconnect = 0;

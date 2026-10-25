@@ -14,7 +14,12 @@ public:
     };
     // candidate may be a UI value snapshot; its protected metadata is ignored.
     // Only Complete may publish effective settings, hardware or onboarding.
+    // Complete consumes candidate: it is swapped in and receives the old value.
     static Result apply(UserConfig& effective, UserConfig& candidate,
+        IdentityManager& identities, SDStore& sd, FlashStore& flash);
+    // Same contract for fixed-size values: strings and lists stay canonical
+    // and nothing is copied unless the name binding needs reconciliation.
+    static Result applyScalars(UserConfig& effective, UserScalars scalars,
         IdentityManager& identities, SDStore& sd, FlashStore& flash);
     // Also reconciles boot/switch name mirrors from the validated active slot.
     // A pending intent must match that exact active identity; never retarget it.
@@ -22,7 +27,7 @@ public:
         SDStore& sd, FlashStore& flash);
     static constexpr size_t PersistedLimit = UserConfig::SnapshotLimit;
 private:
-    static Result settle(UserConfig& effective, UserConfig& candidate, UserConfig& publication,
+    static Result settle(UserConfig& effective, UserConfig& candidate,
         IdentityManager& identities, SDStore& sd, FlashStore& flash);
     static bool bind(UserConfig& config, const std::string& hash);
     static bool matches(const UserConfig& config, const std::string& hash);

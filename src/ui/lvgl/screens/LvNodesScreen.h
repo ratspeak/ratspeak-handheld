@@ -2,6 +2,9 @@
 
 #include "UIManager.h"
 #include "runtime/ServiceClient.h"
+#include "ui/PeerList.h"
+#include "Theme.h"
+#include <array>
 #include <functional>
 #include <string>
 #include <vector>
@@ -70,18 +73,31 @@ private:
     lv_obj_t* _nicknameBox = nullptr;
     lv_obj_t* _nicknameLbl = nullptr;
     lv_obj_t* _nicknameHint = nullptr;
-    int _lastNodeCount = -1;
-    int _lastContactCount = -1;
-
-    // Sorted index vectors (into _am->nodes())
-    std::vector<int> _sortedContactIndices;
-    std::vector<int> _sortedOnlineIndices;
-    // Row → dest-hash snapshot (widget user_data indexes this, never _nodes)
-    std::vector<std::string> _rowHexes;
-
+    static constexpr int RowHeight = 36;
+    static constexpr int ViewportHeight = Theme::CONTENT_H - 19;
+    // Partial first/last rows, one overscan each side, and one pinned press.
+    static constexpr size_t RowPoolSize = (ViewportHeight + RowHeight - 1) / RowHeight + 4;
+    handheld::PeerList _peers;
+    struct Row {
+        lv_obj_t* box = nullptr;
+        lv_obj_t* name = nullptr;
+        lv_obj_t* meta = nullptr;
+        lv_obj_t* id = nullptr;
+        std::string nameText;
+        std::string hex;
+        size_t index = 0;
+    };
+    std::array<Row, RowPoolSize> _rows;
+    lv_obj_t* _caption = nullptr;
+    lv_obj_t* _extent = nullptr;
+    lv_obj_t* _pressedRow = nullptr;
+    std::string _pressedHex;
+    bool _bindingRows = false;
+    bool interactionBusy() const;
+    void bindRows();
+    void focusSelection();
+    void scrollToSelection();
     unsigned long _lastRebuild = 0;
-    static constexpr unsigned long REBUILD_INTERVAL_MS = 5000;
-    static constexpr unsigned long AGE_REBUILD_INTERVAL_MS = 30000;
 
     lv_obj_t* _list = nullptr;
     lv_obj_t* _emptyState = nullptr;

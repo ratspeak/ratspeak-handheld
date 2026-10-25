@@ -20,7 +20,12 @@ public:
     void stopFull();
 
     // AP config
-    void setAPCredentials(const char* ssid, const char* password);
+    struct APCredentials { String ssid, password; };
+    // Stage all allocation before an existing AP is stopped. Empty SSID chooses
+    // the generated name; empty password deliberately selects an open AP.
+    static bool prepareAPCredentials(const char* ssid, const char* password, APCredentials& prepared);
+    void setAPCredentials(APCredentials&& prepared);
+    bool setAPCredentials(const char* ssid, const char* password);
     String getAPSSID() const { return _apSSID; }
     int getClientCount() const { return _clients.size(); }
     bool isAPActive() const { return _apActive; }
@@ -30,17 +35,16 @@ public:
     void setSTACredentials(const char* ssid, const char* password);
     bool isSTAConnected() const;
 
-    // WiFi scanner (async: call startScan, poll with getScanResults)
+    // Scan driver helpers; WiFiConnection owns admission, deadlines and retirement.
     struct ScanResult {
         String ssid;
         int rssi;
         bool encrypted;
     };
-    static std::vector<ScanResult> scanNetworks(int maxResults = 15);
     // False when mode initialization or SDK scan admission fails.
     static bool startAsyncScan();
-    static bool isScanComplete();
-    // Reads at most15 strongest unique rows; caller retires SDK results with scanDelete.
+    // Reads at most 15 unique rows from the bounded SDK snapshot. May throw on
+    // allocation failure; WiFiConnection handles it and retires SDK storage.
     static std::vector<ScanResult> getScanResults(int maxResults = 15);
 
     // Raw-frame seam for the backend pump (TCPClientInterface precedent):
@@ -74,7 +78,7 @@ private:
     String _apPassword;
     String _staSSID;
     String _staPassword;
-    bool _apActive = false;
+    bool _apActive = false, _apConfigured = false;
 
     WiFiServer _server;
     std::vector<WiFiClient> _clients;

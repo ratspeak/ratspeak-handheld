@@ -1,4 +1,5 @@
 #include "HistoryWindow.h"
+#include "storage/MemoDraft.h"
 #include "reticulum/LXMFMessage.h"
 #include "util/DisplayText.h"
 #include "reticulum/StatusFacts.h"
@@ -28,16 +29,41 @@ bool HistoryWindow::changeView() {
 void HistoryWindow::open(const uint8_t peer[16], uint32_t identity) {
     if (!peer || !identity || !changeView()) return;
     auto& c = control();
+    // An explicit open changes the full consumer context (including message
+    // family/hub, which is intentionally outside this bounded window). Keep
+    // borrowed text alive, but never publish a bank from a previous context.
+    _pages[c.active].value.info.identity = 0;
     memcpy(c.peer, peer, 16); c.identity = identity;
     c.mode = Mode::Chat; c.state = State::Loading; c.intent = Intent::Newest;
+    c.queuedAudioCounter=0;c.queuedAudioDuration=0;
     c.newBelow = false; c.followNewest = true; c.scrollOffset = 0;
-    c.focus = VisibleSpans;
+    c.focus = VisibleSpans; c.selectEdge = 0;
+    if (!c.awaiting) c.phase = Phase::Idle;
+}
+void HistoryWindow::resume(const uint8_t peer[16], uint32_t identity) {
+    const auto& info = livePage().info;
+    bool reusable = peer && identity && control().publication && info.identity == identity &&
+        !memcmp(info.peer, peer, 16) && !info.full && !info.moreNewer && info.last == info.count &&
+        !control().newBelow && freshnessAvailable() && info.sourceRevision == control().observedHistoryRevision;
+    for (size_t i = 0; reusable && i < info.spans; ++i)
+        reusable = !liveFrame().spans[i].unavailable();
+    if (!reusable) { open(peer, identity); return; }
+    if (!changeView()) return;
+    auto& c = control();
+    memcpy(c.peer, peer, 16); c.identity = identity;
+    c.mode = Mode::Chat; c.state = State::Ready; c.intent = Intent::None;
+    c.newBelow = false; c.followNewest = true; c.scrollOffset = 0;
+    c.focus = VisibleSpans; c.selectEdge = 0;
+    if (!c.statusReady || c.statusFailed) c.statusDirty = true;
     if (!c.awaiting) c.phase = Phase::Idle;
 }
 void HistoryWindow::close() {
     changeView();
     auto& c = control();
     c.mode = Mode::Closed; c.state = State::Closed; c.intent = Intent::None;
+    c.queuedAudioCounter=0;c.queuedAudioDuration=0;
+    c.focus = VisibleSpans; c.selectEdge = 0;
+    _pages[c.active].value.info.statusRefresh = {};
     if (!c.awaiting) c.phase = Phase::Idle;
 }
 bool HistoryWindow::visible() const {
@@ -48,6 +74,17 @@ bool HistoryWindow::visible() const {
 bool HistoryWindow::loading() const {
     const auto& c = control();
     return c.mode != Mode::Closed && (c.awaiting || c.phase != Phase::Idle || c.intent != Intent::None);
+}
+void HistoryWindow::queuedAudio(uint32_t counter,uint16_t bytes) {
+    using namespace storage::memo;
+    if(control().mode!=Mode::Chat || !counter || !bytes || bytes%FrameBytes || bytes>RecordBytes) return;
+    if(!newest()) return;
+    control().queuedAudioCounter=counter;
+    control().queuedAudioDuration=uint8_t((bytes/FrameBytes*FrameMs+999)/1000);
+}
+uint8_t HistoryWindow::queuedAudioSeconds() const {
+    return control().mode==Mode::Chat && control().followNewest && control().queuedAudioCounter ?
+        control().queuedAudioDuration:0;
 }
 size_t HistoryWindow::spanCount() const { return visible() ? livePage().info.spans : 0; }
 const HistoryWindow::Span* HistoryWindow::span(size_t index) const {
@@ -87,6 +124,7 @@ bool HistoryWindow::navigate(Intent intent) {
     auto& c = control();
     if (!visible() || !changeView()) return false;
     c.intent = intent; c.state = State::Loading; c.restoreKey = {}; c.scrollOffset = 0;
+    c.selectEdge = 0;
     if (!c.awaiting) c.phase = Phase::Idle;
     return true;
 }
@@ -116,7 +154,24 @@ bool HistoryWindow::newest() {
     if (control().mode == Mode::Closed || !changeView()) return false;
     auto& c = control(); c.mode = Mode::Chat; c.intent = Intent::Newest;
     c.state = State::Loading; c.newBelow = false; c.followNewest = true; c.scrollOffset = 0;
+    c.focus = VisibleSpans; c.selectEdge = 0;
     if (!c.awaiting) c.phase = Phase::Idle;
+    return true;
+}
+bool HistoryWindow::moveSelection(int direction) {
+    auto& c=control();
+    if(c.mode!=Mode::Chat || !visible() || !spanCount() || loading()) return false;
+    if(c.focus>=spanCount()) {
+        // From the composer the first arrow always selects the latest message.
+        if(canNewer()) {if(!newest()) return false;c.selectEdge=-1;}
+        else c.focus=spanCount()-1;
+    } else if(direction<0) {
+        if(c.focus) --c.focus;
+        else if(older()) c.selectEdge=-1;
+    } else if(c.focus+1<spanCount()) ++c.focus;
+    else if(canNewer()) {if(newer()) c.selectEdge=1;}
+    else c.focus=VisibleSpans;
+    if(!c.selectEdge) setViewportAtNewest(c.focus==VisibleSpans);
     return true;
 }
 bool HistoryWindow::openFull(size_t index) {
@@ -138,6 +193,7 @@ bool HistoryWindow::backToChat() {
     return true;
 }
 void HistoryWindow::refresh() {
+    _pages[control().active].value.info.sourceRevision = UINT32_MAX;
     auto& c = control();
     if (c.mode == Mode::Closed || c.state == State::Exhausted) return;
     // Coalesce refreshes behind a bounded in-progress publication. Unrelated
@@ -178,6 +234,7 @@ void HistoryWindow::beginIntent() {
     auto& c = control(); const auto intent = c.intent; c.intent = Intent::None;
     auto& page = candidate(); page = livePage();
     auto& info = page.info;
+    if (intent != Intent::Refresh) info.statusRefresh = {};
     c.spanCount = 0; c.usedText = 0; c.publish = false;
     info.spans = 0; info.full = c.mode == Mode::Full;
     c.phase = Phase::Preview;
@@ -203,6 +260,7 @@ void HistoryWindow::beginIntent() {
         if (c.followNewest) { info.bound = {}; info.direction = storage::HistoryDirection::Before; }
         c.phase = Phase::Page;
     }
+    info.sourceRevision = c.observedHistoryRevision;
     c.buildIndex = info.first;
     if (c.phase == Phase::Preview && c.buildIndex == info.last) { c.publish = true; publish(); }
 }
@@ -318,6 +376,8 @@ void HistoryWindow::publish() {
         const auto& row = candidateFrame().spans[i];
         if (equal(focus, {row.counter, row.incoming()})) { c.focus = i; break; }
     }
+    if(c.selectEdge && c.spanCount) c.focus=c.selectEdge<0?c.spanCount-1:0;
+    c.selectEdge=0;
     c.active ^= 1; ++c.publication; c.publicationHeld = true;
     c.phase = Phase::Idle; c.publish = false; c.state = State::Ready;
     c.statusDirty = true; c.statusReady = false; c.retryAt = 0;
@@ -333,8 +393,8 @@ bool HistoryWindow::statusResult(const storage::Result& result, const uint8_t* b
         result.key.incoming || result.key.counter != span(c.buildIndex)->counter ||
         result.revision != c.sampledStatusRevision || result.revision != c.observedStatusRevision) return false;
     StatusProjection projection; memcpy(&projection, bytes, sizeof(projection));
-    if (projection.counter != result.key.counter || projection.desired > uint8_t(LXMFStatus::UNCONFIRMED) ||
-        projection.durable > uint8_t(LXMFStatus::UNCONFIRMED) || projection.error > storage::Error::Internal ||
+    if (projection.counter != result.key.counter || projection.desired > handheld::messaging::LastStatus ||
+        projection.durable > handheld::messaging::LastStatus || projection.error > storage::Error::Internal ||
         (projection.flags & ~(StatusProjection::Available | StatusProjection::Pending | StatusProjection::TxSuppressed))) return false;
     if (!(projection.flags & StatusProjection::Available)) {
         statusUnavailable({projection.counter, false}, projection.error == storage::Error::None ? storage::Error::Unavailable : projection.error);
@@ -351,6 +411,10 @@ void HistoryWindow::finishStatuses(uint32_t now) {
         c.statusFailed = true;
     }
     c.phase = Phase::Idle; c.statusReady = true; c.statusDirty = c.statusFailed;
+    for(size_t i=0;i<spanCount();++i) if(!span(i)->incoming() && span(i)->counter==c.queuedAudioCounter) {
+        c.queuedAudioCounter=0;c.queuedAudioDuration=0;break;
+    }
+    _pages[c.active].value.info.statusRefresh.finish(c.statusFailed, now);
     c.retryAt = c.statusFailed ? now + 1000 : 0;
     if (c.statusPublication == UINT32_MAX) { c.state = State::Exhausted; c.error = Error::Exhausted; }
     else ++c.statusPublication;
@@ -408,7 +472,7 @@ bool HistoryWindow::recordResult(const storage::Result& result, const uint8_t* b
     const auto offset = c.phase == Phase::Full ? c.fullOffset : 0;
     const uint64_t total = uint64_t(header.titleLength) + header.contentLength;
     const size_t payload = length - sizeof(header);
-    if (total > storage::Budget::MaxStoredFile || header.status > uint8_t(LXMFStatus::UNCONFIRMED) ||
+    if (total > storage::Budget::MaxStoredFile || header.status > handheld::messaging::LastStatus ||
         !std::isfinite(header.timestamp) || header.counter != key.counter || header.incoming != key.incoming ||
         memcmp(header.incoming ? header.source : header.destination, c.peer, 16) ||
         memcmp(result.key.peer, c.peer, 16) || !equal({result.key.counter, result.key.incoming}, key) ||
@@ -417,6 +481,12 @@ bool HistoryWindow::recordResult(const storage::Result& result, const uint8_t* b
         (result.more && !payload)) return false;
     auto& frame = candidateFrame();
     Span row; row.counter = key.counter; row.recordRevision = header.revision;
+    if(header.audio.state) {
+        const bool native=header.audio.mode==3 && header.audio.length && header.audio.length<=3000 && !(header.audio.length%4);
+        const auto seconds=uint8_t((uint32_t(header.audio.length)*10+999)/1000);
+        row.audio=header.audio.state==3?(native?seconds:0x81):header.audio.state!=1?0xc0:
+            native?uint8_t(0x40|seconds):0x80;
+    }
     row.timestamp = header.timestamp <= 0 ? 0 : header.timestamp >= UINT32_MAX ? UINT32_MAX : uint32_t(header.timestamp);
     row.titleLength = header.titleLength; row.contentLength = header.contentLength;
     row.status = row.durableStatus = header.status;
@@ -475,7 +545,7 @@ void HistoryWindow::unavailableRecord(storage::Error error) {
 }
 bool HistoryWindow::status(storage::HistoryEntry key, uint8_t desired, uint8_t durable,
                            bool pending, storage::Error error, bool suppressed) {
-    if (desired > uint8_t(LXMFStatus::UNCONFIRMED) || durable > uint8_t(LXMFStatus::UNCONFIRMED)) return false;
+    if (desired > handheld::messaging::LastStatus || durable > handheld::messaging::LastStatus) return false;
     bool changed = false;
     for (size_t i = 0; i < spanCount(); ++i) {
         auto& row = _frames[control().active].spans[i];

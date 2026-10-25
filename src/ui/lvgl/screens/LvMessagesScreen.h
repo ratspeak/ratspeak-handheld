@@ -2,6 +2,7 @@
 
 #include "UIManager.h"
 #include "runtime/ServiceClient.h"
+#include "ui/RrcBrowser.h"
 #include <functional>
 #include <string>
 
@@ -9,9 +10,11 @@ class LvMessagesScreen : public LvScreen {
 public:
     using OpenCallback = std::function<void(const std::string&)>;
     void setService(handheld::ServiceClient* service) { _service = service; }
+    void setUse24Hour(bool value) { _use24h = value; }
     void setAnnounceManager(handheld::NodeView* nodes) { _am = nodes; }
     void setBackend(handheld::ProtocolView* backend) { _backend = backend; }
     void setOpenCallback(OpenCallback callback) { _onOpen = callback; }
+    void setRrcOpenCallback(handheld::ui::RrcBrowser::Open callback) { _rrc.open = std::move(callback); }
     void setUIManager(UIManager* ui) { _ui = ui; }
     void createUI(lv_obj_t* parent) override;
     void destroyUI() override;
@@ -20,9 +23,23 @@ public:
     void onExit() override;
     bool handleKey(const KeyEvent&) override;
     bool handleLongPress() override;
+    TextInputRequest textInput() const override {
+        return _rrcText ? TextInputRequest{TextInputMode::Text, _rrcText} : TextInputRequest{};
+    }
     const char* title() const override { return "Messages"; }
 
 private:
+    void switchFamily(bool direct);
+    void pollRrc();
+    void renderRrc();
+    void clearRrc();
+    void submitRrc();
+    bool handleRrcKey(const KeyEvent&);
+    handheld::ui::RrcBrowser _rrc;
+    lv_obj_t* _family[2]{};
+    lv_obj_t *_rrcPanel = nullptr, *_rrcText = nullptr, *_rrcRemember = nullptr;
+    lv_obj_t* _rrcRows[14]{};
+    uint32_t _rrcRendered = 0, _rrcFormView = 0, _rrcRetryAt = 0;
     using Window = handheld::history::ConversationList;
     using Row = Window::Row;
     struct RowWidgets { lv_obj_t *row = nullptr, *name = nullptr, *preview = nullptr, *status = nullptr; };
@@ -53,7 +70,7 @@ private:
     UIManager* _ui = nullptr;
     OpenCallback _onOpen;
     RowWidgets _rows[RowCount];
-    lv_obj_t *_list = nullptr, *_caption = nullptr, *_empty = nullptr, *_update = nullptr;
+    lv_obj_t *_list = nullptr, *_empty = nullptr, *_update = nullptr;
     lv_obj_t* _emptyState = nullptr;
     lv_obj_t* _navigation[4] = {};
     lv_obj_t* _actionOverlay = nullptr;
@@ -68,6 +85,7 @@ private:
     uint8_t _rowCount = 0, _menuIdx = 0;
     LongPressState _lpState = LP_NONE;
     bool _active = false, _binding = false, _focusActive = false;
+    bool _use24h = true;
     bool _nameFailed = false;
     bool _loadPending = false;
 };

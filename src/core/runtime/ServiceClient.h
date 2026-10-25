@@ -52,6 +52,7 @@ public:
     String destinationHashHex() const { return String(_status.destination); }
     String destinationHashStr() const { return String(_status.destination); }
     String publicKeyHex() const { return String(_status.publicKey); }
+    const rrc::Status& rrcStatus() const { return _status.rrc; }
 private:
     const Status& _status;
 };
@@ -70,10 +71,37 @@ public:
     const Status& status() const { return _status; }
     uint32_t action(Operation op, const std::string& peer = "", const std::string& body = "",
                     uint32_t argument = 0, Completion completion = {});
+    uint32_t deleteRecord(const storage::RecordKey&,uint32_t revision,Completion);
+    using RecordCompletion=std::function<void(const Result&,const storage::StoredRecordHeader&,const uint8_t*,size_t)>;
+    uint32_t copyRecord(const storage::RecordKey&,RecordCompletion);
     uint32_t requestPeerName(const std::string& peer, TextCompletion completion);
+    using PropagationCompletion = std::function<void(const Result&, const propagation::NodeView*, size_t)>;
+    uint32_t requestPropagationNodes(PropagationCompletion);
+    template<class Row> using RrcCompletion = std::function<void(const Result&, const Row*, size_t)>;
+    uint32_t requestRrcHubs(RrcCompletion<rrc::HubView>);
+    uint32_t requestRrcRooms(RrcCompletion<rrc::RoomView>);
+    uint32_t requestRrcChannels(size_t offset, RrcCompletion<rrc::RoomView>);
+    uint32_t requestRrcSavedRooms(const uint8_t hub[16], size_t offset, RrcCompletion<rrc::RoomView>);
+    uint32_t requestRrcRoom(const rrc::Conversation&, RrcCompletion<rrc::RoomView>);
+    uint32_t requestRrcInbox(const uint8_t hub[16], uint32_t cursor, storage::HistoryDirection, RrcCompletion<rrc::PrivateView>);
+    uint32_t requestRrcPeople(const char* room, RrcCompletion<rrc::PersonView>);
+    uint32_t requestRrcDirectory(size_t offset, RrcCompletion<rrc::DirectoryView>);
+    uint32_t voiceCommand(const voice::Command&, Completion = {});
+    uint32_t memoCommand(const memo::Command&, Completion = {});
+    uint32_t rrcCommand(const rrc::Command&, const uint8_t* body = nullptr, size_t length = 0, Completion = {}, bool quiet = false);
+    uint32_t requestRrcDraft(const rrc::Conversation&, RrcCompletion<rrc::DraftView>);
+    uint32_t requestRrcDetail(const rrc::Conversation&, const uint8_t key[16], uint32_t counter, RrcCompletion<rrc::MessageDetail>);
+    uint32_t watchRrcHistory(const rrc::Conversation&, Completion = {});
+    bool rrcHistory() const { return _rrcHistory; }
     // Pending Send only. Completion is still consumed; navigation does not cancel.
     bool cancelSend(uint32_t requestId) { return _mailbox.cancelSend(requestId); }
     bool applySettings(Completion completion = {}, bool applyRadio = true);
+    // Abandon an unsubmitted UI edit without writing settings. If restoration
+    // cannot allocate, block further saves until the normal canonical refresh.
+    // An already accepted request/query retains its completion ownership.
+    bool discardSettingsEdit();
+    // Last device-confirmed settings; the draft in `config` is compared against it.
+    const UserConfig& committed() const { return _committed; }
     bool available() const { return _mailbox.accepting(); }
     bool settingsPending() const { return _settingsPending || _settingsQuery || _settingsRefresh; }
     void watchHistory(const std::string& peer);
@@ -99,6 +127,9 @@ public:
     uint32_t lifecycleStarted = 0;
     std::function<void(const char*)> onNotice;
     std::function<void()> onConfigApplied;
+    // UI-owned foreground state must be durable before closing admission. The
+    // guard may request a save and decline this attempt, retaining the editor.
+    std::function<bool()> beforeLifecycle;
     NodeView nodes;
     ProtocolView protocol;
     UserConfig config;
@@ -109,6 +140,7 @@ private:
     uint32_t submit(Request request, const void* body, size_t length, size_t capacity, ValueCompletion callback);
     template<class Window> void submitReadQuery(Window&, uint32_t nonce, bool status,
         Request, const void* body, size_t length, size_t capacity);
+    template<class Row, size_t Capacity> uint32_t rrcQuery(Request, const void*, size_t, RrcCompletion<Row>);
     void requestNodes();
     void requestHistory();
     void requestConversationWindow();
@@ -125,7 +157,7 @@ private:
     bool _configReady = false, _settingsRefresh = false;
     uint32_t _lastSettingsQuery = 0;
     uint32_t _configRevision = 1;
-    uint32_t _noticeRevision = 0, _incomingRevision = 0;
+    uint32_t _noticeRevision = 0, _incomingRevision = 0, _rrcAlertRevision = 0;
     bool _unhealthy = false;
     uint32_t _nodeCursorRevision = 0, _nodeOffset = 0;
     bool _nodesPending = false;
@@ -134,6 +166,9 @@ private:
     bool _identitiesPending = false;
     std::vector<IdentitySlot> _identities;
     history::HistoryWindow _history;
+    rrc::Conversation _rrcConversation;
+    uint32_t _rrcViewRevision = 0;
+    bool _rrcHistory = false;
     history::ConversationList _conversationWindow;
     String _scanJson;
 };

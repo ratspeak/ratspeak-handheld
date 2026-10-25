@@ -25,7 +25,7 @@ inline constexpr Preset values[] = {
 };
 inline constexpr int count = sizeof(values) / sizeof(values[0]);
 
-inline int detect(const UserSettings& settings) {
+inline int detect(const UserScalars& settings) {
     for (int i = 0; i < count; ++i) {
         const auto& preset = values[i];
         if (settings.loraSF == preset.sf && settings.loraBW == preset.bw &&
@@ -35,12 +35,12 @@ inline int detect(const UserSettings& settings) {
     return -1;
 }
 
-inline const char* name(const UserSettings& settings) {
+inline const char* name(const UserScalars& settings) {
     const int index = detect(settings);
     return index < 0 ? "Custom" : values[index].name;
 }
 
-inline void apply(UserSettings& settings, int index) {
+inline void apply(UserScalars& settings, int index) {
     if (index < 0 || index >= count) return;
     const auto& preset = values[index];
     settings.loraSF = preset.sf;

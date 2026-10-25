@@ -17,7 +17,22 @@ public:
     const std::string& getText() const { return _text; }
     uint64_t revision() const { return _revision; }
     bool setText(const std::string& text);
+    bool setText(const char* text, size_t length);
+    bool appendText(const char* text, size_t length);
     void clear();
+    void clearSensitive() {
+        volatile char* bytes = _text.empty() ? nullptr : &_text[0];
+        for (size_t n = 0; n < _text.size(); ++n) bytes[n] = 0;
+        clear();
+    }
+    // Call after a submit callback returns, never from inside that callback.
+    void release() {
+        _active = false;
+        _submitCb = nullptr;
+        clearSensitive();
+        std::string().swap(_text);
+        _capacityLimit = 0;
+    }
     // Reserve before an owner admits work that requires retaining this text.
     // Existing field editors keep their ordinary length policy.
     bool reserveTextCapacity(size_t capacity);
@@ -28,6 +43,7 @@ public:
     void setActive(bool active) { _active = active; }
     void setMaxLength(int len) { _maxLength = len; }
     void setNumericOnly(bool numeric) { _numericOnly = numeric; }
+    void setAllowEmptySubmit(bool allow) { _allowEmptySubmit = allow; }
 
     // Callback when Enter is pressed
     using SubmitCallback = std::function<void(const std::string&)>;
@@ -43,5 +59,6 @@ private:
     unsigned long _lastBlink = 0;
     int _maxLength = 200;
     bool _numericOnly = false;
+    bool _allowEmptySubmit = false;
     SubmitCallback _submitCb;
 };

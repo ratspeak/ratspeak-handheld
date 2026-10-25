@@ -17,6 +17,7 @@ template<size_t N> void ConversationWindow<N>::open(uint32_t identity, Order ord
     if (!identity || !storage::validConversationOrder(order) || !changeView()) return;
     auto& c = _control.value;
     c.identity = identity; c.order = order; c.open = true; c.state = State::Loading;
+    c.navigationPending = true;
     c.intent = Intent::First; c.followFirst = true; c.updated = false; c.scrollOffset = 0;
     std::memset(c.selected, 0, 16); c.selectedValid = false;
     if (!c.awaiting) c.phase = Phase::Idle;
@@ -29,6 +30,7 @@ template<size_t N> void ConversationWindow<N>::resume(uint32_t identity, Order o
     if (!changeView()) return;
     auto& c = _control.value;
     c.identity = identity; c.order = order; c.open = true;
+    c.navigationPending = false;
     // The live bank already belongs to this identity/order. Re-entering an
     // unchanged list needs no filesystem read; hidden mutations are revisioned.
     bool stale = info.sourceRevision != c.observedRevision || c.updated || !freshnessAvailable();
@@ -42,6 +44,7 @@ template<size_t N> void ConversationWindow<N>::close() {
     changeView();
     auto& c = _control.value;
     c.open = false; c.state = State::Closed; c.intent = Intent::None;
+    _banks[c.active].info.value.statusRefresh = {};
     if (!c.awaiting) c.phase = Phase::Idle;
 }
 template<size_t N> bool ConversationWindow<N>::visible() const {
@@ -51,6 +54,10 @@ template<size_t N> bool ConversationWindow<N>::visible() const {
 template<size_t N> bool ConversationWindow<N>::loading() const {
     const auto& c = _control.value;
     return c.open && (c.awaiting || c.phase != Phase::Idle || c.intent != Intent::None);
+}
+template<size_t N> bool ConversationWindow<N>::pageLoading() const {
+    const auto& c = _control.value;
+    return c.open && (!visible() || c.navigationPending);
 }
 template<size_t N> size_t ConversationWindow<N>::count() const { return visible() ? live().info.value.count : 0; }
 template<size_t N> uint32_t ConversationWindow<N>::total() const { return visible() ? live().info.value.total : 0; }
@@ -84,6 +91,7 @@ template<size_t N> bool ConversationWindow<N>::navigate(Intent intent) {
     auto& c = _control.value;
     if (!c.open || (intent != Intent::First && !visible()) || !changeView()) return false;
     c.intent = intent; c.state = State::Loading; c.scrollOffset = 0;
+    c.navigationPending = true;
     c.followFirst = intent == Intent::First;
     if (c.followFirst) c.updated = false;
     std::memset(c.selected, 0, 16); c.selectedValid = false;
@@ -143,6 +151,9 @@ template<size_t N> void ConversationWindow<N>::beginIntent() {
         info.hasCursor = true;
         info.page = intent == Intent::Previous ? (info.page > 1 ? info.page - 1 : 1) : info.page + 1;
     }
+    // An automatic body refresh must not restart a continuing status outage.
+    // Navigation, identity/order changes and a closed view start a new grace.
+    info.statusRefresh = intent == Intent::Refresh && visible() ? live().info.value.statusRefresh : StatusRefresh{};
     info.count = 0; info.sourceRevision = c.observedRevision;
     c.index = 0; c.publish = false; c.phase = Phase::Page;
 }
@@ -297,7 +308,7 @@ template<size_t N> bool ConversationWindow<N>::detailResult(const storage::Resul
         result.key.incoming != bool(selected.incoming) || !samePeer(value.peer, selected.cursor.peer) ||
         value.timestamp != selected.cursor.timestamp || value.previewLength >= sizeof(value.preview) ||
         value.preview[value.previewLength] || std::memchr(value.preview, 0, value.previewLength) ||
-        value.error != storage::Error::None || value.status > uint8_t(LXMFStatus::UNCONFIRMED) ||
+        value.error != storage::Error::None || value.status > handheld::messaging::LastStatus ||
         value.durableStatus != value.status || value.unreadCount > value.totalCount ||
         (value.flags & ~(Row::LastIncoming | Row::HasOutgoing | Row::PreviewTruncated)) ||
         bool(value.flags & Row::LastIncoming) != bool(selected.incoming) ||
@@ -317,6 +328,7 @@ template<size_t N> void ConversationWindow<N>::publish() {
     auto& c = _control.value;
     if (c.publication == UINT32_MAX) { c.state = State::Exhausted; c.error = storage::Error::RevisionExhausted; return; }
     c.active ^= 1; ++c.publication; c.held = true; c.phase = Phase::Idle; c.publish = false;
+    c.navigationPending = false;
     c.state = State::Ready; c.statusDirty = true; c.statusReady = false; c.retryAt = 0;
     c.followFirst = !live().info.value.moreBefore;
     c.updated = live().info.value.sourceRevision != c.observedRevision;
@@ -328,8 +340,8 @@ template<size_t N> bool ConversationWindow<N>::statusResult(const storage::Resul
         result.key.counter != current.lastOutgoingCounter || result.revision != c.sampledStatusRevision ||
         result.revision != c.observedStatusRevision) return false;
     StatusProjection projection; std::memcpy(&projection, bytes, sizeof(projection));
-    if (projection.counter != result.key.counter || projection.desired > uint8_t(LXMFStatus::UNCONFIRMED) ||
-        projection.durable > uint8_t(LXMFStatus::UNCONFIRMED) || projection.error > storage::Error::Internal ||
+    if (projection.counter != result.key.counter || projection.desired > handheld::messaging::LastStatus ||
+        projection.durable > handheld::messaging::LastStatus || projection.error > storage::Error::Internal ||
         (projection.flags & ~(StatusProjection::Available | StatusProjection::Pending | StatusProjection::TxSuppressed))) return false;
     if (!(projection.flags & StatusProjection::Available)) {
         unavailableStatus(projection.error == storage::Error::None ? storage::Error::Unavailable : projection.error);
@@ -372,6 +384,7 @@ template<size_t N> void ConversationWindow<N>::finishStatuses(uint32_t now) {
         c.statusFailed = true;
     }
     c.phase = Phase::Idle; c.statusReady = true; c.statusDirty = c.statusFailed;
+    _banks[c.active].info.value.statusRefresh.finish(c.statusFailed, now);
     c.retryAt = c.statusFailed ? now + 1000 : 0;
     if (c.statusPublication == UINT32_MAX) { c.state = State::Exhausted; c.error = storage::Error::RevisionExhausted; }
     else ++c.statusPublication;

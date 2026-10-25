@@ -1,5 +1,5 @@
 #include "../../../src/core/config/FirmwareVersion.h"
-// rsDeck boot launcher — picks Standalone or RNode at power-on.
+// Ratspeak boot launcher — picks Standalone or RNode at power-on.
 // Runs from ota_0; writes the choice to otadata and restarts. Both target
 // firmwares re-arm this launcher on boot, so any reset returns here.
 // Input reuses the standalone HAL (Trackball, TouchInput) via shim includes.
@@ -138,7 +138,7 @@ void drawScreen() {
   display.setTextSize(3);
   display.setTextColor(kText, kBg);
   display.setCursor(24, 14);
-  display.print("rsDeck");
+  display.print("Ratspeak");
 
   display.setTextSize(1);
   display.setTextColor(kMuted, kBg);
@@ -343,7 +343,7 @@ void setup() {
   display.setBrightness(200);
 
   selection.begin(loadLastChoice(), millis());
-  Serial.printf("[LAUNCHER] rsDeck launcher up, last choice: %s\n",
+  Serial.printf("[LAUNCHER] Ratspeak launcher up, last choice: %s\n",
                 selection.selected() == Choice::RNode ? "RNode" : "Standalone");
   drawScreen();
 }

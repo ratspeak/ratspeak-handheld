@@ -8,8 +8,11 @@ namespace handheld {
 // availability estimate: SDK allocations and fragmentation require live floors.
 // Each owner must enforce its row before integrated release qualification.
 struct ResourceBudget {
-    static constexpr size_t MicroNode = 32768;
-    static constexpr size_t ProtocolContext = 9216;
+    // Mirrors the Rust compile-time guards in protocol/src/lib.rs; openTransport
+    // also checks the linked artifact's MICRO node against MicroNode.
+    static constexpr size_t MicroNode = 32 * 1024;
+    static constexpr size_t ProtocolContext = 10 * 1024;
+    static constexpr size_t ProtocolBase = 42 * 1024; // Context plus MICRO node
     static constexpr size_t ResourceBuffer = 4096;
     static constexpr size_t ResourceDirections = 2;
     static constexpr size_t DirectCodecScratch = 4096;
@@ -17,6 +20,18 @@ struct ResourceBudget {
     static constexpr size_t OutgoingDescriptor = 320;
     static constexpr size_t OutgoingDescriptors = OutgoingEntries * OutgoingDescriptor;
     static constexpr size_t OutgoingBody = 4096;
+    static constexpr size_t PropagationNodes = 2048; // Five per first-hop family plus manual pin.
+    static constexpr size_t StampState = 384; // One Rust incremental job; never a full workblock.
+    static constexpr size_t StampOwner = 128;
+    static constexpr size_t RelayPreparation = 512; // One stamp owner plus metadata; no retained body.
+    static constexpr size_t PropagationInbox = 256; // Journal and scalar state; shared codec/storage credits.
+    static constexpr size_t RecipientStampCosts = 1344; // 32 bounded policy rows; codec reuses KeyMap's I/O buffer.
+    static constexpr size_t RrcSessionMicro = 8704;
+    static constexpr size_t RrcSessionSmall = 14336;
+    // Aggregate added fixed owners versus the pre-RRC candidate, including UI
+    // and Service copies. Dynamic SDK/LVGL and stack floors remain independent.
+    static constexpr size_t RrcIncrementMicro = 12288;
+    static constexpr size_t RrcIncrementSmall = 24576;
     static constexpr size_t CanvasHistoryText = 4096;
     static constexpr size_t CanvasHistoryRows = 1024;
     // Two independent 400-byte drafts, peer/identity bindings and editor state.
@@ -32,6 +47,9 @@ struct ResourceBudget {
     static constexpr size_t AutoPeers = 16; // preserves configured maximum
     static constexpr size_t LoRaRetainedBytes = 4096;
     static constexpr size_t PendingFrame = 640;
+    // Seven signed packets with original lifetimes, pacing and bounded replay followups.
+    // Their bytes also serve as the bounded exact-tag replay cache (no duplicate pool).
+    static constexpr size_t PathResponses = 7 * 720;
     static constexpr size_t InputEvents = 8;
     static constexpr size_t InputEventBytes = 16;
     static constexpr size_t InputRetention = InputEvents * InputEventBytes;
@@ -58,6 +76,8 @@ struct ResourceBudget {
     }
 };
 static_assert(ResourceBudget::OutgoingDescriptors == 6400, "Review outgoing retention changes");
+static_assert(ResourceBudget::ProtocolContext + ResourceBudget::MicroNode == ResourceBudget::ProtocolBase,
+              "Mirror the Rust context and node guards together");
 static_assert(ResourceBudget::InputRetention == 128, "Review input retention changes");
 static_assert(ResourceBudget::CardInternalFree == storage::Budget::CardHeapFloor,
               "Storage and global internal-heap floor must agree");

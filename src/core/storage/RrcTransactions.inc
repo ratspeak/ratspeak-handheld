@@ -1,0 +1,585 @@
+// Included once by MessageTransactions.cpp, inside handheld::storage. These
+// operations share its worker, filesystem lease and queue credits. RRC has a
+// separate counter, so corruption/exhaustion cannot consume LXMF counter space.
+// Flash is authoritative, as for the propagation journal. This version does not
+// restore from removable SD, so an old card cannot resurrect cleared records.
+namespace {
+constexpr size_t RrcPath = 192;
+constexpr size_t RrcQuota = WriteQueue::CompactProfile ? 256 * 1024 : 1024 * 1024;
+constexpr size_t RrcHistoryLimit = WriteQueue::CompactProfile ? 100 : 300;
+
+void rrcDirectory(const rrc::Context& context, char (&path)[RrcPath]) {
+    char local[33], hub[33], room[33];
+    encodeHex(context.local, 16, local); encodeHex(context.hub, 16, hub);
+    encodeHex(context.conversation, 16, room);
+    snprintf(path, sizeof path, "/rrc/%s/%s/%s", local, hub, room);
+}
+void rrcPath(const rrc::Context& context, rrc::Kind kind, const uint8_t file[16], char (&path)[RrcPath]) {
+    rrcDirectory(context, path);
+    const size_t at = strlen(path);
+    if (kind == rrc::Kind::Message) {
+        char key[33]; encodeHex(file, 16, key); snprintf(path + at, sizeof path - at, "/m%s.rrc", key);
+    } else snprintf(path + at, sizeof path - at, "/%u.rrc", unsigned(kind));
+}
+const char* rrcBasename(const char* name) { const auto* slash = strrchr(name, '/'); return slash ? slash + 1 : name; }
+bool rrcMessageName(const char* name, uint8_t key[16]) {
+    name = rrcBasename(name);
+    return (strlen(name) == 37 || (strlen(name) == 41 && !strcmp(name + 37, ".bak"))) &&
+        name[0] == 'm' && !strncmp(name + 33, ".rrc", 4) && decodeHex(name + 1, 32, key, 16);
+}
+template<class Medium>
+bool rrcEnumerate(Medium& medium, const rrc::Context& context, const char* entry,
+                  uint8_t key[16], char (&path)[RrcPath]) {
+    if (!rrcMessageName(entry, key)) return false;
+    rrcPath(context, rrc::Kind::Message, key, path);
+    // A sole backup is a recoverable record; a pair contributes exactly one
+    // selector. Its physical bytes are still both charged to the quota.
+    return strlen(rrcBasename(entry)) == 37 || !medium.exists(path);
+}
+template<class Medium>
+bool rrcRemove(Medium& medium, const char* path) {
+    char backup[RrcPath + 8]; snprintf(backup, sizeof backup, "%s.bak", path);
+    if (medium.exists(backup) && !medium.remove(backup)) return false;
+    return !medium.exists(path) || medium.remove(path);
+}
+template<class Medium>
+Error rrcInspect(Medium& medium, const char* path, rrc::Record& record, bool& present) {
+    present = medium.exists(path);
+    if (!present) return Error::None;
+    File file = medium.open(path);
+    if (!file) return Error::Read;
+    const auto length = file.size();
+    if (length < rrc::Header || length > rrc::Maximum) return Error::InvalidRecord;
+    size_t received = 0;
+    while (received < length) {
+        const auto part = file.read(record.bytes + received, length - received);
+        if (!part || part > length - received) return Error::Read;
+        received += part;
+    }
+    return record.valid(length) ? Error::None : Error::InvalidRecord;
+}
+template<class Medium>
+Error rrcLoad(Medium& medium, const char* path, const rrc::Context& context,
+              rrc::Kind kind, rrc::Record& record, bool& present, bool repair = false) {
+    bool primary = false, backup = false;
+    const auto first = rrcInspect(medium, path, record, primary);
+    const bool primaryValid = primary && first == Error::None && record.matches(context) && record.kind() == kind;
+    rrc::Record older; char backupPath[RrcPath + 8]; snprintf(backupPath, sizeof backupPath, "%s.bak", path);
+    const auto second = rrcInspect(medium, backupPath, older, backup);
+    const bool backupValid = backup && second == Error::None && older.matches(context) && older.kind() == kind;
+    present = primary || backup;
+    if (!present) return Error::None;
+    // A corrupt committed deletion marker must never fall back to an older
+    // cutoff and make previously cleared history visible again.
+    if (kind == rrc::Kind::Tombstone && primary && !primaryValid) return Error::InvalidRecord;
+    if (!primaryValid && !backupValid) return first != Error::None ? first : second != Error::None ? second : Error::InvalidRecord;
+    if (backupValid && (!primaryValid || older.revision() > record.revision())) {
+        record = older;
+        if (repair) {
+            // Preserve the sole valid copy before atomicStream can rotate a
+            // primary over it. A failed promotion leaves the backup readable.
+            if (primary && !medium.remove(path)) return Error::Rename;
+            if (!medium.rename(backupPath, path)) return Error::Rename;
+        }
+    }
+    return Error::None;
+}
+template<class Medium>
+bool rrcEnsure(Medium& medium, const rrc::Context& context) {
+    char path[RrcPath]; rrcDirectory(context, path);
+    for (char* part = path + 1; *part; ++part) {
+        if (*part != '/') continue;
+        *part = 0; const bool ok = medium.ensureDir(path); *part = '/';
+        if (!ok) return false;
+    }
+    return medium.ensureDir(path);
+}
+
+// Fixed-depth walk: local identity / hub / conversation. No filename vector,
+// recursive directory allocation, protocol callback or foreign identity scan.
+template<class Medium, class Visit>
+Error rrcWalk(Medium& medium, const uint8_t local[16], Visit&& visit) {
+    char id[33], root[RrcPath]; encodeHex(local, 16, id); snprintf(root, sizeof root, "/rrc/%s", id);
+    if (!medium.exists(root)) return Error::None;
+    File hubs = medium.open(root); if (!hubs || !hubs.isDirectory()) return Error::Read;
+    unsigned visited = 0;
+    while (File hub = hubs.openNextFile()) {
+        rrc::Context context; memcpy(context.local, local, 16);
+        const char* hubName = rrcBasename(hub.name());
+        if (!hub.isDirectory() || !decodeHex(hubName, strlen(hubName), context.hub, 16)) continue;
+        while (File room = hub.openNextFile()) {
+            const char* roomName = rrcBasename(room.name());
+            if (!room.isDirectory() || !decodeHex(roomName, strlen(roomName), context.conversation, 16)) continue;
+            while (File file = room.openNextFile()) {
+                if (++visited > 16384) return Error::InvalidRecord;
+                if (file.isDirectory()) return Error::InvalidRecord;
+                char path[RrcPath]; rrcDirectory(context, path);
+                const auto at = strlen(path); const char* name = rrcBasename(file.name());
+                if (strlen(name) >= sizeof path - at - 1) return Error::InvalidRecord;
+                snprintf(path + at, sizeof path - at, "/%s", name);
+                const auto size = file.size(); file.close();
+                const auto error = visit(context, path, size);
+                if (error != Error::None) return error;
+                yield();
+            }
+        }
+    }
+    return Error::None;
+}
+}
+
+bool MessageTransactions::reserveRrcCounter(uint32_t& counter, uint32_t minimum) {
+    Preferences preferences;
+    if (!preferences.begin(NVS_NS_MSG, false)) return false;
+    if (!_rrcReservedThrough) _rrcNextCounter = std::max(uint32_t(1), preferences.getUInt("rrcctr", 1));
+    _rrcNextCounter = std::max(_rrcNextCounter, minimum);
+    if (_rrcNextCounter == UINT32_MAX) { preferences.end(); return false; }
+    if (_rrcNextCounter >= _rrcReservedThrough) {
+        const uint32_t ceiling = _rrcNextCounter > UINT32_MAX - 32 ? UINT32_MAX : _rrcNextCounter + 32;
+        if (preferences.putUInt("rrcctr", ceiling) != sizeof(uint32_t) || preferences.getUInt("rrcctr", 0) != ceiling) {
+            preferences.end(); return false;
+        }
+        _rrcReservedThrough = ceiling;
+    }
+    preferences.end(); counter = _rrcNextCounter++; return true;
+}
+
+void MessageTransactions::rrcTransaction(const Request& request, uint8_t* bytes,
+                                        size_t length, size_t capacity, Result& result) {
+    if (!bytes || capacity < Budget::SmallPayload || length < rrc::Header || length > rrc::Maximum) {
+        result.error = Error::InvalidRecord; return;
+    }
+    rrc::Record input; memcpy(input.bytes, bytes, length);
+    if (!input.valid(length)) { result.error = Error::InvalidRecord; return; }
+    const auto context = input.context(); const auto kind = input.kind();
+    auto flash = medium(0);
+    if (!flash.isReady()) { result.error = Error::Unavailable; return; }
+    char path[RrcPath]; rrcPath(context, kind, request.messageId, path);
+    auto finish = [&](const rrc::Record& record, bool duplicate = false) {
+        memcpy(bytes, record.bytes, record.length()); result.length = uint16_t(record.length());
+        result.key.counter = record.counter(); result.revision = record.revision();
+        result.outcome = Outcome::Committed; result.error = Error::None; result.duplicate = duplicate;
+    };
+    auto marker = [&](rrc::Kind markerKind, uint32_t& counter) {
+        char name[RrcPath]; rrcPath(context, markerKind, request.messageId, name);
+        rrc::Record record; bool present = false;
+        const auto error = rrcLoad(flash, name, context, markerKind, record, present);
+        counter = present && error == Error::None ? record.counter() : 0;
+        return error;
+    };
+    uint32_t deleted = 0;
+    result.error = marker(rrc::Kind::Tombstone, deleted); if (result.error != Error::None) return;
+
+    if(request.operation==Operation::RrcPrivateInbox) {
+        if(kind!=rrc::Kind::Preferences || input.payloadLength()!=4 || memcmp(input.payload(),"HQN1",4) ||
+            (request.historyDirection!=HistoryDirection::Before && request.historyDirection!=HistoryDirection::After)) {
+            result.error=Error::InvalidRecord;return;
+        }
+        for(auto byte:context.conversation) if(byte) {result.error=Error::InvalidRecord;return;}
+        const bool before=request.historyDirection==HistoryDirection::Before;
+        rrc::PrivateNotice rows[rrc::SavedPageCapacity]{};size_t used=0,eligible=0;
+        char parent[RrcPath];rrcDirectory(context,parent);*strrchr(parent,'/')=0;
+        if(flash.exists(parent)) {
+            File conversations=flash.open(parent);
+            if(!conversations || !conversations.isDirectory()) {result.error=Error::Read;return;}
+            unsigned visited=0;
+            while(File directory=conversations.openNextFile()) {
+                if(++visited>4096) {result.error=Error::InvalidRecord;return;}
+                auto scope=context;const char* name=rrcBasename(directory.name());
+                if(!directory.isDirectory() || !decodeHex(name,strlen(name),scope.conversation,16)) continue;
+                directory.close();char descriptorPath[RrcPath];rrcPath(scope,rrc::Kind::Preferences,nullptr,descriptorPath);
+                rrc::Record descriptor;bool found=false;
+                result.error=rrcLoad(flash,descriptorPath,scope,rrc::Kind::Preferences,descriptor,found);
+                if(result.error!=Error::None) return;
+                if(!found || !descriptor.counter()) continue;
+                if(!rrc::privateDescriptor(descriptor)) {result.error=Error::InvalidRecord;return;}
+                ++result.total;const auto counter=descriptor.counter();
+                if(request.key.counter && (before?counter>=request.key.counter:counter<=request.key.counter)) continue;
+                ++eligible;size_t at=0;
+                while(at<used && (before?rows[at].counter>counter:rows[at].counter<counter)) ++at;
+                if(at<used && rows[at].counter==counter) {result.error=Error::InvalidRecord;return;}
+                if(at>=rrc::SavedPageCapacity) continue;
+                if(used<rrc::SavedPageCapacity) ++used;
+                for(size_t n=used-1;n>at;--n) rows[n]=rows[n-1];
+                rows[at]={};rows[at].counter=counter;memcpy(rows[at].key,scope.conversation,16);
+                memcpy(rows[at].participant,descriptor.payload()+4,16);yield();
+            }
+        }
+        // Count only the displayed conversations. This is still bounded worker
+        // IO; no transcript buffers or filenames survive the query.
+        for(size_t n=0;n<used;++n) {
+            auto scope=context;memcpy(scope.conversation,rows[n].key,16);uint32_t through=0;
+            for(auto markerKind:{rrc::Kind::Tombstone,rrc::Kind::ReadMarker}) {
+                char markerPath[RrcPath];rrcPath(scope,markerKind,nullptr,markerPath);
+                rrc::Record record;bool found=false;result.error=rrcLoad(flash,markerPath,scope,markerKind,record,found);
+                if(result.error!=Error::None) return;if(found) through=std::max(through,record.counter());
+            }
+            char roomPath[RrcPath];rrcDirectory(scope,roomPath);File records=flash.open(roomPath);
+            if(!records || !records.isDirectory()) {result.error=Error::Read;return;}
+            unsigned visited=0;
+            while(File file=records.openNextFile()) {
+                if(++visited>4096) {result.error=Error::InvalidRecord;return;}
+                uint8_t key[16];char recordPath[RrcPath];
+                if(file.isDirectory() || !rrcEnumerate(flash,scope,file.name(),key,recordPath)) continue;
+                file.close();rrc::Record record;bool found=false;
+                result.error=rrcLoad(flash,recordPath,scope,rrc::Kind::Message,record,found);
+                if(result.error!=Error::None) return;
+                if(found && record.status()==rrc::Status::Received && !record.flags() && record.counter()>through) ++rows[n].unread;
+                yield();
+            }
+        }
+        if(!before) std::reverse(rows,rows+used);
+        memcpy(bytes,rows,used*sizeof rows[0]);result.length=uint16_t(used*sizeof rows[0]);
+        result.key.counter=used?rows[before?used-1:0].counter:0;
+        result.more=eligible>used;result.outcome=Outcome::Committed;return;
+    }
+
+    if (request.operation == Operation::RrcSavedRooms) {
+        // HQS1 + page capacity + exclusion count + zero reserved bytes + keys.
+        // The caller excludes live rooms already projected by the protocol
+        // owner. The durable HRI1 index alone decides whether a room is saved;
+        // abandoned/forgotten room preferences cannot resurrect a bookmark.
+        const auto* query = input.payload();
+        if (kind != rrc::Kind::Preferences || input.payloadLength() < 8 ||
+            memcmp(query,"HQS1",4) || query[4] > rrc::SavedPageCapacity || query[5] > 8 ||
+            query[6] || query[7] || input.payloadLength() != 8 + size_t(query[5])*16) {
+            result.error=Error::InvalidRecord;return;
+        }
+        for (auto byte:context.conversation) if (byte) { result.error=Error::InvalidRecord;return; }
+        rrc::Record indexRecord;bool present=false;
+        result.error=rrcLoad(flash,path,context,rrc::Kind::Preferences,indexRecord,present);
+        if (result.error!=Error::None) return;
+        handheld::rrc::SavedIndex index;
+        if (present && (!handheld::rrc::decodeIndex(indexRecord.payload(),indexRecord.payloadLength(),index,nullptr,nullptr) ||
+            index.count>handheld::rrc::SavedRoomCapacity)) {result.error=Error::InvalidRecord;return;}
+        rrc::SavedRoom rows[rrc::SavedPageCapacity]{};size_t used=0,eligible=0;
+        for (size_t n=0;n<index.count;++n) {
+            bool excluded=false;
+            for (size_t m=0;m<query[5];++m) excluded |= !memcmp(index.keys[n],query+8+m*16,16);
+            if (excluded) continue;
+            const auto position=eligible++;
+            if (position<request.key.counter || used>=query[4]) continue;
+            auto scope=context;memcpy(scope.conversation,index.keys[n],16);
+            char roomPath[RrcPath];rrcPath(scope,rrc::Kind::Preferences,nullptr,roomPath);
+            rrc::Record room;bool found=false;
+            result.error=rrcLoad(flash,roomPath,scope,rrc::Kind::Preferences,room,found);
+            if (result.error!=Error::None) return;
+            if (!found || !handheld::rrc::validRoomPreference(room.payload(),room.payloadLength())) {
+                result.error=Error::InvalidRecord;return;
+            }
+            auto& row=rows[used++];memcpy(row.key,index.keys[n],16);memcpy(row.name,room.payload()+7,sizeof row.name);
+            row.notifications=room.payload()[4];row.keyRemembered=room.payloadLength()>handheld::rrc::RoomPreferenceHeader;
+            yield();
+        }
+        memcpy(bytes,rows,used*sizeof rows[0]);result.length=uint16_t(used*sizeof rows[0]);
+        result.total=eligible;result.nextOffset=request.key.counter+used;
+        result.more=result.nextOffset<eligible;result.outcome=Outcome::Committed;return;
+    }
+
+    if (request.operation == Operation::RrcPage) {
+        if (kind != rrc::Kind::Message || (request.historyDirection != HistoryDirection::Before &&
+            request.historyDirection != HistoryDirection::After)) { result.error = Error::InvalidRecord; return; }
+        const bool before = request.historyDirection == HistoryDirection::Before;
+        uint32_t readThrough = 0; result.error = marker(rrc::Kind::ReadMarker, readThrough);
+        if (result.error != Error::None) return;
+        constexpr size_t Count = Budget::SmallPayload / sizeof(rrc::Selector);
+        rrc::Selector rows[Count]{}; size_t used = 0, eligible = 0;
+        char parent[RrcPath]; rrcDirectory(context, parent);
+        if (flash.exists(parent)) {
+            File directory = flash.open(parent);
+            if (!directory || !directory.isDirectory()) { result.error = Error::Read; return; }
+            unsigned visited = 0;
+            while (File file = directory.openNextFile()) {
+                if (++visited > 4096) { result.error = Error::InvalidRecord; return; }
+                rrc::Selector row; char name[RrcPath];
+                if (file.isDirectory() || !rrcEnumerate(flash, context, file.name(), row.file, name)) continue;
+                file.close();
+                rrc::Record record; bool present = false;
+                result.error = rrcLoad(flash, name, context, kind, record, present);
+                if (result.error != Error::None) return;
+                if (!present || !record.counter() || record.counter() <= deleted) continue;
+                ++result.total;
+                if (record.status() == rrc::Status::Received && !record.flags() && record.counter() > readThrough) ++result.unreadDelta;
+                if (request.key.counter && (before ? record.counter() >= request.key.counter :
+                    record.counter() <= request.key.counter)) continue;
+                ++eligible; row.counter = record.counter(); row.revision = record.revision();
+                row.status = record.status(); row.flags = record.flags();
+                // Retain the nearest bounded page on the requested side.
+                size_t at = 0; while (at < used && (before ? rows[at].counter > row.counter :
+                    rows[at].counter < row.counter)) ++at;
+                if (at < used && rows[at].counter == row.counter) { result.error = Error::InvalidRecord; return; }
+                if (at >= Count) continue;
+                if (used < Count) ++used;
+                for (size_t n = used - 1; n > at; --n) rows[n] = rows[n - 1];
+                rows[at] = row;
+            }
+        }
+        if (before) std::reverse(rows, rows + used);
+        memcpy(bytes, rows, used * sizeof(rows[0]));
+        result.length = uint16_t(used * sizeof(rows[0])); result.more = eligible > used;
+        result.key.counter = used ? rows[before ? 0 : used - 1].counter : 0; result.outcome = Outcome::Committed; return;
+    }
+
+    if (request.operation == Operation::RrcRead || request.operation == Operation::RrcStatus) {
+        rrc::Record record; bool present = false;
+        if (request.operation == Operation::RrcRead && kind == rrc::Kind::Message && !request.hasMessageId) {
+            if (!request.key.counter) { result.error = Error::InvalidRecord; return; }
+            char parent[RrcPath]; rrcDirectory(context, parent);
+            if (request.key.counter > deleted && flash.exists(parent)) {
+                File directory = flash.open(parent);
+                if (!directory || !directory.isDirectory()) { result.error = Error::Read; return; }
+                unsigned visited = 0;
+                while (File file = directory.openNextFile()) {
+                    if (++visited > 4096) { result.error = Error::InvalidRecord; return; }
+                    uint8_t key[16]; char name[RrcPath];
+                    if (file.isDirectory() || !rrcEnumerate(flash, context, file.name(), key, name)) continue;
+                    file.close(); rrc::Record candidate; bool found = false;
+                    result.error = rrcLoad(flash, name, context, kind, candidate, found);
+                    if (result.error != Error::None) return;
+                    if (found && candidate.counter() == request.key.counter) {
+                        if (present) { result.error = Error::InvalidRecord; return; }
+                        present = true; record = candidate;
+                    }
+                    yield();
+                }
+            }
+        } else result.error = rrcLoad(flash, path, context, kind, record, present, request.operation == Operation::RrcStatus);
+        if (result.error != Error::None) return;
+        if (!present || (kind == rrc::Kind::Message && record.counter() <= deleted)) {
+            if (request.operation == Operation::RrcStatus) { result.error = Error::Stale; return; }
+            result.outcome = Outcome::Committed; result.duplicate = true; return;
+        }
+        if ((request.key.counter && record.counter() != request.key.counter) ||
+            (request.offset && record.revision() != request.offset)) { result.error = Error::Stale; return; }
+        if (request.operation == Operation::RrcRead) { finish(record); return; }
+        if (kind != rrc::Kind::Message || record.revision() == UINT32_MAX) { result.error = Error::RevisionExhausted; return; }
+        if (!rrc::transition(record.status(), input.status())) { result.error = Error::Stale; return; }
+        if (record.status() == input.status()) { finish(record, true); return; }
+        record.status(input.status()); record.revision(record.revision() + 1); record.seal();
+        const MemorySource source(record.bytes, record.length());
+        result.error = flash.write(path, source); if (result.error != Error::None) return;
+        result.flash = {true, true, Error::None}; finish(record); return;
+    }
+
+    if (request.operation == Operation::RrcMarkRead || request.operation == Operation::RrcClear) {
+        const bool clearing = request.operation == Operation::RrcClear;
+        const auto markerKind = clearing ? rrc::Kind::Tombstone : rrc::Kind::ReadMarker;
+        if (!rrcEnsure(flash, context)) { result.error = Error::Write; return; }
+        char markerPath[RrcPath]; rrcPath(context, markerKind, request.messageId, markerPath);
+        rrc::Record oldMarker; bool hadMarker = false;
+        result.error = rrcLoad(flash, markerPath, context, markerKind, oldMarker, hadMarker, true);
+        if (result.error != Error::None) return;
+        if (hadMarker && oldMarker.revision() == UINT32_MAX) { result.error = Error::RevisionExhausted; return; }
+        const uint32_t previous = hadMarker ? oldMarker.counter() : 0;
+        uint32_t through = request.key.counter;
+        uint32_t highest = std::max(previous, deleted);
+        char parent[RrcPath]; rrcDirectory(context, parent); File records = flash.open(parent);
+        if (!records || !records.isDirectory()) { result.error = Error::Read; return; }
+        unsigned scanned = 0;
+        while (File file = records.openNextFile()) {
+            if (++scanned > 4096) { result.error = Error::InvalidRecord; return; }
+            uint8_t key[16]; char name[RrcPath];
+            if (file.isDirectory() || !rrcEnumerate(flash, context, file.name(), key, name)) continue;
+            file.close();
+            rrc::Record old; bool found = false;
+            const auto error = rrcLoad(flash, name, context, rrc::Kind::Message, old, found);
+            if (error != Error::None && !clearing) { result.error = error; return; }
+            if (error == Error::None && found) highest = std::max(highest, old.counter());
+        }
+        records.close();
+        if (clearing && (highest == UINT32_MAX || !reserveRrcCounter(through, highest + 1))) {
+            result.error = Error::CounterExhausted; return;
+        }
+        if (!clearing && through > highest) { result.error = Error::Stale; return; }
+        rrc::Record record; rrc::Record::make(record, context, markerKind, nullptr, 0);
+        record.counter(std::max(previous, through)); record.revision(hadMarker ? oldMarker.revision() + 1 : 1); record.seal();
+        rrcPath(context, markerKind, request.messageId, path);
+        const MemorySource source(record.bytes, record.length());
+        result.error = flash.write(path, source); if (result.error != Error::None) return;
+        if (clearing) {
+            // The marker already hides these records, including after a reset
+            // during cleanup. Never touch preferences or drafts.
+            char parent[RrcPath]; rrcDirectory(context, parent); File directory = flash.open(parent);
+            unsigned visited = 0;
+            while (File file = directory.openNextFile()) {
+                if (++visited > 4096) { result.more = true; break; }
+                uint8_t key[16]; char name[RrcPath];
+                if (file.isDirectory() || !rrcEnumerate(flash, context, file.name(), key, name)) continue;
+                file.close();
+                // No append can interleave this executor operation. Explicit
+                // clear also removes unreadable records in this exact room.
+                if (!rrcRemove(flash, name)) result.more = true;
+            }
+        }
+        result.flash = {true, true, Error::None}; finish(record); return;
+    }
+
+    const bool append = request.operation == Operation::RrcAppend;
+    const bool observe = request.operation == Operation::RrcObserve;
+    bool observationRequested=false;for(auto byte:request.destination) observationRequested|=byte!=0;
+    if ((!append && !observe && request.operation != Operation::RrcWrite) ||
+        (append && (kind != rrc::Kind::Message || !input.payloadLength() || input.flags())) ||
+        (observe && (kind!=rrc::Kind::Observation || !observationRequested || input.flags() || input.payloadLength())) ||
+        (!append && !observe && kind != rrc::Kind::Preferences && kind != rrc::Kind::Draft) ||
+        (observationRequested && !append && !observe)) {
+        result.error = Error::InvalidRecord; return;
+    }
+    rrc::Record previous; bool present = false;
+    result.error = rrcLoad(flash, path, context, kind, previous, present, true);
+    if (result.error != Error::None) return;
+    if (append && present) { finish(previous, true); return; } // exact local file identity is immutable
+    if ((request.offset && (!present || request.offset != previous.revision())) ||
+        (present && previous.revision() == UINT32_MAX)) { result.error = Error::Stale; return; }
+    const size_t previousBytes = present ? previous.length() : 0;
+    const auto previousRevision=present?previous.revision():0;
+    // Draft bit 0 is an admission-only conditional replacement flag. The
+    // worker checked the exact persisted revision above; never store the flag.
+    if (kind == rrc::Kind::Draft) input.flags(0);
+    bool writeObservation=false,createBoundary=false;
+    uint32_t observationRevision=0,boundaryCounter=0;
+    char observationPath[RrcPath]{},boundaryPath[RrcPath]{};
+    size_t observationBytes=0;
+    if(observationRequested) {
+        rrcPath(context,rrc::Kind::Observation,nullptr,observationPath);bool exists=false;
+        result.error=rrcLoad(flash,observationPath,context,rrc::Kind::Observation,previous,exists,true);
+        if(result.error!=Error::None) return;
+        if(exists && !rrc::observation(previous)) {result.error=Error::InvalidRecord;return;}
+        observationRevision=exists?previous.revision():0;
+        observationBytes=exists?previous.length():0;
+        writeObservation=!exists || memcmp(previous.payload()+4,request.destination,16);
+        if(!writeObservation && observe) {finish(previous,true);return;}
+        if(writeObservation) {
+            if(observationRevision==UINT32_MAX) {result.error=Error::RevisionExhausted;return;}
+            rrcPath(context,rrc::Kind::Message,request.destination,boundaryPath);
+            result.error=rrcLoad(flash,boundaryPath,context,rrc::Kind::Message,previous,exists,true);
+            if(result.error!=Error::None) return;
+            if(exists && (!rrc::boundary(previous) || memcmp(previous.payload()+4,request.destination,16))) {
+                result.error=Error::InvalidRecord;return;
+            }
+            // A failed marker write can leave the boundary committed. Reuse it
+            // on retry, unless an explicit clear has already hidden that row.
+            createBoundary=!exists || previous.counter()<=deleted;
+            if(!createBoundary) boundaryCounter=previous.counter();
+        }
+    }
+    bool privateConversation=false;for(auto byte:request.source) privateConversation|=byte!=0;
+    bool createPrivate=false;uint32_t privateCounter=0;
+    char privatePath[RrcPath]{};
+    if (privateConversation) {
+        if (!append && kind!=rrc::Kind::Draft) {result.error=Error::InvalidRecord;return;}
+        rrcPath(context,rrc::Kind::Preferences,nullptr,privatePath);bool exists=false;
+        result.error=rrcLoad(flash,privatePath,context,rrc::Kind::Preferences,previous,exists,true);
+        if(result.error!=Error::None) return;
+        if(exists && (!rrc::privateDescriptor(previous) || memcmp(previous.payload()+4,request.source,16))) {
+            result.error=Error::InvalidRecord;return;
+        }
+        createPrivate=!exists;
+    }
+    // Quota and retention are worker work. No directory IO reaches the protocol
+    // or UI owner. A new private conversation reserves its 100-byte descriptor
+    // as well as the message/draft before either write; both use this one job.
+    uint32_t highest = 0;
+    auto usage = [&](size_t& total, size_t& roomCount, char (&oldest)[RrcPath], bool roomOnly) {
+        total = roomCount = 0; uint32_t oldestCounter = UINT32_MAX; oldest[0] = 0;
+        return rrcWalk(flash, context.local, [&](const rrc::Context& c, const char* name, size_t size) {
+            if (size > RrcQuota || total > RrcQuota * 2 - size) return Error::InvalidRecord;
+            total += size; uint8_t fileKey[16]; char canonical[RrcPath];
+            // The prior revision/length have already been saved. Reuse that
+            // record for the scan rather than nesting another 512-byte body.
+            auto& record=previous; bool exists=false;
+            const auto* basename=rrcBasename(name);
+            const bool tombstoneFile=!strcmp(basename,"5.rrc") || !strcmp(basename,"5.rrc.bak");
+            const bool readMarkerFile=!strcmp(basename,"4.rrc") || !strcmp(basename,"4.rrc.bak");
+            if(tombstoneFile || readMarkerFile) {
+                // Cleared or fully trimmed histories can retain only cursors.
+                // NVS recovery must stay above those counters in every room.
+                const auto markerKind=tombstoneFile?rrc::Kind::Tombstone:rrc::Kind::ReadMarker;
+                rrcPath(c,markerKind,nullptr,canonical);
+                const auto error=rrcLoad(flash,canonical,c,markerKind,record,exists);
+                if(error!=Error::None) return error;
+                if(exists) {
+                    if(record.payloadLength() || record.flags() || record.status()!=rrc::Status::Received) return Error::InvalidRecord;
+                    highest=std::max(highest,record.counter());
+                }
+                return Error::None;
+            }
+            const bool observationFile=!strcmp(rrcBasename(name),"6.rrc") || !strcmp(rrcBasename(name),"6.rrc.bak");
+            if (observationFile || !strcmp(rrcBasename(name),"2.rrc") || !strcmp(rrcBasename(name),"2.rrc.bak")) {
+                // Include private inbox cursors when recovering after NVS loss.
+                // A recovered descriptor must not reuse another inbox position.
+                const auto metadataKind=observationFile?rrc::Kind::Observation:rrc::Kind::Preferences;
+                rrcPath(c,metadataKind,nullptr,canonical);
+                const auto error=rrcLoad(flash,canonical,c,metadataKind,record,exists);
+                if(error!=Error::None) return error;
+                if(exists && record.counter()) {
+                    if(!(observationFile?rrc::observation(record):rrc::privateDescriptor(record))) return Error::InvalidRecord;
+                    highest=std::max(highest,record.counter());
+                }
+                return Error::None;
+            }
+            if (!rrcEnumerate(flash, c, name, fileKey, canonical)) return Error::None;
+            const auto error = rrcLoad(flash, canonical, c, rrc::Kind::Message, record, exists);
+            if (error != Error::None) return error;
+            if (!exists) return Error::None;
+            highest = std::max(highest, record.counter());
+            const bool sameRoom = !memcmp(&c, &context, sizeof c);
+            if (sameRoom) ++roomCount;
+            if ((roomOnly && !sameRoom) || !strcmp(canonical, path) || (boundaryPath[0] && !strcmp(canonical,boundaryPath)) || record.status() == rrc::Status::Pending ||
+                record.status() == rrc::Status::Unconfirmed || !record.counter() || record.counter() >= oldestCounter) return Error::None;
+            oldestCounter = record.counter(); snprintf(oldest, sizeof oldest, "%s", canonical); return Error::None;
+        });
+    };
+    size_t total = 0, count = 0; char oldest[RrcPath];
+    result.error = usage(total, count, oldest, false); if (result.error != Error::None) return;
+    const size_t newRows=(append?1:0)+(createBoundary?1:0);
+    const size_t newBytes=(observe?0:input.length()-std::min(input.length(),previousBytes))+
+        (createPrivate?rrc::Header+20:0)+(createBoundary?rrc::Header+20:0)+
+        (writeObservation?rrc::Header+20-observationBytes:0);
+    // Prepare the entire compound write before its first durable mutation.
+    // Pending/uncertain sends and drafts are never eviction candidates. Even a
+    // failure after the descriptor, boundary or marker leaves quotas satisfied.
+    for(unsigned n=0;total+newBytes>RrcQuota || count+newRows>RrcHistoryLimit;++n) {
+        const bool roomOnly=count+newRows>RrcHistoryLimit;
+        result.error=usage(total,count,oldest,roomOnly);if(result.error!=Error::None) return;
+        if(total+newBytes<=RrcQuota && count+newRows<=RrcHistoryLimit) break;
+        if(n==16 || !oldest[0] || !rrcRemove(flash,oldest)) {result.error=Error::Unavailable;return;}
+        result.error=usage(total,count,oldest,roomOnly);if(result.error!=Error::None) return;
+    }
+    highest=std::max(highest,deleted);
+    auto reserve=[&](uint32_t& counter) {
+        if(highest==UINT32_MAX || !reserveRrcCounter(counter,highest+1)) {result.error=Error::CounterExhausted;return false;}
+        highest=counter;return true;
+    };
+    if(createBoundary && !reserve(boundaryCounter)) return;
+    if(append || createPrivate) {
+        uint32_t counter;if(!reserve(counter)) return;
+        if(append) input.counter(counter);
+        if(createPrivate) privateCounter=counter;
+    }
+    input.revision(previousRevision+1);input.seal();
+    if (!rrcEnsure(flash, context)) { result.error = Error::Write; return; }
+    if(createPrivate) {
+        uint8_t payload[20];memcpy(payload,"HRN1",4);memcpy(payload+4,request.source,16);
+        rrc::Record::make(previous,context,rrc::Kind::Preferences,payload,sizeof payload);
+        previous.counter(privateCounter);previous.revision(1);previous.seal();
+        const MemorySource metadata(previous.bytes,previous.length());
+        result.error=flash.write(privatePath,metadata);if(result.error!=Error::None) return;
+    }
+    if(writeObservation) {
+        uint8_t payload[20];memcpy(payload+4,request.destination,16);
+        if(createBoundary) {
+            memcpy(payload,"HGB1",4);rrc::Record::make(previous,context,rrc::Kind::Message,payload,sizeof payload);
+            previous.flags(1);previous.counter(boundaryCounter);previous.revision(1);previous.seal();
+            const MemorySource boundary(previous.bytes,previous.length());
+            result.error=flash.write(boundaryPath,boundary);if(result.error!=Error::None) return;
+        }
+        memcpy(payload,"HGO1",4);rrc::Record::make(previous,context,rrc::Kind::Observation,payload,sizeof payload);
+        previous.counter(boundaryCounter);previous.revision(observationRevision+1);previous.seal();
+        const MemorySource observation(previous.bytes,previous.length());
+        result.error=flash.write(observationPath,observation);if(result.error!=Error::None) return;
+        if(observe) {result.flash={true,true,Error::None};finish(previous);return;}
+    }
+    const MemorySource source(input.bytes, input.length());
+    result.error = flash.write(path, source); if (result.error != Error::None) return;
+    result.flash = {true, true, Error::None};finish(input);
+}
