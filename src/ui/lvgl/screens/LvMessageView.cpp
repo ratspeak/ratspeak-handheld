@@ -15,6 +15,9 @@
 #include "fonts/fonts.h"
 #include "ui/RrcCompose.h"
 #include "history/RrcHistory.h"
+#if HAS_SOFT_KEYBOARD
+#include "LvSoftKeyboard.h"
+#endif
 
 namespace {
 
@@ -452,6 +455,12 @@ void LvMessageView::createUI(lv_obj_t* parent) {
         lv_event_code_t code = lv_event_get_code(e);
         if (code == LV_EVENT_FOCUSED || code == LV_EVENT_CLICKED || code == LV_EVENT_PRESSED) {
             self->dismissSelection();
+            if (code == LV_EVENT_CLICKED) {
+                self->_composing = true;
+#if HAS_SOFT_KEYBOARD
+                LvSoftKeyboard::show();
+#endif
+            }
             self->refreshComposerPlaceholder();
         } else if (code == LV_EVENT_DEFOCUSED) {
             self->refreshComposerPlaceholder();
@@ -865,7 +874,7 @@ void LvMessageView::onExit() {
         _retainedDraft=_inputText;_retainedDraftPeer=_peerHex;_retainedDraftRevision=_draftRevision;
         _retainedDraftIdentity=_service->status().generation;
     }
-    saveScroll(); _entered = false;
+    saveScroll(); _entered = false; _composing = false;
     _nameResolved = false;
     clearMessages();
     if (_service) {
@@ -1395,6 +1404,11 @@ bool LvMessageView::handleKey(const KeyEvent& event) {
     }
 
     return false;
+}
+
+TextInputRequest LvMessageView::textInput() const {
+    if (!_composing || _sendOverlay || !_inputRow) return {};
+    return {TextInputMode::Text, _inputRow};
 }
 
 bool LvMessageView::handleLongPress() {

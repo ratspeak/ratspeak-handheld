@@ -6,6 +6,14 @@
 #include "LvVoicePanel.h"
 #include "hal/Keyboard.h"
 
+// What a screen's current editor needs from an on-screen keyboard. Anchor is
+// the widget that must stay visible above it.
+enum class TextInputMode : uint8_t { None, Text, Adjust };
+struct TextInputRequest {
+    TextInputMode mode = TextInputMode::None;
+    lv_obj_t* anchor = nullptr;
+};
+
 // LVGL screen base class
 class LvScreen {
 public:
@@ -17,6 +25,8 @@ public:
     virtual void onExit() {}
     virtual bool handleKey(const KeyEvent& event) { return false; }
     virtual bool handleLongPress() { return false; }
+    // Boards without a keyboard show an on-screen one while this is active.
+    virtual TextInputRequest textInput() const { return {}; }
     virtual const char* title() const = 0;
 
     lv_obj_t* screen() const { return _screen; }

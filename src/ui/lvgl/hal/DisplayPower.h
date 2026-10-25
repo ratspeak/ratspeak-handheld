@@ -7,6 +7,8 @@ class Power {
 public:
     // Board-owned peripheral rail setup; call first in setup
     static void enablePeripherals();
+    // Boards whose audio codec drives a switched amplifier define this.
+    static bool setSpeakerPower(bool enable);
 
     void begin();
     void loop();

@@ -1,5 +1,5 @@
 #include "config/BoardConfig.h"
-#if defined(RSDECK) || defined(RSM9)
+#if defined(RSDECK) || defined(RSM9) || defined(RSWIOL2)
 #include "runtime/LvglApplication.h"
 #include "LvMemory.h"
 #include "runtime/FactoryResetRecovery.h"
@@ -31,7 +31,7 @@
 #endif
 #include "hal/Keyboard.h"
 #include "hal/Power.h"
-#if defined(RSM9)
+#if defined(RSM9) || defined(RSWIOL2)
 #include "hal/GnssPower.h"
 #endif
 #if HAS_GPS
@@ -44,6 +44,9 @@
 #include "Theme.h"
 #include "LvTabBar.h"
 #include "LvInput.h"
+#if HAS_SOFT_KEYBOARD
+#include "LvSoftKeyboard.h"
+#endif
 #include "screens/LvBootScreen.h"
 #include "screens/LvHomeScreen.h"
 #include "screens/LvNodesScreen.h"
@@ -497,7 +500,7 @@ void handheld::lvgl_application::setup() {
     sharedSPI.begin(SPI_SCK, SPI_MISO, SPI_MOSI);
     // Deassert all slave CS pins to prevent bus contention
     pinMode(LORA_CS, OUTPUT); digitalWrite(LORA_CS, HIGH);
-    pinMode(SD_CS, OUTPUT);   digitalWrite(SD_CS, HIGH);
+    if (SD_CS >= 0) { pinMode(SD_CS, OUTPUT); digitalWrite(SD_CS, HIGH); }
     bootTraceStage("i2c-spi");
 
     // Mount flash before radio bring-up so persisted RF settings are used from
@@ -611,7 +614,11 @@ void handheld::lvgl_application::setup() {
 
     // Step 8: Board keyboard HAL
     const bool keyboardReady = keyboard.begin();
+#if HAS_KEYBOARD
     lvBootScreen.setProgress(0.52f, keyboardReady ? "Keyboard ready" : "Keyboard unavailable");
+#else
+    lvBootScreen.setProgress(0.52f, keyboardReady ? "Buttons ready" : "Buttons unavailable");
+#endif
     // (LVGL boot renders via lv_timer_handler in setProgress)
     bootTraceStage("keyboard-init");
 
@@ -619,9 +626,15 @@ void handheld::lvgl_application::setup() {
     trackball.begin();
     inputManager.begin(&keyboard, &trackball, &touch);
     LvInput::init(&keyboard, &trackball, &touch);
+#elif HAS_TOUCH
+    inputManager.begin(&keyboard, &touch);
+    LvInput::init(&keyboard, &touch);
 #else
     inputManager.begin(&keyboard);
     LvInput::init(&keyboard);
+#endif
+#if HAS_SOFT_KEYBOARD
+    LvSoftKeyboard::init();
 #endif
     inputManager.setPowerMgr(&powerMgr);
 
@@ -631,8 +644,17 @@ void handheld::lvgl_application::setup() {
 
     // Unmounted storage, then a reset intent, are resolved before early config
     // use. Display and input are now ready; recover before any import.
+#if !HAS_KEYBOARD
+    keyboard.setRecoveryKeys('e');
+#endif
     handheld::storageStartup(flash, keyboard, ::display.gfx(), []() { ESP.restart(); });
+#if !HAS_KEYBOARD
+    keyboard.setRecoveryKeys('r');
+#endif
     handheld::factoryResetRecovery(flash, sdStore, keyboard, ::display.gfx(), []() { ESP.restart(); });
+#if !HAS_KEYBOARD
+    keyboard.setRecoveryKeys(0);
+#endif
 
     // Refuse a known SD initialization failure before dependent imports/writes.
     if (sdInitializationFailed) {
@@ -849,6 +871,8 @@ void handheld::lvgl_application::setup() {
     gps.setPowerControl([](bool enabled) {
         return m9::setGnssPower(keyboard.revision(), enabled);
     });
+#elif defined(RSWIOL2)
+    gps.setPowerControl(wiol2::setGnssPower);
 #endif
     gps.setTimeEnabled(userConfig.settings().gpsTimeEnabled);
     if (userConfig.settings().gpsTimeEnabled || userConfig.settings().gpsLocationEnabled) {
@@ -1541,6 +1565,9 @@ void handheld::lvgl_application::loop() {
     {
         unsigned long now = millis();
         unsigned long lvglInterval = powerMgr.isDimmed() ? 200 : LVGL_INTERVAL_MS;
+#if HAS_SOFT_KEYBOARD
+        if (powerMgr.isScreenOn()) LvSoftKeyboard::update(::ui.getScreen());
+#endif
         bool inputBurst = inputManager.hadActivity() || remoteInput;
         LvInput::setEnabled(powerMgr.isScreenOn());
         if (powerMgr.isScreenOn() && (inputBurst || now - lastLvglTime >= lvglInterval)) {

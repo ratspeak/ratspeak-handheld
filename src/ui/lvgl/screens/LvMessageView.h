@@ -25,6 +25,7 @@ public:
     void onExit() override;
     bool handleKey(const KeyEvent& event) override;
     bool handleLongPress() override;
+    TextInputRequest textInput() const override;
 
     bool setPeerHex(const std::string& hex);
     bool prepareMaintenance() { _rrcSendRequested=false;return leaveRrcDraft(); }
@@ -161,6 +162,7 @@ private:
     lv_obj_t* _sendLabels[8] = {};
     int _sendMenuIdx = 0;
     bool _suppressNextSendClick = false;
+    bool _composing = false;  // The composer was tapped; keep its keyboard up.
 
     // Every label points into the client's leased publication, never a body copy.
     std::array<lv_obj_t*, HistoryWindow::VisibleSpans> _statusLabels{}, _textLabels{}, _bubbleBoxes{}, _readButtons{}, _audioErrors{};

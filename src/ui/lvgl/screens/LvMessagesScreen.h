@@ -23,6 +23,9 @@ public:
     void onExit() override;
     bool handleKey(const KeyEvent&) override;
     bool handleLongPress() override;
+    TextInputRequest textInput() const override {
+        return _rrcText ? TextInputRequest{TextInputMode::Text, _rrcText} : TextInputRequest{};
+    }
     const char* title() const override { return "Messages"; }
 
 private:

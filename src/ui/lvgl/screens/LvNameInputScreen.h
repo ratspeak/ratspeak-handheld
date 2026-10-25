@@ -7,6 +7,9 @@ class LvNameInputScreen : public LvScreen {
 public:
     void createUI(lv_obj_t* parent) override;
     bool handleKey(const KeyEvent& event) override;
+    TextInputRequest textInput() const override {
+        return {_saving ? TextInputMode::None : TextInputMode::Text, _textarea};
+    }
     const char* title() const override { return "Setup"; }
 
     void setDoneCallback(std::function<void(const String&)> cb) { _doneCb = cb; }

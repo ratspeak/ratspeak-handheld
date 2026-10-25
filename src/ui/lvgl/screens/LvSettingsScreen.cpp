@@ -843,6 +843,7 @@ void LvSettingsScreen::buildItems() {
         [](int v) { return String(v) + "s"; }, 10, 7200, 10});
     _items.back().id = SettingId::DisplayOffAfter;
     idx++;
+#if HAS_KEYBOARD
     _items.push_back({"Key Backlight", SettingType::ENUM_CHOICE,
         [&s]() { return keyboardBacklightChoice(s.keyboardBrightness); },
         [&s](int v) { s.keyboardBrightness = keyboardBacklightPercent(v); },
@@ -861,6 +862,7 @@ void LvSettingsScreen::buildItems() {
         [](int v) { return String(onOff(v != 0)); }});
     _items.back().id = SettingId::KeysAutoOff;
     idx++;
+#endif
 #if HAS_TRACKBALL || HAS_SCROLLWHEEL
     // Same persisted field/JSON key on all boards; label follows the pointer device
 #if HAS_SCROLLWHEEL
@@ -888,8 +890,12 @@ void LvSettingsScreen::buildItems() {
     _categories.push_back({"Display & Input", dispStart, idx - dispStart,
         [&s]() -> String {
             String summary = String("Screen ") + String(s.brightness);
+#if HAS_KEYBOARD
             summary += "% / Keys ";
             summary += keyboardBacklightLabel(s.keyboardBrightness);
+#else
+            summary += "%";
+#endif
             return summary;
         }});
     _categories.back().id = SettingsCategoryId::Display;
@@ -1778,7 +1784,7 @@ void LvSettingsScreen::rebuildItemList() {
             lv_obj_set_style_text_color(hint, lv_color_hex(Theme::TEXT_MUTED), 0);
 #if HAS_SCROLLWHEEL
             lv_label_set_text(hint, "A/D: digit   Wheel: tune   Enter: save   Alt+Back: cancel");
-#elif HAS_DPAD
+#elif HAS_DPAD || !HAS_KEYBOARD
             lv_label_set_text(hint, "Left/Right: digit  Up/Down: tune  OK: save");
 #else
             lv_label_set_text(hint, "A/D digit  Ball tune  Enter save  Hold click cancels");
@@ -1796,6 +1802,15 @@ void LvSettingsScreen::rebuildItemList() {
         LvInput::focusObj(_rowObjs[focusOffset]);
         lv_obj_scroll_to_view(_rowObjs[focusOffset], LV_ANIM_OFF);
     }
+}
+
+TextInputRequest LvSettingsScreen::textInput() const {
+    if (_view == SettingsView::PROPAGATION_ENTRY && _editValueLbl)
+        return {TextInputMode::Text, lv_obj_get_parent(_editValueLbl)};
+    if (!_editing && !_textEditing && !_freqEditing) return {};
+    const int row = _selectedIdx - _catRangeStart;
+    if (row < 0 || row >= (int)_rowObjs.size()) return {};
+    return {_textEditing ? TextInputMode::Text : TextInputMode::Adjust, _rowObjs[row]};
 }
 
 void LvSettingsScreen::selectWifiResult(int resultIdx) {

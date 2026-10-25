@@ -4,6 +4,9 @@
 #include "LvInput.h"
 #include "config/Config.h"
 #include "fonts/fonts.h"
+#if HAS_SOFT_KEYBOARD
+#include "LvSoftKeyboard.h"
+#endif
 
 namespace {
 
@@ -32,6 +35,7 @@ lv_obj_t* makeLine(lv_obj_t* parent, lv_coord_t y) {
     return line;
 }
 
+#if !HAS_SOFT_KEYBOARD
 lv_obj_t* makeActionButton(lv_obj_t* parent, const char* text, lv_coord_t y) {
     lv_obj_t* btn = lv_btn_create(parent);
     lv_obj_set_size(btn, 168, 34);
@@ -55,6 +59,7 @@ lv_obj_t* makeActionButton(lv_obj_t* parent, const char* text, lv_coord_t y) {
     lv_obj_center(lbl);
     return btn;
 }
+#endif
 
 }  // namespace
 
@@ -89,12 +94,18 @@ void LvNameInputScreen::createUI(lv_obj_t* parent) {
     lv_group_add_obj(LvInput::group(), _textarea);
     lv_group_focus_obj(_textarea);
 
+#if HAS_SOFT_KEYBOARD
+    // The on-screen keyboard's Enter key finishes; a tap restores a hidden one.
+    lv_obj_add_event_cb(_textarea, [](lv_event_t*) { LvSoftKeyboard::show(); },
+                        LV_EVENT_CLICKED, nullptr);
+#else
     _doneButton = makeActionButton(parent, "DONE", 158);
     lv_obj_add_event_cb(_doneButton, [](lv_event_t* e) {
         auto* self = static_cast<LvNameInputScreen*>(lv_event_get_user_data(e));
         if (!self) return;
         self->submit(false);
     }, LV_EVENT_CLICKED, this);
+#endif
 
     lv_obj_t* ver = makeLabel(parent, "", &lv_font_rsdeck_10,
                               Theme::TEXT_MUTED, 120, LV_TEXT_ALIGN_CENTER,

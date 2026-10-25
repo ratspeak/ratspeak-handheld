@@ -86,6 +86,15 @@ void LvHelpOverlay::create() {
     addHelpRow(_overlay, "Below draft", "Wheel to Voice or Send");
     addHelpRow(_overlay, "Selected", "Click opens; hold for actions");
     addHelpRow(_overlay, "BOOT", "Tap sleep; hold power off");
+#elif !HAS_KEYBOARD
+    addHelpRow(_overlay, "Tap", "Open, select or confirm");
+    addHelpRow(_overlay, "Swipe", "Scroll lists and chats");
+    addHelpRow(_overlay, "Tab bar", "Switch screens");
+    addHelpRow(_overlay, "BOOT", "Back / cancel editing");
+    addHelpRow(_overlay, "Top button", "Wake the screen");
+    addHelpRow(_overlay, "Hold a button", "Context actions / sleep");
+    addHelpRow(_overlay, "Chat box", "Tap to type");
+    addHelpRow(_overlay, "Kbd icon", "Hide the on-screen keyboard");
 #else
     addHelpRow(_overlay, "Trackball", "Move selection");
     addHelpRow(_overlay, "Click/Enter", "Open or confirm");

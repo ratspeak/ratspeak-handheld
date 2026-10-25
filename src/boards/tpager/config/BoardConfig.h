@@ -27,6 +27,7 @@
 // flash, power, and interop behavior are tested end to end.
 #define HAS_SD          true
 #define HAS_AUDIO       true
+#define HAS_ES8311_AUDIO true
 #define HAS_GPS         true    // UBlox MIA-M10Q UART GPS
 // BQ27220 fuel gauge reports percent directly — no discharge-model API on Power
 #define HAS_BATTERY_MODEL false
