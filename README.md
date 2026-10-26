@@ -95,8 +95,28 @@ app can choose a compatible compact recording. Existing Opus clips cannot be
 played on these handhelds. Live handheld calls and Hub/channel access are not
 available in this release.
 
-New or reset radio settings use **Medium Fast**. Existing saved presets are
-retained; match the radio settings on devices that communicate directly.
+### Standalone radio defaults
+
+New or reset radio settings use **Medium Fast**: bandwidth **250 kHz**
+(`250000` Hz), spreading factor **9**, coding rate **4/5** (`5` in RNode
+configuration), TX power **17 dBm**, and preamble **18 symbols**. Existing saved
+settings are retained.
+
+The region selection sets the center frequency separately from the link preset:
+
+| Region | Default center frequency | Frequency in Hz |
+|---|---|---|
+| Americas | 915.000 MHz | `915000000` |
+| Europe (EU868) | **868.000 MHz** | `868000000` |
+| Australia | 915.000 MHz | `915000000` |
+| Asia | 923.000 MHz | `923000000` |
+
+For example, an RNode communicating with a handheld on **Europe + Medium Fast**
+needs `frequency = 868000000`, `bandwidth = 250000`, `spreadingfactor = 9`,
+and `codingrate = 5`. Match any custom settings saved on the handheld instead
+of assuming the defaults. Choosing a region again restores its default frequency;
+changing the link preset does not change frequency. TX power need not match.
+In **RNode mode**, the connected host client controls the radio settings.
 
 Follow your local radio regulations for frequency, transmit power and duty
 cycle. Region and link presets do not limit power or airtime for your region.
