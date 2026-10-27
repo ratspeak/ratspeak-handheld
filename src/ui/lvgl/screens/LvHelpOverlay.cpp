@@ -66,7 +66,16 @@ void LvHelpOverlay::create() {
     makeLabel(header, "Ratspeak.org", &lv_font_rsdeck_10,
               Theme::TEXT_SECONDARY, 180, LV_TEXT_ALIGN_RIGHT);
 
-#if HAS_DPAD
+#if defined(RSCROWPANEL)
+    addHelpRow(_overlay, "Tap field", "Open text keyboard");
+    addHelpRow(_overlay, "Lang", "Switch EN / RU layout");
+    addHelpRow(_overlay, "Shift / 123", "Case / numbers and symbols");
+    addHelpRow(_overlay, "Done", "Apply text to the field");
+    addHelpRow(_overlay, "Cancel", "Keep the original text");
+    addHelpRow(_overlay, "SEND", "Send the prepared message");
+    addHelpRow(_overlay, "Chat", "Swipe history; hold message");
+    addHelpRow(_overlay, "Wake", "Tap once; then tap an action");
+#elif HAS_DPAD
     addHelpRow(_overlay, "Arrows", "Move selection / edit value");
     addHelpRow(_overlay, "OK / Enter", "Open or confirm");
     addHelpRow(_overlay, "Back", "Return / cancel editing");
@@ -99,7 +108,9 @@ void LvHelpOverlay::create() {
 #endif
 
     lv_obj_t* footer = makeLabel(_overlay,
-#if !HAS_TOUCH
+#if defined(RSCROWPANEL)
+                                 "Tap to close",
+#elif !HAS_TOUCH
                                  "Any key closes",
 #else
                                  "Any key or tap closes",

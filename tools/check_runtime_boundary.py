@@ -22,7 +22,7 @@ for path in (ROOT / "src/ui/lvgl").rglob("*"):
     check(r"\b(?:WiFi|LittleFS|SD)\s*\.\s*\w+\s*\(|\bPreferences\s+\w+|rs_handheld_\w+\s*\(",
           text, path, "UI must not call networking/storage/FFI directly")
 
-for board in ("tdeck", "tpager", "m9"):
+for board in ("tdeck", "tpager", "m9", "crowpanel"):
     path = ROOT / f"src/boards/{board}/main.cpp"
     text = path.read_text()
     shared = "lvgl_application::loop()" in text
@@ -38,9 +38,9 @@ for board in ("tdeck", "tpager", "m9"):
           service, path, "service poll reached a UI-owned object")
     if "radio.setYieldCallback([]() { yield(); });" not in text:
         raise SystemExit(f"runtime boundary: {board} radio yield contract missing")
-    display_path = "src/ui/lvgl/hal/St7789Display.cpp" if shared else f"src/boards/{board}/hal/Display.cpp"
+    display_path = "src/ui/lvgl/hal/St7789Display.cpp" if shared and board != "crowpanel" else f"src/boards/{board}/hal/Display.cpp"
     display = (ROOT / display_path).read_text()
-    if "SharedSPILock bus;" not in display or "handheld::displayFlushed(millis());" not in display:
+    if (board != "crowpanel" and "SharedSPILock bus;" not in display) or "handheld::displayFlushed(millis());" not in display:
         raise SystemExit(f"runtime boundary: {board} display arbitration/measurement missing")
 
 print("runtime boundary: PASS (LVGL views, owner-only board loops, shared display SPI)")

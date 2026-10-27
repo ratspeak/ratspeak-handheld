@@ -1,3 +1,4 @@
+#include "transport/WiFiVersion.h"
 #include "NetworkCoordinator.h"
 #include "config/NetworkTiming.h"
 #include "config/NetworkSettings.h"
@@ -12,7 +13,7 @@
 
 namespace handheld {
 namespace {
-bool linkLocal(const IPv6Address& address) {
+template<class Address> bool linkLocal(const Address& address) {
     return address[0] == 0xfe && (address[1] & 0xc0) == 0x80;
 }
 uint32_t staScope() {
@@ -21,7 +22,7 @@ uint32_t staScope() {
 }
 }
 void NetworkCoordinator::deferAuto(uint32_t now) {
-    WiFi.enableIpV6();
+    handheld::wifi_version::enableIPv6();
     _deferred = true; _deferredAt = _autoCheckedAt = now;
     _autoCheckMs = network_timing::AutoInitialMs;
     _autoRetryMs = network_timing::AutoRetryMs;
@@ -87,10 +88,11 @@ uint8_t NetworkCoordinator::poll(const UserSettings& settings, unsigned long rns
         deferAuto(now);
     if (_deferred && now - _autoCheckedAt >= _autoCheckMs) {
         _autoCheckedAt = now;
-        const IPv6Address address = WiFi.localIPv6();
+        const auto address = handheld::wifi_version::localIPv6();
+        uint8_t addressBytes[16];wifi_version::bytes(address,addressBytes);
         if (linkLocal(address)) {
             if (_auto.start(settings.autoIfaceGroupId.c_str(), settings.autoIfaceMaxPeers,
-                            (const uint8_t*)address, staScope())) {
+                            addressBytes, staScope())) {
                 _deferred = false; _lastLinkCheck = now;
                 _pump.attachAuto(&_auto); events |= AutoStarted;
             } else {
@@ -107,8 +109,9 @@ uint8_t NetworkCoordinator::poll(const UserSettings& settings, unsigned long rns
     }
     if (_auto.isOnline() && _connected && now - _lastLinkCheck >= network_timing::AutoPollMs) {
         _lastLinkCheck = now;
-        const IPv6Address address = WiFi.localIPv6();
-        if (linkLocal(address)) _auto.notifyLinkChange((const uint8_t*)address, staScope());
+        const auto address = handheld::wifi_version::localIPv6();
+        uint8_t addressBytes[16];wifi_version::bytes(address,addressBytes);
+        if (linkLocal(address)) _auto.notifyLinkChange(addressBytes, staScope());
         else {
             _pump.attachAuto(nullptr); _auto.stop(); deferAuto(now);
         }

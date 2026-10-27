@@ -109,5 +109,30 @@
       "standalone"
     ],
     "web_flasher": true
+  },
+  "crowpanel": {
+    "artifact_prefix": "crowpanel",
+    "flash_size": "16MB",
+    "partition_csv": null,
+    "standalone_partition_csv": "partitions/standalone-16mb.csv",
+    "rnode_target": null,
+    "rnode_prep_target": null,
+    "renderer": "lvgl",
+    "protocol_profile": "small",
+    "runtime": "dedicated",
+    "app_environments": [
+      "crowpanel"
+    ],
+    "device_aliases": [
+      "crow"
+    ],
+    "post_build_image": "crowpanel-standalone-factory.bin",
+    "standalone_flash_freq": "80m",
+    "rnode_partition_scheme": null,
+    "rnode_partition_csv": null,
+    "modes": [
+      "standalone"
+    ],
+    "web_flasher": false
   }
 }

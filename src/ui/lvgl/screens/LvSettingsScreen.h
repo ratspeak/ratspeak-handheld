@@ -105,6 +105,10 @@ private:
     bool _propLoading = false, _propFailed = false, _propChoicePending = false;
     handheld::propagation::SyncStatus _propStatus = handheld::propagation::SyncStatus::Off;
     bool applyAndSave(bool rebuildItems = false);
+#ifdef RSCROWPANEL
+    void showTouchChoices(int selected);
+    void showTouchTextEditor();
+#endif
     void applyPreset(int presetIdx);
     int detectPreset() const;
     bool isEditable(int idx) const;

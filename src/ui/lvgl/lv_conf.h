@@ -6,13 +6,20 @@
 // Forward-declare custom rsDeck fonts for LV_FONT_DEFAULT
 typedef struct _lv_font_t lv_font_t;
 extern const lv_font_t lv_font_rsdeck_14;
+#ifdef RSCROWPANEL
+extern const lv_font_t lv_font_crowpanel_22;
+#endif
 
 // Color depth: 16-bit RGB565
 #define LV_COLOR_DEPTH 16
 
 // CRITICAL: Byte-swap for LovyanGFX + ST7789V
 // Without this, colors appear pixelated/glitchy
+#ifdef RSCROWPANEL
+#define LV_COLOR_16_SWAP 0
+#else
 #define LV_COLOR_16_SWAP 1
+#endif
 
 // Shared UI owner enforces the LVGL ceiling and PSRAM admission reserve.
 #define LV_MEM_CUSTOM 1
@@ -52,7 +59,11 @@ extern const lv_font_t lv_font_rsdeck_14;
 #define LV_FONT_MONTSERRAT_14 0
 #define LV_FONT_MONTSERRAT_16 1
 #define LV_FONT_UNSCII_8      0
+#ifdef RSCROWPANEL
+#define LV_FONT_DEFAULT        &lv_font_crowpanel_22
+#else
 #define LV_FONT_DEFAULT        &lv_font_rsdeck_14
+#endif
 
 // Widgets — only enable what we actually use
 #define LV_USE_LABEL      1

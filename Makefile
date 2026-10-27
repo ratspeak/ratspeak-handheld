@@ -1,5 +1,6 @@
+PYTHON ?= python3
 DEVICE ?= tdeck
-SUPPORTED_DEVICES := $(shell python3 tools/release_catalog.py devices)
+SUPPORTED_DEVICES := $(shell $(PYTHON) tools/release_catalog.py devices)
 STANDALONE_ENV ?= $(DEVICE)
 RNODE_DIR ?= vendor/rnode_firmware
 LAUNCHER_DIR ?= launcher
@@ -12,7 +13,7 @@ endif
 
 # Catalog values are whitespace-free Make assignments. Partition geometry comes
 # from the selected CSV, so packaging and validation cannot drift independently.
-RELEASE_CONFIG := $(shell python3 tools/release_catalog.py make --device $(DEVICE))
+RELEASE_CONFIG := $(shell $(PYTHON) tools/release_catalog.py make --device $(DEVICE))
 ifeq ($(strip $(RELEASE_CONFIG)),)
 $(error Failed to load release catalog for $(DEVICE))
 endif
@@ -60,38 +61,38 @@ else
 endif
 
 doctor:
-	python3 tools/doctor.py --device $(DEVICE)
+	$(PYTHON) tools/doctor.py --device $(DEVICE)
 
 doctor-source:
-	python3 tools/doctor.py --device $(DEVICE) --source
-	python3 tools/check_prebuilt.py --allow-dirty
+	$(PYTHON) tools/doctor.py --device $(DEVICE) --source
+	$(PYTHON) tools/check_prebuilt.py --allow-dirty
 
 source-check:
-	python3 tools/release_catalog.py check
-	python3 tools/check_source_release.py
-	python3 tools/check_runtime_boundary.py
-	python3 tools/collect_licenses.py --check
+	$(PYTHON) tools/release_catalog.py check
+	$(PYTHON) tools/check_source_release.py
+	$(PYTHON) tools/check_runtime_boundary.py
+	$(PYTHON) tools/collect_licenses.py --check
 
 build-standalone:
-	python3 -m platformio run -e $(STANDALONE_ENV)
+	$(PYTHON) -m platformio run -e $(STANDALONE_ENV)
 
 ifeq ($(HAS_RNODE),1)
 build-launcher:
-	python3 -m platformio run -d $(LAUNCHER_DIR) -e $(DEVICE)_launcher
+	$(PYTHON) -m platformio run -d $(LAUNCHER_DIR) -e $(DEVICE)_launcher
 
 build-rnode:
 	$(MAKE) -C $(RNODE_DIR) firmware-$(RNODE_TARGET)
 
 $(PARTITIONS_BIN): $(PARTITION_CSV)
 	mkdir -p $(BUILD_DIR)
-	python3 $(GEN_ESPPART) $(PARTITION_CSV) $(PARTITIONS_BIN)
+	$(PYTHON) $(GEN_ESPPART) $(PARTITION_CSV) $(PARTITIONS_BIN)
 
 check: build-launcher build-standalone build-rnode
-	python3 tools/check_image_fit.py --device $(DEVICE) --launcher $(LAUNCHER_BIN) \
+	$(PYTHON) tools/check_image_fit.py --device $(DEVICE) --launcher $(LAUNCHER_BIN) \
 		--standalone $(STANDALONE_APP_BIN) --rnode $(RNODE_BIN)
 
 full-image: check $(PARTITIONS_BIN)
-	python3 tools/make_dual_image.py --device $(DEVICE) \
+	$(PYTHON) tools/make_dual_image.py --device $(DEVICE) \
 		--bootloader $(BOOTLOADER_BIN) \
 		--partitions $(PARTITIONS_BIN) \
 		--boot-app0 $(BOOT_APP0_BIN) \
@@ -105,7 +106,7 @@ build-launcher build-rnode full-image rnode-only-image:
 	@exit 1
 
 check: build-standalone
-	python3 tools/check_image_fit.py --device $(DEVICE) --standalone $(STANDALONE_APP_BIN)
+	$(PYTHON) tools/check_image_fit.py --device $(DEVICE) --standalone $(STANDALONE_APP_BIN)
 endif
 
 check-all:
@@ -113,17 +114,24 @@ check-all:
 		$(MAKE) check DEVICE=$$device || exit $$?; \
 	done
 
+ifeq ($(DEVICE),crowpanel)
 standalone-image: build-standalone
 	mkdir -p $(BUILD_DIR)
-	python3 -m esptool --chip esp32s3 merge-bin --flash-mode dio --flash-size $(FLASH_SIZE) \
+	cp .pio/build/$(STANDALONE_ENV)/crowpanel-standalone-factory.bin $(STANDALONE_BIN)
+else
+standalone-image: build-standalone
+	mkdir -p $(BUILD_DIR)
+	$(PYTHON) -m esptool --chip esp32s3 merge-bin --flash-mode dio --flash-size $(FLASH_SIZE) \
 		$(if $(STANDALONE_FLASH_FREQ),--flash-freq $(STANDALONE_FLASH_FREQ),) --output $(STANDALONE_BIN) \
 		0x0000 $(BOOTLOADER_BIN) 0x8000 .pio/build/$(STANDALONE_ENV)/partitions.bin \
 		0xe000 $(BOOT_APP0_BIN) $(STANDALONE_FACTORY_OFFSET) $(STANDALONE_APP_BIN)
 
+endif
+
 ifeq ($(HAS_RNODE),1)
 rnode-only-image: build-rnode
 	mkdir -p $(BUILD_DIR)
-	python3 -m esptool --chip esp32s3 merge-bin \
+	$(PYTHON) -m esptool --chip esp32s3 merge-bin \
 		--flash-mode dio --flash-size $(FLASH_SIZE) \
 		--output $(RNODE_ONLY_BIN) \
 		0x0000 $(RNODE_BOOTLOADER_BIN) \
@@ -148,11 +156,11 @@ endif
 	      $(DIST_DIR)/$(STANDALONE_NAME).bin \
 	      $(DIST_DIR)/$(RNODE_ONLY_NAME).bin
 ifeq ($(HAS_RNODE),1)
-	python3 tools/package_merged_zip.py --image $(FULL_BIN) --name $(FULL_NAME) --device $(DEVICE) --package full --flash-size $(FLASH_SIZE) --output $(DIST_DIR)/$(FULL_NAME).zip
-	python3 tools/package_merged_zip.py --image $(RNODE_ONLY_BIN) --name $(RNODE_ONLY_NAME) --device $(DEVICE) --package rnode --flash-size $(FLASH_SIZE) --output $(DIST_DIR)/$(RNODE_ONLY_NAME).zip
+	$(PYTHON) tools/package_merged_zip.py --image $(FULL_BIN) --name $(FULL_NAME) --device $(DEVICE) --package full --flash-size $(FLASH_SIZE) --output $(DIST_DIR)/$(FULL_NAME).zip
+	$(PYTHON) tools/package_merged_zip.py --image $(RNODE_ONLY_BIN) --name $(RNODE_ONLY_NAME) --device $(DEVICE) --package rnode --flash-size $(FLASH_SIZE) --output $(DIST_DIR)/$(RNODE_ONLY_NAME).zip
 	cp $(RNODE_ONLY_BIN) $(DIST_DIR)/$(RNODE_ONLY_NAME).bin
 endif
-	python3 tools/package_merged_zip.py --image $(STANDALONE_BIN) --name $(STANDALONE_NAME) --device $(DEVICE) --package standalone --flash-size $(FLASH_SIZE) --output $(DIST_DIR)/$(STANDALONE_NAME).zip
+	$(PYTHON) tools/package_merged_zip.py --image $(STANDALONE_BIN) --name $(STANDALONE_NAME) --device $(DEVICE) --package standalone --flash-size $(FLASH_SIZE) --output $(DIST_DIR)/$(STANDALONE_NAME).zip
 	cp $(STANDALONE_BIN) $(DIST_DIR)/$(STANDALONE_NAME).bin
 
 package-all:
@@ -171,14 +179,14 @@ protocol-check: source-check
 	cd protocol && cargo check --workspace --no-default-features --features profile-small --target riscv32imc-unknown-none-elf --locked
 	cd protocol && cargo check --workspace --no-default-features --features profile-micro --target thumbv7em-none-eabihf --locked
 	cd protocol && cargo check --workspace --no-default-features --features profile-micro --target riscv32imc-unknown-none-elf --locked
-	python3 tools/check_prebuilt.py --allow-dirty
+	$(PYTHON) tools/check_prebuilt.py --allow-dirty
 
 software-check: protocol-check check-all
 
 release: package
 
 flash: bundle
-	python3 -m esptool --chip esp32s3 --port $(PORT) --baud $(UPLOAD_BAUD) --before default_reset --after hard_reset write-flash 0x0 $(FACTORY_BIN)
+	$(PYTHON) -m esptool --chip esp32s3 --port $(PORT) --baud $(UPLOAD_BAUD) --before default_reset --after hard_reset write-flash 0x0 $(FACTORY_BIN)
 
 clean:
 	rm -rf $(BUILD_DIR) $(DIST_DIR)

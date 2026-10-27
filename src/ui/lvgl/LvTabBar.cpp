@@ -47,7 +47,7 @@ void LvTabBar::create(lv_obj_t* parent) {
         lv_obj_add_event_cb(_cells[i], tab_click_cb, LV_EVENT_CLICKED, this);
 
         _labels[i] = lv_label_create(_cells[i]);
-        lv_obj_set_size(_labels[i], Theme::TAB_W - 4, 14);
+        lv_obj_set_size(_labels[i], Theme::TAB_W - 4, lv_font_rsdeck_10.line_height);
         lv_label_set_long_mode(_labels[i], LV_LABEL_LONG_CLIP);
         lv_obj_set_style_text_font(_labels[i], &lv_font_rsdeck_10, 0);
         lv_obj_set_style_text_align(_labels[i], LV_TEXT_ALIGN_CENTER, 0);

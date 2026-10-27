@@ -56,9 +56,13 @@ struct TCPEndpoint {
 
 // Fixed-size values. Copying them never allocates, so a scalar edit is staged
 // and persisted without cloning credentials, endpoints or names.
+#ifndef BOARD_DEFAULT_RADIO_REGION
+#define BOARD_DEFAULT_RADIO_REGION REGION_AMERICAS
+#endif
+
 struct UserScalars {
     // Radio
-    uint8_t radioRegion = REGION_AMERICAS;
+    uint8_t radioRegion = BOARD_DEFAULT_RADIO_REGION;
     uint32_t loraFrequency = LORA_DEFAULT_FREQ;
     uint8_t loraSF = LORA_DEFAULT_SF;
     uint32_t loraBW = LORA_DEFAULT_BW;
@@ -94,6 +98,7 @@ struct UserScalars {
     float fullBatteryV = BATTERY_FULL_VOLTAGE_DEFAULT;
 
     // Keyboard
+    uint8_t touchKeyboardLayout = 0; // Stable append-only layout index: EN=0, RU=1.
     uint8_t keyboardBrightness = 0;   // Persisted/hardware percentage: OFF 0, LOW 5, HIGH 100.
     bool keyboardAutoOn = false;      // Backlight ON when switching to ACTIVE power state
     bool keyboardAutoOff = false;     // Backlight OFF when switching from ACTIVE power state

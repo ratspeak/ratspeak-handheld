@@ -74,8 +74,13 @@ extern uint32_t TOAST_BG;
 
 constexpr int SCREEN_W       = DISPLAY_WIDTH;
 constexpr int SCREEN_H       = DISPLAY_HEIGHT;
-constexpr int STATUS_BAR_H   = 20;
-constexpr int TAB_BAR_H      = 26;
+#ifdef RSCROWPANEL
+constexpr int STATUS_BAR_H = 28;
+constexpr int TAB_BAR_H = 48;
+#else
+constexpr int STATUS_BAR_H = 20;
+constexpr int TAB_BAR_H = 26;
+#endif
 constexpr int CONTENT_Y      = STATUS_BAR_H;
 constexpr int CONTENT_H      = SCREEN_H - STATUS_BAR_H - TAB_BAR_H;
 constexpr int CONTENT_W      = SCREEN_W;
@@ -83,8 +88,13 @@ constexpr int CONTENT_W      = SCREEN_W;
 // --- Tab Bar ---
 constexpr int TAB_COUNT      = 5;
 constexpr int TAB_W          = SCREEN_W / TAB_COUNT;
+#ifdef RSCROWPANEL
+constexpr int TAB_BADGE_W = 26;
+constexpr int TAB_BADGE_H = 20;
+#else
 constexpr int TAB_BADGE_W    = 18;
 constexpr int TAB_BADGE_H    = 10;
+#endif
 
 // --- Spacing (base unit: 4px) ---
 constexpr int SP_1 = 4;

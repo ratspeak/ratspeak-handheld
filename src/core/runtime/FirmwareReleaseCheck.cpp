@@ -86,3 +86,13 @@ ReleaseCheckResult checkFirmwareRelease(const char* repository, const char* inst
 }
 } // namespace handheld
 #endif
+
+#ifdef RSCROWPANEL
+#include "runtime/FirmwareReleaseCheck.h"
+namespace handheld {
+ReleaseCheckResult checkFirmwareRelease(const char*,const char*,char* version,size_t capacity) {
+ if(version && capacity) version[0]=0;
+ return ReleaseCheckResult::Failed;
+}
+}
+#endif
