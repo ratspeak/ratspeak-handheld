@@ -40,25 +40,26 @@ device, firmware version, and the steps to reproduce it.
 
 ## Install
 
-Download the ZIP for your device from [Releases](https://github.com/ratspeak/ratspeak-handheld/releases):
+Download the `.bin` for your device from [Releases](https://github.com/ratspeak/ratspeak-handheld/releases):
 
 - **Full** — Standalone and RNode, with a launcher to choose between them at startup.
 - **Standalone** — the on-device messenger, using LoRa or WiFi.
 - **RNode** — use the handheld as a radio for Ratspeak, Sideband, or another
   Reticulum client over USB or BLE.
 
-Files are named by device and mode, such as `tdeck-full.zip`,
-`pager-standalone.zip` and `cardputer-rnode.bin`. Standalone and RNode are also
-published as a `.bin`: the same complete image as in the ZIP.
+Files are named by device and mode, such as `tdeck-full.bin`,
+`pager-standalone.bin` and `cardputer-rnode.bin`. Each is a complete image.
+T-Deck, T-Pager and Cardputer also have a `-standalone-launcher.bin` for
+bmorcelli's Launcher.
 
 - **Web flasher:** open the [Ratspeak web flasher](https://ratspeak.org/download.html),
   select your device, and choose **Flash in browser**. To install a downloaded
-  ZIP, choose **Flash** under **Build your own** and upload it. Compatible
+  `.bin`, choose **Flash** under **Build your own** and upload it. Compatible
   updates keep identity, messages and settings.
 - **esptool:** write the `.bin` at 0x0, for example
   `python3 -m esptool --chip esp32s3 --port PORT --baud 115200 write-flash 0x0 m9-standalone.bin`.
-- **bmorcelli's Launcher:** install the Standalone or RNode `.bin` from the SD
-  card or through Launcher's web interface.
+- **bmorcelli's Launcher:** install the `-standalone-launcher.bin` from the SD
+  card or Launcher's web interface. For RNode, install the `-rnode.bin`.
 
 Factory installs with the web flasher or esptool replace the firmware layout, so
 back up your identity and messages first. See the

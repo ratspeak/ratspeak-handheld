@@ -135,3 +135,39 @@ def verify_factory(data: bytes, board: str, mode: str, version: str, revision: s
     if end != len(data):
         raise ValueError(f"{board} {mode}: unexpected trailing factory data")
     return components
+
+
+# Launcher (bmorcelli) creates a data partition only for a table row whose offset
+# lies inside the uploaded file; an empty one gets its default 448 KiB.
+LAUNCHER_STORAGE_SIZE = 0x70000
+LAUNCHER_STORAGE_PROBE = 0x1000
+
+
+def launcher_partitions(app_size: int) -> dict:
+    from release_catalog import Partition
+
+    app = (app_size + 0xFFFF) & ~0xFFFF
+    return {
+        "nvs": Partition("data", "nvs", 0x9000, 0x5000),
+        "otadata": Partition("data", "ota", 0xE000, 0x2000),
+        "app0": Partition("app", "ota_0", 0x10000, app),
+        "littlefs": Partition("data", "spiffs", 0x10000 + app, LAUNCHER_STORAGE_SIZE),
+    }
+
+
+def launcher_image(standalone: bytes, board: str, root: Path = ROOT) -> bytes:
+    """Standalone's bootloader, boot metadata and application under the Launcher table."""
+    offset = BOARDS[board].factory_app_offset("standalone", root)
+    _, size = complete_image(standalone[offset:], exact=False)
+    entries = launcher_partitions(size)
+    image = bytearray(b"\xff" * (entries["littlefs"].offset + LAUNCHER_STORAGE_PROBE))
+    image[:0x8000] = standalone[:0x8000]
+    image[0x8000:0x8C00] = partition_binary(entries)
+    image[0xE000:0x10000] = standalone[0xE000:0x10000]
+    image[0x10000:0x10000 + size] = standalone[offset:offset + size]
+    return bytes(image)
+
+
+def verify_launcher(data: bytes, standalone: bytes, board: str, root: Path = ROOT) -> None:
+    if data != launcher_image(standalone, board, root):
+        raise ValueError(f"{board}: Launcher image differs from the Standalone image it carries")

@@ -141,19 +141,9 @@ FACTORY_BIN := $(STANDALONE_BIN)
 
 package: check standalone-image
 endif
-	mkdir -p $(DIST_DIR)
-	rm -f $(DIST_DIR)/$(FULL_NAME).zip \
-	      $(DIST_DIR)/$(STANDALONE_NAME).zip \
-	      $(DIST_DIR)/$(RNODE_ONLY_NAME).zip \
-	      $(DIST_DIR)/$(STANDALONE_NAME).bin \
-	      $(DIST_DIR)/$(RNODE_ONLY_NAME).bin
-ifeq ($(HAS_RNODE),1)
-	python3 tools/package_merged_zip.py --image $(FULL_BIN) --name $(FULL_NAME) --device $(DEVICE) --package full --flash-size $(FLASH_SIZE) --output $(DIST_DIR)/$(FULL_NAME).zip
-	python3 tools/package_merged_zip.py --image $(RNODE_ONLY_BIN) --name $(RNODE_ONLY_NAME) --device $(DEVICE) --package rnode --flash-size $(FLASH_SIZE) --output $(DIST_DIR)/$(RNODE_ONLY_NAME).zip
-	cp $(RNODE_ONLY_BIN) $(DIST_DIR)/$(RNODE_ONLY_NAME).bin
-endif
-	python3 tools/package_merged_zip.py --image $(STANDALONE_BIN) --name $(STANDALONE_NAME) --device $(DEVICE) --package standalone --flash-size $(FLASH_SIZE) --output $(DIST_DIR)/$(STANDALONE_NAME).zip
-	cp $(STANDALONE_BIN) $(DIST_DIR)/$(STANDALONE_NAME).bin
+	rm -f $(DIST_DIR)/$(BRAND)-*.bin $(DIST_DIR)/$(BRAND)-*.zip
+	python3 tools/package_images.py --device $(DEVICE) --dist $(DIST_DIR) --standalone $(STANDALONE_BIN) \
+		$(if $(filter 1,$(HAS_RNODE)),--full $(FULL_BIN) --rnode $(RNODE_ONLY_BIN),)
 
 package-all:
 	@for device in $(SUPPORTED_DEVICES); do \

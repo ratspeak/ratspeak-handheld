@@ -26,7 +26,8 @@
       "standalone",
       "rnode"
     ],
-    "web_flasher": true
+    "web_flasher": true,
+    "launcher_image": true
   },
   "tpager": {
     "artifact_prefix": "pager",
@@ -55,7 +56,8 @@
       "standalone",
       "rnode"
     ],
-    "web_flasher": true
+    "web_flasher": true,
+    "launcher_image": true
   },
   "cardputer": {
     "artifact_prefix": "cardputer",
@@ -83,7 +85,8 @@
       "standalone",
       "rnode"
     ],
-    "web_flasher": true
+    "web_flasher": true,
+    "launcher_image": true
   },
   "m9": {
     "artifact_prefix": "m9",
@@ -108,6 +111,7 @@
     "modes": [
       "standalone"
     ],
-    "web_flasher": true
+    "web_flasher": true,
+    "launcher_image": false
   }
 }

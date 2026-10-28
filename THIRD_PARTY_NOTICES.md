@@ -29,9 +29,9 @@ protocol sources identified in
 standalone firmware's source; the prebuilt Rust archives are not a substitute.
 
 Release downloads include `ratspeak-handheld-source.tar.gz`,
-`ratspeak-handheld-notices.zip`, `release-manifest.json`, and `SHA256SUMS`.
-Keep the notices with redistributed binaries. The source archive and manifest
-identify the source revisions and build inputs needed to rebuild them.
+`ratspeak-handheld-notices.zip`, and `SHA256SUMS`. Keep the notices with
+redistributed binaries. The source archive's `SOURCE.json` identifies the source
+revisions needed to rebuild them.
 
 Maintainers can verify the inventory offline with
 `python3 tools/collect_licenses.py --check`. After a dependency change, regenerate

@@ -45,6 +45,7 @@ class Board:
 
     modes: tuple[str, ...]
     web_flasher: bool
+    launcher_image: bool
 
     @property
     def capacity(self) -> int:
@@ -56,10 +57,14 @@ class Board:
         return f"{self.artifact_prefix}-{mode}"
 
     def image_name(self, mode: str) -> str:
-        """Single-mode factory image published beside its ZIP, byte-identical to the ZIP's image."""
-        if mode not in APPLICATIONS:
-            raise ValueError(f"unsupported single-mode image: {mode}")
+        """Complete factory image, written at 0x0 by esptool or the web flasher."""
         return f"{self.package_name(mode)}.bin"
+
+    def launcher_image_name(self) -> str:
+        """Standalone for bmorcelli's Launcher, which installs from the image's partition table."""
+        if not self.launcher_image:
+            raise ValueError("this board has no Launcher image")
+        return f"{self.package_name('standalone')}-launcher.bin"
 
     def partitions(self, root: Path = ROOT, *, standalone: bool = False) -> dict[str, Partition]:
         path = self.standalone_partition_csv if standalone else self.partition_csv
@@ -149,14 +154,15 @@ def load_boards(path: Path = ROOT / "tools/release_boards.json") -> dict[str, Bo
         if name not in board.app_environments:
             raise ValueError(f"{name}: normal application environment is missing")
         for key, value in fields.items():
-            if key in ("app_environments", "device_aliases", "standalone_flash_freq", "modes", "web_flasher"):
+            if key in ("app_environments", "device_aliases", "standalone_flash_freq", "modes", "web_flasher",
+                       "launcher_image"):
                 continue
             if board.modes == ("standalone",) and value is None and key in ("partition_csv", "rnode_target", "rnode_prep_target", "rnode_partition_scheme", "rnode_partition_csv"):
                 continue
             if not isinstance(value, str) or not re.fullmatch(r"[a-zA-Z0-9_./-]+", value):
                 raise ValueError(f"{name}: invalid catalog value")
-        if not isinstance(board.web_flasher, bool):
-            raise ValueError(f"{name}: web_flasher must be boolean")
+        if not isinstance(board.web_flasher, bool) or not isinstance(board.launcher_image, bool):
+            raise ValueError(f"{name}: web_flasher and launcher_image must be boolean")
         if board.modes == ("standalone",) and any(getattr(board, key) is not None for key in ("partition_csv", "rnode_target", "rnode_prep_target", "rnode_partition_scheme", "rnode_partition_csv")):
             raise ValueError(f"{name}: standalone-only board must omit RNode/dual layout fields")
         for value in (board.artifact_prefix, board.rnode_target, board.rnode_prep_target):
@@ -190,9 +196,8 @@ def load_boards(path: Path = ROOT / "tools/release_boards.json") -> dict[str, Bo
 
 
 def board_assets(board: Board) -> set[str]:
-    return {f"{board.package_name(mode)}.zip" for mode in board.modes} | {
-        board.image_name(mode) for mode in APPLICATIONS if mode in board.modes
-    }
+    return {board.image_name(mode) for mode in board.modes} | (
+        {board.launcher_image_name()} if board.launcher_image else set())
 
 
 # Every board is published; package and web-flasher capabilities are independent.

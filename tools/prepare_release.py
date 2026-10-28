@@ -14,19 +14,24 @@ import tarfile
 import zipfile
 from pathlib import Path
 
-from package_merged_zip import NOTICES, firmware_version, make_manifest, source_identity
-from release_catalog import APPLICATIONS, BOARDS, PACKAGES, ROOT, firmware_assets
-from release_identity import check_workspace, load_identity, source_pins, validate_version
-from release_images import verify_factory
+from release_catalog import APPLICATIONS, BOARDS, ROOT, firmware_assets
+from release_identity import check_workspace, firmware_version, load_identity, source_identity, source_pins, validate_version
+from release_images import COMPONENT_PREFIX, verify_factory, verify_launcher
 
 
 RELEASE_BOARDS = tuple(BOARDS)
 SOURCE_NAME = "ratspeak-handheld-source.tar.gz"
 NOTICE_NAME = "ratspeak-handheld-notices.zip"
-METADATA_NAME = "release-manifest.json"
 CHECKSUM_NAME = "SHA256SUMS"
 SERVICE_MARKER = b"[SERVICE] Dedicated network/storage task started\x00"
-GENERATED = {SOURCE_NAME, NOTICE_NAME, METADATA_NAME, CHECKSUM_NAME}
+GENERATED = {SOURCE_NAME, NOTICE_NAME, CHECKSUM_NAME}
+NOTICES = {
+    "LICENSE": "LICENSE",
+    "THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
+    "vendor/rnode_firmware/LICENSE": "licenses/RNode-GPL-3.0.txt",
+    "licenses/THIRD-PARTY.txt": "licenses/THIRD-PARTY.txt",
+    "licenses/manifest.json": "licenses/manifest.json",
+}
 
 
 
@@ -39,63 +44,43 @@ def verify_tag(tag: str, version: str) -> None:
         raise ValueError(f"release tag {tag!r} does not match firmware {version}")
 
 
-def verify_package(path: Path, board: str, mode: str, revision: str, root: Path) -> tuple[dict, bytes]:
-    capability = BOARDS[board]
-    brand, flash = capability.artifact_prefix, capability.flash_size
-    name = f"{brand}-{mode}"
-    allowed = {f"{name}.bin", "manifest.json", *NOTICES.values()}
-    with zipfile.ZipFile(path) as archive:
-        members = archive.infolist()
-        if len(members) != len(allowed) or {item.filename for item in members} != allowed:
-            raise ValueError(f"{path.name}: unexpected, missing or duplicate ZIP members")
-        # Refuse oversized expanded data before allocating it.
-        if any(item.file_size > 16 * 1024 * 1024 for item in members):
-            raise ValueError(f"{path.name}: ZIP member exceeds the release limit")
-        if any((item.external_attr >> 16) & 0o170000 not in (0, 0o100000) for item in members):
-            raise ValueError(f"{path.name}: ZIP contains links or special files")
-        manifest = json.loads(archive.read("manifest.json"))
-        image = archive.read(f"{name}.bin")
-        expected = make_manifest(image, name, board, mode, flash, firmware_version(root, board), revision, False)
-        if manifest != expected:
-            raise ValueError(f"{path.name}: manifest, image hash or clean-source identity mismatch")
-        if len(image) < 24 or image[0] != 0xE9:
-            raise ValueError(f"{path.name}: missing ESP image header")
-        verify_factory(image, board, mode, manifest["version"], revision, False, root)
-        for source, destination in NOTICES.items():
-            if archive.read(destination) != (root / source).read_bytes():
-                raise ValueError(f"{path.name}: notice differs from the release source: {destination}")
-    return manifest, image
-
-
-def verify_firmware(dist: Path, revision: str, root: Path) -> list[dict]:
-    actual = {path.name for path in dist.iterdir()}
+def verify_firmware(dist: Path, revision: str, root: Path) -> str:
+    actual = {path.name for path in dist.iterdir()} - GENERATED
     expected = firmware_assets()
     if actual != expected:
         raise ValueError(f"release asset mismatch; missing={sorted(expected - actual)}, unexpected={sorted(actual - expected)}")
-    manifests = []
+    versions = set()
     for board in RELEASE_BOARDS:
         capability = BOARDS[board]
-        brand = capability.artifact_prefix
+        version = firmware_version(root, board)
+        versions.add(version)
         partitions = capability.partitions(root) if "full" in capability.modes else None
-        images = {}
-        for mode in capability.modes:
-            manifest, images[mode] = verify_package(dist / f"{brand}-{mode}.zip", board, mode, revision, root)
-            manifests.append(manifest)
+        images = {mode: (dist / capability.image_name(mode)).read_bytes() for mode in capability.modes}
+        components = {mode: verify_factory(image, board, mode, version, revision, False, root)
+                      for mode, image in images.items()}
         for mode in APPLICATIONS:
             if mode not in capability.modes:
                 continue
-            # One complete image per mode: esptool at 0x0 and Launcher both read its
-            # embedded partition table, so it must be exactly the ZIP's image.
-            if (dist / capability.image_name(mode)).read_bytes() != images[mode]:
-                raise ValueError(f"{board} {mode}: image differs from its factory package")
-            app = verify_factory(images[mode], board, mode, firmware_version(root, board), revision, False, root)[mode]
+            app = components[mode][mode]
             if mode == "standalone" and capability.runtime == "dedicated" and SERVICE_MARKER not in app:
                 raise ValueError(f"{board}: release application does not use the dedicated service task")
             if partitions and images["full"][partitions[mode].offset:partitions[mode].offset + len(app)] != app:
                 raise ValueError(f"{board} {mode}: application differs from dual-boot package")
-    if len({manifest["version"] for manifest in manifests}) != 1:
-        raise ValueError("release boards/packages disagree on firmware version")
-    return manifests
+        if capability.launcher_image:
+            verify_launcher((dist / capability.launcher_image_name()).read_bytes(), images["standalone"], board, root)
+    if len(versions) != 1:
+        raise ValueError("release boards disagree on firmware version")
+    return versions.pop()
+
+
+def image_identities(dist: Path) -> set[tuple[str, str]]:
+    """(version, revision) of every component embedded in the release images."""
+    found = set()
+    for name in sorted(firmware_assets()):
+        for match in re.finditer(re.escape(COMPONENT_PREFIX) + rb"([^\0]*)\0", (dist / name).read_bytes()):
+            board, role, version, revision, dirty = match.group(1).decode().split(":")
+            found.add((version, revision))
+    return found
 
 
 def source_refs(root: Path) -> dict[str, str]:
@@ -149,7 +134,7 @@ def prepare(dist: Path, root: Path) -> None:
         if (dist / name).exists():
             raise ValueError(f"refusing to overwrite release output: {name}; use a fresh artifact directory")
     check_workspace(root)
-    manifests = verify_firmware(dist, revision, root)
+    version = verify_firmware(dist, revision, root)
     refs = source_refs(root)
     for repo, expected in refs.items():
         actual, dirty = source_identity(root.parent / repo)
@@ -159,23 +144,12 @@ def prepare(dist: Path, root: Path) -> None:
              **{name: source["role"] for name, source in load_identity(root)["sources"].items()}}
     write_sources(dist / SOURCE_NAME, root.parent, refs, roles)
     write_notices(dist / NOTICE_NAME, root)
-    assets = {}
-    for name in sorted(firmware_assets() | {SOURCE_NAME, NOTICE_NAME}):
-        data = (dist / name).read_bytes()
-        assets[name] = {"size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
-    metadata = {
-        "schemaVersion": 1, "product": "ratspeak-handheld", "version": manifests[0]["version"],
-        "sources": refs, "sourceRoles": roles,
-        "boards": list(RELEASE_BOARDS), "installMode": "factory", "assets": assets,
-    }
-    (dist / METADATA_NAME).write_text(json.dumps(metadata, indent=2) + "\n")
     checksums = []
-    for name in sorted(firmware_assets() | {SOURCE_NAME, NOTICE_NAME, METADATA_NAME}):
+    for name in sorted(firmware_assets() | {SOURCE_NAME, NOTICE_NAME}):
         checksums.append(f"{hashlib.sha256((dist / name).read_bytes()).hexdigest()}  {name}\n")
     (dist / CHECKSUM_NAME).write_text("".join(checksums))
-    print(f"release assets verified: {len(BOARDS)} boards, "
-          f"{sum(len(board.modes) for board in BOARDS.values())} factory ZIPs, "
-          f"{sum(len(set(board.modes) & set(APPLICATIONS)) for board in BOARDS.values())} single-mode images; source {revision}")
+    print(f"release assets verified: {version}, {len(BOARDS)} boards, "
+          f"{len(firmware_assets())} firmware images; source {revision}")
 
 
 def main() -> int:
@@ -185,10 +159,13 @@ def main() -> int:
     parser.add_argument("--source-revision", help="expected source commit when checking a release tag")
     args = parser.parse_args()
     if args.check_tag:
-        metadata = json.loads((args.dist / METADATA_NAME).read_text())
-        verify_tag(args.check_tag, metadata["version"])
-        if args.source_revision and metadata["sources"]["ratspeak-handheld"] != args.source_revision:
-            raise ValueError("release manifest does not match the tagged source commit")
+        identities = image_identities(args.dist)
+        if len(identities) != 1:
+            raise ValueError("release images disagree on version or source revision")
+        version, revision = identities.pop()
+        verify_tag(args.check_tag, version)
+        if args.source_revision and revision != args.source_revision:
+            raise ValueError("release images do not match the tagged source commit")
         print(f"release tag verified: {args.check_tag}")
         return 0
     prepare(args.dist, ROOT)
