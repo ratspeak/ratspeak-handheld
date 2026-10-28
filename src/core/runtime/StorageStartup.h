@@ -2,6 +2,8 @@
 
 #include "storage/FlashStore.h"
 
+#include <esp_partition.h>
+
 namespace handheld {
 
 // Startup-only, before reset recovery and on every board: resolves internal
@@ -40,6 +42,9 @@ void storageStartup(FlashStore& flash, Keyboard& keyboard, Display& display, Res
         problem = "Internal storage could not be set up."; detail = "Restart to retry.";
     }
     const bool choice = state == Startup::Damaged || state == Startup::Foreign;
+    // bmorcelli's Launcher boots from a test app partition. Its web installer
+    // drops a storage partition the image declares but does not carry.
+    const bool launcher = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_TEST, nullptr);
     bool confirm = false, paint = true, failed = false;
     for (;;) {
         if (paint) {
@@ -55,10 +60,16 @@ void storageStartup(FlashStore& flash, Keyboard& keyboard, Display& display, Res
                 line(72, "X: keep it and restart");
                 line(90, "E: erase and start fresh");
                 line(112, "Back up first to keep this data.");
+            } else if (state == Startup::Missing && launcher) {
+                line(37, "No storage partition was found.");
+                line(53, "In Launcher, install the");
+                line(65, "-standalone-launcher.bin instead.");
+                line(95, "Power off and on to open Launcher.");
+                line(112, "X: restart");
             } else if (state == Startup::Missing) {
                 line(37, "No storage partition was found.");
-                line(53, "Install the complete .bin or ZIP");
-                line(65, "image for this device.");
+                line(53, "Install the complete .bin image");
+                line(65, "for this device.");
                 line(112, "X: restart");
             } else {
                 line(37, problem);
