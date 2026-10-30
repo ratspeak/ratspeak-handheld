@@ -73,6 +73,7 @@ fn ffi_deferred_capture_preserves_birth_and_rejects_invalid_or_expired_windows()
         packet_hash: [0x11; 32],
         random_hash: [0x01; 10],
         public_key: [0x22; 64],
+        bulk: false,
     };
     assert!(unsafe {
         (*ctx)
