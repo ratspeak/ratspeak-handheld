@@ -29,8 +29,10 @@ public:
 
 private:
     struct Endpoint { char host[254] = {}; uint16_t port = 0; };
+    static uint32_t fingerprint(const Endpoint& endpoint);
     void retire();
     std::array<Endpoint, Capacity> _desired{};
+    std::array<uint32_t, Capacity> _bound{};  // hub last attached per slot; survives stop()
     std::array<TCPClientInterface*, Capacity> _clients{};
     RustInterfacePump* _pump = nullptr;
     size_t _desiredCount = 0, _active = 0, _owned = 0, _cursor = 0;

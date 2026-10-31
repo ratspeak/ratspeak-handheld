@@ -32,6 +32,14 @@ bool TcpClientSet::reload(RustInterfacePump& pump, const std::vector<TCPEndpoint
         memcpy(next[count].host, endpoint.host.c_str(), len + 1);
         next[count++].port = endpoint.port;
     }
+    // A different hub behind a slot's interface ID makes its learned routes wrong; a Wi-Fi
+    // reconnect to the same hubs keeps them.
+    for (size_t i = 0; i < Capacity; ++i) {
+        if (_bound[i] && (i >= count || _bound[i] != fingerprint(next[i]))) {
+            pump.replaceTcp(i);
+            _bound[i] = 0;
+        }
+    }
     retire();
     _pump = &pump;
     _desired = next;
@@ -40,6 +48,14 @@ bool TcpClientSet::reload(RustInterfacePump& pump, const std::vector<TCPEndpoint
     _retrying = false;
     maintain();
     return true;
+}
+
+uint32_t TcpClientSet::fingerprint(const Endpoint& endpoint) {
+    uint32_t hash = 2166136261u;  // FNV-1a over host and port; zero means unbound
+    for (const char* c = endpoint.host; *c; ++c) hash = (hash ^ uint8_t(*c)) * 16777619u;
+    hash = (hash ^ (endpoint.port & 0xff)) * 16777619u;
+    hash = (hash ^ (endpoint.port >> 8)) * 16777619u;
+    return hash ? hash : 1;
 }
 
 void TcpClientSet::retire() {
@@ -83,6 +99,7 @@ void TcpClientSet::maintain() {
             delete client;  // No SDK task has started; destruction cannot wait.
             return;
         }
+        _bound[_active] = fingerprint(endpoint);
         _clients[_active++] = client;
         ++_owned;
         // Endpoint and fixed buffers have already been validated. A failed SDK

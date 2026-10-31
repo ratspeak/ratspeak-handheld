@@ -518,6 +518,10 @@ rs_handheld_status_t rs_handheld_rns_outbound_ack(rs_handheld_rns_t *ctx,
 /* Also removes permission from rows not yet selected; replacement never rebinds them. */
 rs_handheld_status_t rs_handheld_rns_outbound_retire_interface(rs_handheld_rns_t *ctx,
     uint8_t interface_id);
+/* A different driver owns interface_id: also drops its paths, reverse entries, Links and
+ * requesters. A reconnect of the same driver uses outbound_retire_interface only. */
+rs_handheld_status_t rs_handheld_rns_interface_replaced(rs_handheld_rns_t *ctx,
+    uint8_t interface_id);
 rs_handheld_status_t rs_handheld_rns_capture_outbound_lifetime(const rs_handheld_rns_t *ctx,
     const uint8_t *raw, size_t raw_len, uint64_t now_ms,
     uint8_t out_lifetime[RS_HANDHELD_TX_LIFETIME_BYTES]);

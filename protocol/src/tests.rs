@@ -1587,6 +1587,86 @@ fn route_api_selects_interface_and_header_from_live_path() {
 }
 
 #[test]
+fn replaced_tcp_hub_drops_its_routes_but_a_reconnect_keeps_them() {
+    let ctx = loaded_ctx();
+    let _node = open_transport_into(ctx, 0);
+    let mut announce_data = [0u8; 600];
+    let mut learn = |key: u8, interface: u8, next_hop: Option<[u8; 16]>| {
+        let peer = LocalIdentity::from_private_key(&[key; 64]);
+        let dest = peer.lxmf_delivery_hash();
+        let len = peer
+            .create_announce_named(
+                "lxmf.delivery",
+                &compose_random_hash(&[key; 5], 1),
+                None,
+                &[],
+                &mut announce_data,
+            )
+            .unwrap();
+        let packet = frame_announce_with_route(
+            &announce_data[..len],
+            &dest,
+            u8::from(next_hop.is_some()),
+            next_hop,
+            PacketContext::None,
+        );
+        let mut action = -1;
+        assert_eq!(
+            unsafe {
+                rs_handheld_rns_packet_ingest(
+                    ctx,
+                    packet.as_ptr(),
+                    packet.len(),
+                    interface,
+                    1000,
+                    &mut action,
+                    core::ptr::null_mut(),
+                    core::ptr::null_mut(),
+                )
+            },
+            RsHandheldStatus::Ok
+        );
+        dest
+    };
+    let lora_peer = learn(0x71, 0, None);
+    let hub_peer = learn(0x72, 1, Some([0xA5; 16]));
+    let route = |dest: &[u8; 16]| {
+        let mut route = RsHandheldRoute {
+            kind: -1,
+            interface_id: 0,
+            header_type: 0,
+            next_hop: [0; 16],
+            hops: 0,
+        };
+        assert_eq!(
+            unsafe { rs_handheld_rns_route(ctx, dest, 1001, &mut route) },
+            RsHandheldStatus::Ok
+        );
+        (route.kind, route.interface_id, route.next_hop)
+    };
+    assert_eq!(route(&hub_peer), (ROUTE_DIRECT, 1, [0xA5; 16]));
+
+    assert_eq!(
+        unsafe { rs_handheld_rns_outbound_retire_interface(ctx, 1) },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!(route(&hub_peer), (ROUTE_DIRECT, 1, [0xA5; 16]));
+
+    // A settings change reuses the ID for a different hub; the old next hop must not survive.
+    assert_eq!(
+        unsafe { rs_handheld_rns_interface_replaced(ctx, 1) },
+        RsHandheldStatus::Ok
+    );
+    assert_eq!(route(&hub_peer).0, ROUTE_BROADCAST);
+    assert_eq!(route(&lora_peer), (ROUTE_DIRECT, 0, [0; 16]));
+    assert_eq!(
+        unsafe { rs_handheld_rns_interface_replaced(ctx, 7) },
+        RsHandheldStatus::ErrInvalidArg
+    );
+    unsafe { rs_handheld_rns_shutdown(ctx) };
+}
+
+#[test]
 fn known_destination_ffi_roundtrips_complete_blob() {
     let peer = LocalIdentity::from_private_key(&[0x63; 64]);
     let destination = peer.lxmf_delivery_hash();

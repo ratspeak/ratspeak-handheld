@@ -139,7 +139,7 @@ void RustInterfacePump::stop() {
     // Retire recursive requesters while the Rust context still exists. Driver
     // callbacks below may reenter stop after _ctx has been detached.
     if (_ctx) for (uint8_t id = 0; id <= WIFI_AP_IFACE_ID; ++id)
-        rs_handheld_rns_outbound_retire_interface(_ctx, id);
+        rs_handheld_rns_interface_replaced(_ctx, id);
     if (_drainEpoch) _drainEpoch = _drainEpoch == UINT32_MAX ? 0 : _drainEpoch + 1;
     const bool changing = _changingReceiptHook;
     _ctx = nullptr;
@@ -182,6 +182,10 @@ void RustInterfacePump::detachTcpAll() {
     _tcpCount = 0;
     for (uint8_t id = TCP_IFACE_BASE; id < TCP_IFACE_BASE + MAX_TCP; ++id)
         invalidateInterface(id);
+}
+
+void RustInterfacePump::replaceTcp(size_t index) {
+    if (index < MAX_TCP) replaceInterface(TCP_IFACE_BASE + uint8_t(index));
 }
 
 bool RustInterfacePump::pollRadioBeforeBlockingWork() {
@@ -295,6 +299,11 @@ void RustInterfacePump::invalidateInterface(uint8_t id) {
     _pending.targets &= ~(1u << id);
     if (previousTargets && !_pending.targets) ++_counters.txDropped;
     if (_ctx) rs_handheld_rns_outbound_retire_interface(_ctx, id);
+}
+
+void RustInterfacePump::replaceInterface(uint8_t id) {
+    invalidateInterface(id);
+    if (_ctx) rs_handheld_rns_interface_replaced(_ctx, id);
 }
 
 uint8_t RustInterfacePump::liveTargets() const {

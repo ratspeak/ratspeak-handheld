@@ -69,6 +69,7 @@ public:
     void attachLoRa(LoRaInterface* lora);
     int attachTcp(TCPClientInterface* tcp);  // returns interface id, -1 if full
     void detachTcpAll();
+    void replaceTcp(size_t index);  // a different hub now owns this slot: drop its routes
     void attachAuto(RnsAutoInterface* autoIface);  // driver lifecycle stays main-owned
     void attachWifiAp(WiFiInterface* wifiAp);
 
@@ -119,6 +120,7 @@ private:
     uint32_t syncGeneration(uint8_t ifaceId);
     bool syncInterfaceFacts();
     void invalidateInterface(uint8_t ifaceId);
+    void replaceInterface(uint8_t ifaceId);
     static bool receiptHook(void*, handheld::TxReceipt, handheld::TxReceiptEvent);
     void* _receiptContext = nullptr;
     handheld::TxReceiptHook _receiptHook = nullptr;

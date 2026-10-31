@@ -1211,6 +1211,29 @@ pub unsafe extern "C" fn rs_handheld_rns_outbound_retire_interface(
     })
 }
 
+/// A different driver now owns `interface` (attach, detach, settings change): drop every
+/// path, reverse entry, Link and requester through it. A reconnect only retires permissions.
+///
+/// # Safety
+/// `ctx` must be a live exclusively owned context.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rs_handheld_rns_interface_replaced(
+    ctx: *mut RsHandheldRns,
+    interface: u8,
+) -> RsHandheldStatus {
+    guard(|| {
+        if ctx.is_null() || interface >= 7 {
+            return RsHandheldStatus::ErrInvalidArg;
+        }
+        let node = match unsafe { &mut *ctx }.node {
+            Some(mut p) => unsafe { p.as_mut() },
+            None => return RsHandheldStatus::ErrNotReady,
+        };
+        node.retire_replaced_interface(interface);
+        RsHandheldStatus::Ok
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 unsafe fn poll_outbound(
     ctx: *mut RsHandheldRns,
