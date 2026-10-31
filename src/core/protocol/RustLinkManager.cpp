@@ -405,11 +405,13 @@ void RustLinkManager::retryKeepalive(Link& l) {
 
 void RustLinkManager::onLinkRequest(const rs_handheld_local_frame_t& f, uint8_t ifaceId) {
     if (!_d.ourDestHash) return;
+    // Python counts the receiving hop before Link.validate_request; frames carry wire hops.
+    const uint8_t hops = f.hops < 255 ? f.hops + 1 : 255;
     const bool voice = _d.ourVoiceHash && !memcmp(f.destination_hash, _d.ourVoiceHash, 16);
     if (!voice && memcmp(f.destination_hash, _d.ourDestHash, 16)) return;
     if (voice) {
         if (!_voiceSink || !_d.pump || !_d.pump->interfaceGeneration(ifaceId) ||
-            !_voiceSink->admitVoice(ifaceId, f.hops ? f.hops : 1)) return;
+            !_voiceSink->admitVoice(ifaceId, hops)) return;
         for (const auto& link : _links)
             if (link.owner == Owner::Voice && link.state != State::Free && link.state != State::Closed) return;
     }
@@ -449,7 +451,7 @@ void RustLinkManager::onLinkRequest(const rs_handheld_local_frame_t& f, uint8_t 
     l->interfaceGeneration = _d.pump ? _d.pump->interfaceGeneration(ifaceId) : 0;
     l->haveKey = true;
     memcpy(l->linkId, linkId, 16);
-    l->hops = f.hops ? f.hops : 1;  // responder establishment timeout scales per Link.py:207
+    l->hops = hops;  // responder establishment timeout scales per Link.py:204
     l->requestMs = millis();
     l->lastInboundMs = l->requestMs;
     memcpy(l->peerDest, f.destination_hash, 16);  // responder routing placeholder, never an authenticated source
