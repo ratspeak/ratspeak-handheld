@@ -24,15 +24,15 @@ def require_file(path: Path, label: str) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--device", required=True, choices=BOARDS)
-    parser.add_argument("--bootloader", required=True, type=Path)
-    parser.add_argument("--partitions", required=True, type=Path)
-    parser.add_argument("--boot-app0", required=True, type=Path)
-    parser.add_argument("--launcher", required=True, type=Path)
-    parser.add_argument("--standalone", required=True, type=Path)
-    parser.add_argument("--rnode", required=True, type=Path)
-    parser.add_argument("--output", required=True, type=Path)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--device", required=True, choices=BOARDS, help="board with full/dual-boot packages; standalone-only boards are unsupported")
+    parser.add_argument("--bootloader", required=True, type=Path, help="ESP32-S3 bootloader binary for offset 0x0")
+    parser.add_argument("--partitions", required=True, type=Path, help="dual-boot partition-table binary for offset 0x8000")
+    parser.add_argument("--boot-app0", required=True, type=Path, help="SDK boot_app0.bin metadata for offset 0xe000")
+    parser.add_argument("--launcher", required=True, type=Path, help="launcher application binary")
+    parser.add_argument("--standalone", required=True, type=Path, help="Standalone application binary")
+    parser.add_argument("--rnode", required=True, type=Path, help="RNode application binary")
+    parser.add_argument("--output", required=True, type=Path, help="merged factory binary; existing file is replaced after verification")
     args = parser.parse_args()
 
     for label, path in (

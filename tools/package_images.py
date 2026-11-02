@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Verify a board's factory images and write its release .bin files."""
+"""Verify a board's factory images and write its release .bin files.
+
+Supply exactly the modes supported by the selected board. Existing release
+binary names in --dist are replaced after image verification.
+"""
 
 from __future__ import annotations
 
@@ -37,10 +41,10 @@ def package(device: str, images: dict[str, bytes], dist: Path, root: Path = ROOT
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--device", required=True, choices=BOARDS)
+    parser.add_argument("--device", required=True, choices=BOARDS, help="board whose supported image modes are required")
     for mode in PACKAGES:
-        parser.add_argument(f"--{mode}", type=Path)
-    parser.add_argument("--dist", required=True, type=Path)
+        parser.add_argument(f"--{mode}", type=Path, help=f"{mode} factory image; supply when supported by the selected board")
+    parser.add_argument("--dist", required=True, type=Path, help="output directory for verified release binaries")
     args = parser.parse_args()
     images = {mode: getattr(args, mode).read_bytes() for mode in PACKAGES if getattr(args, mode)}
     for path in package(args.device, images, args.dist):

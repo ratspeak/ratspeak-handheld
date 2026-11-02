@@ -274,8 +274,9 @@ def make_settings(device: str) -> dict[str, str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("devices", "matrix", "make", "site-contract", "check"))
-    parser.add_argument("--device", choices=BOARDS)
+    parser.add_argument("command", choices=("devices", "matrix", "make", "site-contract", "check"),
+                        help="devices/matrix list boards; make prints build variables; site-contract prints flasher JSON; check validates layouts and RNode build settings")
+    parser.add_argument("--device", choices=BOARDS, help="board for make; required only by that command")
     args = parser.parse_args()
     if args.command == "devices":
         print(" ".join(BOARDS))

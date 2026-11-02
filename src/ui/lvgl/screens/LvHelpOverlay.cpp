@@ -72,8 +72,8 @@ void LvHelpOverlay::create() {
     addHelpRow(_overlay, "Back", "Return / cancel editing");
     addHelpRow(_overlay, "Left / Right", "Switch tabs outside editors");
     addHelpRow(_overlay, "Hold Enter", "Context actions / sleep");
-    addHelpRow(_overlay, "Icon keys", "Coming soon");
-    addHelpRow(_overlay, "Chat arrows", "Select a message; OK opens");
+    addHelpRow(_overlay, "Icon keys", "Not assigned");
+    addHelpRow(_overlay, "Chat U/D", "Select a message; OK opens");
     addHelpRow(_overlay, "Chat Back", "Clear selection first");
 #elif HAS_SCROLLWHEEL
     addHelpRow(_overlay, "Encoder", "Move selection / edit value");
@@ -85,13 +85,13 @@ void LvHelpOverlay::create() {
     addHelpRow(_overlay, "Chat wheel", "Select message; click opens");
     addHelpRow(_overlay, "Below draft", "Wheel to Voice or Send");
     addHelpRow(_overlay, "Selected", "Click opens; hold for actions");
-    addHelpRow(_overlay, "BOOT", "Tap sleep; hold power off");
+    addHelpRow(_overlay, "BOOT", "Tap sleep; hold power menu");
 #else
     addHelpRow(_overlay, "Trackball", "Move selection");
     addHelpRow(_overlay, "Click/Enter", "Open or confirm");
     addHelpRow(_overlay, ",  /", "Previous or next tab");
     addHelpRow(_overlay, "Backspace", "Delete text; back if empty");
-    addHelpRow(_overlay, "Hold click", "Cancel settings / name edit");
+    addHelpRow(_overlay, "Hold click", "Cancel settings / nickname");
     addHelpRow(_overlay, "Cancel / <", "Tap to cancel or go back");
     addHelpRow(_overlay, "Chat ball", "Scroll; click selects message");
     addHelpRow(_overlay, "Selected", "Click opens; hold for actions");
@@ -100,9 +100,9 @@ void LvHelpOverlay::create() {
 
     lv_obj_t* footer = makeLabel(_overlay,
 #if !HAS_TOUCH
-                                 "Any key closes",
+                                 "Enter closes",
 #else
-                                 "Any key or tap closes",
+                                 "Enter or tap panel to close",
 #endif
                                  &lv_font_rsdeck_10, Theme::TEXT_MUTED,
                                  260, LV_TEXT_ALIGN_CENTER);

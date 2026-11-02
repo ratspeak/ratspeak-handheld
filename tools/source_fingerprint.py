@@ -59,5 +59,5 @@ def source_fingerprint(root: Path = ROOT, scope: tuple[str, ...] = ()) -> str:
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--archive", action="store_true", help="only the committed archives' inputs")
+    parser.add_argument("--archive", action="store_true", help="hash this repository's protocol/ sources, excluding generated archives")
     print(source_fingerprint(scope=ARCHIVE_SOURCES if parser.parse_args().archive else ()))

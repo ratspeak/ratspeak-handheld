@@ -88,7 +88,10 @@ def source_refs(root: Path) -> dict[str, str]:
 
 
 def write_sources(destination: Path, workspace: Path, refs: dict[str, str], roles: dict[str, str] | None = None) -> None:
-    """Include committed source, never working files, .git history or credentials."""
+    """Include committed trees without working-tree changes or .git history.
+
+    Tracked files are not filtered for credentials.
+    """
     with destination.open("wb") as output, gzip.GzipFile(filename="", mode="wb", fileobj=output, mtime=0) as compressed:
         with tarfile.open(fileobj=compressed, mode="w|") as bundle:
             for repo, revision in refs.items():
@@ -154,7 +157,8 @@ def prepare(dist: Path, root: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dist", type=Path, default=ROOT / "dist")
+    parser.add_argument("--dist", type=Path, default=ROOT / "dist",
+                        help="directory containing all expected firmware images (default: repository dist/); preparation adds source/notices archives and SHA256SUMS, refusing existing generated outputs")
     parser.add_argument("--check-tag", help="check a prepared release's tag/version binding only")
     parser.add_argument("--source-revision", help="expected source commit when checking a release tag")
     args = parser.parse_args()

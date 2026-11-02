@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Check the local toolchain and source layout before a handheld build."""
+"""Check local command/module availability and required files before a handheld build.
+
+This does not verify tool versions or compile firmware.
+"""
 
 from __future__ import annotations
 
@@ -15,7 +18,7 @@ from release_catalog import BOARDS, ROOT
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--device", choices=BOARDS, default="tdeck")
+    parser.add_argument("--device", choices=BOARDS, default="tdeck", help="board to check (default: tdeck)")
     parser.add_argument(
         "--source",
         action="store_true",

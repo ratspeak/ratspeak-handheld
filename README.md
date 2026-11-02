@@ -30,22 +30,30 @@ rsLXMFLite, with device support built around the same messaging services.
 | LilyGO T-Deck Plus | Standalone and RNode |
 | LilyGO T-Pager (SX1262) | Standalone and RNode |
 | M5Stack Cardputer Adv | Standalone and RNode; Cap LoRa-1262 required for LoRa |
-| Elecrow ThinkNode M9 | Standalone; RNode coming soon |
+| Elecrow ThinkNode M9 | Standalone only |
 
 An SD card is optional for normal messaging. Downloads are available for all
 four devices.
 
-This is beta firmware. If something isn't working, open an issue with your
-device, firmware version, and the steps to reproduce it.
+The current release is **v2.3.4 beta**. If something isn't working, open an issue
+with your device, firmware version, and the steps to reproduce it.
 
 ## Install
 
-Download the `.bin` for your device from [Releases](https://github.com/ratspeak/ratspeak-handheld/releases):
+Download the `.bin` for your device from [v2.3.4](https://github.com/ratspeak/ratspeak-handheld/releases/tag/v2.3.4):
 
 - **Full** — Standalone and RNode, with a launcher to choose between them at startup.
 - **Standalone** — the on-device messenger, using LoRa or WiFi.
 - **RNode** — use the handheld as a radio for Ratspeak, Sideband, or another
   Reticulum client over USB or BLE.
+
+Full and RNode images are available for T-Deck, T-Pager and Cardputer. M9 has a
+Standalone image only.
+
+Before a factory install, back up your identity and messages. Follow the
+[installation guide](https://docs.ratspeak.org/docs/hardware/flashing-firmware)
+for backups, matching-layout updates, and the erase steps needed when changing
+firmware layouts.
 
 Files are named by device and mode, such as `tdeck-full.bin`,
 `pager-standalone.bin` and `cardputer-rnode.bin`. Each is a complete image.
@@ -56,16 +64,13 @@ bmorcelli's Launcher.
   select your device, and choose **Flash in browser**. To install a downloaded
   `.bin`, choose **Flash** under **Build your own** and upload it. Compatible
   updates keep identity, messages and settings.
-- **esptool:** write the `.bin` at 0x0, for example
-  `python3 -m esptool --chip esp32s3 --port PORT --baud 115200 write-flash 0x0 m9-standalone.bin`.
+- **esptool:** follow the installation guide to write a complete factory `.bin`
+  at offset `0x0`. Bare app images use a different procedure.
 - **bmorcelli's Launcher:** install the `-standalone-launcher.bin` from the SD
   card or Launcher's web interface. For RNode, install the `-rnode.bin`.
 
-Factory installs with the web flasher or esptool replace the firmware layout, so
-back up your identity and messages first. See the
-[installation guide](https://docs.ratspeak.org/docs/hardware/flashing-firmware)
-for backups, updates and Launcher storage, and the [handheld guide](https://docs.ratspeak.org/docs/hardware/handheld-guide)
-for controls and setup.
+See the [handheld guide](https://docs.ratspeak.org/docs/hardware/handheld-guide)
+for controls and setup. The installation guide also covers Launcher storage.
 
 ## Message history
 
@@ -86,7 +91,7 @@ playback and delivery status. ThinkNode M9 has no supported audio hardware.
 On Pager, move the wheel down from the composer to reach Voice and Send, then
 click to select. Cardputer also opens the recorder with **Ctrl+V**.
 
-Unsent clips are removed when you close the conversation. **Settings → Voice**
+Unsent clips are removed when you close the conversation. **Settings → Voice Messages**
 controls playback volume and **Max voice messages** (1–50, default 2) for
 internal storage. Oldest audio is removed first; the message stays in chat.
 SD-card audio is limited by available storage instead of the clip count.
@@ -96,7 +101,7 @@ app can choose a compatible compact recording. Existing Opus clips cannot be
 played on these handhelds. Live handheld calls and Hub/channel access are not
 available in this release.
 
-### Standalone radio defaults
+## Standalone radio defaults
 
 New or reset radio settings use **Medium Fast**: bandwidth **250 kHz**
 (`250000` Hz), spreading factor **9**, coding rate **4/5** (`5` in RNode
@@ -151,10 +156,11 @@ messages on the node.
 
 ## Build From Source
 
-On Linux or macOS, install Git, Make, Python 3.12 and Arduino CLI 1.4.1, then:
+To build v2.3.4 on Linux or macOS, install Git, Make, Python 3.12 and Arduino CLI
+1.4.1, then:
 
 ```bash
-git clone https://github.com/ratspeak/ratspeak-handheld
+git clone --branch v2.3.4 https://github.com/ratspeak/ratspeak-handheld
 cd ratspeak-handheld
 python3 -m venv .venv
 . .venv/bin/activate

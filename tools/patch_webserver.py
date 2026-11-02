@@ -37,12 +37,14 @@ def patched_source(source: Path) -> bytes:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--arduino-cli", default="arduino-cli")
-    parser.add_argument("--fqbn")
-    parser.add_argument("--sketch", type=Path)
-    parser.add_argument("--build-path", type=Path)
-    parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--verify-database", type=Path)
+    parser.add_argument("--arduino-cli", default="arduino-cli", help="Arduino CLI executable used to resolve the selected core (default: arduino-cli)")
+    parser.add_argument("--fqbn", help="fully qualified board name; required for preparation")
+    parser.add_argument("--sketch", type=Path, help="sketch path; required for preparation")
+    parser.add_argument("--build-path", type=Path, help="Arduino build directory; required for preparation")
+    parser.add_argument("--output", type=Path, required=True,
+                        help="generated library override outside the installed core; preparation replaces an existing managed directory")
+    parser.add_argument("--verify-database", type=Path,
+                        help="check compile_commands.json against --output without preparing a library; otherwise resolve and copy the selected Arduino 2.0.17 library")
     args = parser.parse_args()
     if args.verify_database:
         verify_database(args.verify_database, args.output, SOURCE_FILES)

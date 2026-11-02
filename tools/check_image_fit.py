@@ -18,11 +18,11 @@ def image_size(path: Path) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--device", required=True, choices=BOARDS)
-    parser.add_argument("--launcher", type=Path)
-    parser.add_argument("--standalone", required=True, type=Path)
-    parser.add_argument("--rnode", type=Path)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--device", required=True, choices=BOARDS, help="board whose partition sizes and component identity are checked")
+    parser.add_argument("--launcher", type=Path, help="launcher application binary; required for dual-boot boards")
+    parser.add_argument("--standalone", required=True, type=Path, help="Standalone application binary, not a merged factory image")
+    parser.add_argument("--rnode", type=Path, help="RNode application binary; required for dual-boot boards")
     args = parser.parse_args()
 
     failed = False

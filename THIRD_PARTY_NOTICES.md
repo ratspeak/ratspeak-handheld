@@ -92,9 +92,10 @@ the bootloader or the firmware's sleep policy.
 
 ### TLS Finished errors
 
-`mbedtls/UPSTREAM.json` identifies the exact Espressif Mbed TLS 2.28.7 sources
-and local changes. The Deck/Pager application compiles `ssl_tls.c` through
-`src/core/compat/Tls.c`. Its private Finished callback returns status so failed
+`mbedtls/UPSTREAM.json` identifies the Espressif Mbed TLS 2.28.7 source
+revision and original checksums. The T-Deck, T-Pager and M9 applications compile
+`ssl_tls.c` through `src/core/compat/Tls.c`. Its private Finished callback returns
+status so failed
 hash/PRF calculations cannot continue through Finished processing. The matching
 private header stays local to this translation unit; public SDK layouts and
 symbols remain unchanged. Version/configuration guards require re-review when
@@ -122,5 +123,6 @@ When TLS entry points are linked, the same checker requires the corrected
 Finished providers and rejects live code from the original `ssl_tls.c.obj`
 archive member. Discarded zero-address sections do not supply firmware code.
 
-Native DHCP parser tests and SDK compilation validate the software changes.
-Device wake and access-point checks remain part of hardware release testing.
+When changing these backports, run the native DHCP parser tests and SDK
+compilation checks. Device wake and access-point checks remain part of hardware
+release testing.

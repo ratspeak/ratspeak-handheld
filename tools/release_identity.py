@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """One product identity; generated firmware version and checked source consumers.
 
-Normal firmware builds use the included header and archives. Only developer
-graph/archive checks require Git and sibling Rust sources. The product manifest
+Normal firmware builds use the included header and archives. Build-identity
+checks invoke Git, with SOURCE.json fallback when Git cannot identify a release
+archive checkout. Graph/archive checks also require sibling Rust sources. The product manifest
 contains no private harness dependencies. Each Lite repository owns its trusted
 lineage; a handheld candidate must select commits consistent with that lineage.
 """
@@ -236,7 +237,8 @@ def archive_inputs(root: Path = ROOT) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("check", "sync", "version", "toolchain", "sources", "check-lineage", "check-workspace", "archive-inputs", "build-flags"))
+    parser.add_argument("command", choices=("check", "sync", "version", "toolchain", "sources", "check-lineage", "check-workspace", "archive-inputs", "build-flags"),
+                        help="check validates local mirrors; sync rewrites headers/workflow pins; version/toolchain/sources print identity data; check-lineage/check-workspace validate sibling sources; archive-inputs prints an input fingerprint; build-flags prints revision/dirty macros")
     parser.add_argument("--allow-dirty", action="store_true", help="development workspace only; exact selected HEADs still required")
     args = parser.parse_args()
     if args.allow_dirty and args.command != "check-workspace":

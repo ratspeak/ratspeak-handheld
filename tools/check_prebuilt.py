@@ -42,7 +42,7 @@ def main() -> int:
     parser.add_argument(
         "--allow-dirty",
         action="store_true",
-        help="allow development archives built with uncommitted Lite changes",
+        help="relax dirty-checkout checks; selected HEADs and provenance checks still apply",
     )
     args = parser.parse_args()
     check_workspace(ROOT, allow_dirty=args.allow_dirty)

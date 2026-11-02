@@ -151,19 +151,20 @@ class Controller:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", required=True, help="T-Deck USB serial device")
-    parser.add_argument("--timeout", type=float, default=5.0)
+    parser.add_argument("--timeout", type=float, default=5.0,
+                        help="seconds for each request's write and reply (default: 5); text sends multiple requests")
     parser.add_argument("--verbose", action="store_true", help="show unrelated device logs on stderr")
     actions = parser.add_subparsers(dest="action", required=True)
     view = actions.add_parser("view", help="read the screen without waking it")
-    view.add_argument("--offset", type=int, default=0, help="next cursor from a previous view")
+    view.add_argument("--offset", type=int, default=0, help="next cursor from a previous view (0-511; default: 0)")
     key = actions.add_parser("key", help="send one ordinary navigation key")
     key.add_argument("name", choices=KEYS)
     actions.add_parser("hold", help="perform the current screen's trackball long-press action")
-    char = actions.add_parser("char", help="type one printable character or Ctrl shortcut")
-    char.add_argument("value")
+    char = actions.add_parser("char", help="type one printable ASCII character or Ctrl shortcut")
+    char.add_argument("value", help="one printable ASCII character (code 32-126)")
     char.add_argument("--ctrl", action="store_true")
     text = actions.add_parser("text", help="type printable ASCII through normal screen input")
-    text.add_argument("value")
+    text.add_argument("value", help="1-512 printable ASCII characters; send key enter separately")
     args = parser.parse_args(argv)
     port = None
     try:

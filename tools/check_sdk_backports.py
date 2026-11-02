@@ -63,8 +63,9 @@ def verify_sdk_map(path: Path, mode: str = "standalone") -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--map", required=True, type=Path)
-    parser.add_argument("--mode", choices=["standalone", "launcher", "rnode"], default="standalone")
+    parser.add_argument("--map", required=True, type=Path, help="linker map to inspect for selected backport objects")
+    parser.add_argument("--mode", choices=["standalone", "launcher", "rnode"], default="standalone",
+                        help="image role (default: standalone); launcher skips the DHCP provider check")
     args = parser.parse_args()
     verify_sdk_map(args.map, args.mode)
     print("SDK backports: PASS (required definitions and live TLS providers verified)")
