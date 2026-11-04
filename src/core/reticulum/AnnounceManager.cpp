@@ -434,8 +434,14 @@ void AnnounceManager::receivedAnnounceEvent(const uint8_t destHash[16], const ui
             auto& node = _nodes[size_t(existing)];
             const bool unnamed = node.name.empty() ||
                 (node.name.size() == 12 && !memcmp(node.name.data(), destHex, 12));
+            // A saved contact still showing the name it last announced was never
+            // renamed by hand, so it follows a new announced name; one renamed
+            // on the device keeps that name. The cache holds announced names only.
+            const auto announced = _nameCache.find(destination);
+            const bool untouched = announced != _nameCache.end() && announced->second == node.name;
             rememberName();
-            const bool rename = !name.empty() && (unnamed || !node.saved || !HAS_CONTACT_RENAME) && node.name != name;
+            const bool rename = !name.empty() &&
+                (unnamed || !node.saved || !HAS_CONTACT_RENAME || untouched) && node.name != name;
             const bool rebind = node.identityHex != identity;
             if (!rename && !rebind) return;
             // Name and identity remain one prepared metadata publication.
@@ -778,10 +784,9 @@ bool AnnounceManager::setContactName(const std::string& hexHash, const std::stri
         if (!safeName.empty()) candidate.name = safeName;
         candidate.saved = true;
         if (!handheld::config::Memory::admits(0) || !saveContact(candidate)) return false;
+        // Not into the name cache: it holds announced names, which is how a new
+        // announce tells a hand-picked contact name from an announced one.
         node = std::move(candidate);
-        if (!node.name.empty()) {
-            if (cacheName(hexHash, node.name)) _nameCacheWrites.changed();
-        }
         return true;
     } catch (const std::bad_alloc&) { return false; }
 }
