@@ -41,23 +41,23 @@ clean:
 prep-esp32:
 	arduino-cli core update-index --config-file arduino-cli.yaml
 	arduino-cli core install esp32:esp32@$(ARDUINO_ESP_CORE_VER) --config-file arduino-cli.yaml
-	arduino-cli lib install "Adafruit BusIO@1.17.4"
-	arduino-cli lib install "Adafruit GFX Library@1.12.5"
-	arduino-cli lib install "Adafruit seesaw Library@1.7.9"
-	arduino-cli lib install "Adafruit SSD1306@2.5.16"
-	arduino-cli lib install "Adafruit SH110X@2.1.14"
-	arduino-cli lib install "Adafruit ST7735 and ST7789 Library@1.11.0"
-	arduino-cli lib install "Adafruit NeoPixel@1.15.4"
-	arduino-cli lib install "XPowersLib@0.3.3"
-	arduino-cli lib install "Crypto@0.4.0"
-	arduino-cli lib install "LovyanGFX@1.1.16"
+	arduino-cli lib install "Adafruit BusIO@1.17.4" --no-deps
+	arduino-cli lib install "Adafruit GFX Library@1.12.5" --no-deps
+	arduino-cli lib install "Adafruit seesaw Library@1.7.9" --no-deps
+	arduino-cli lib install "Adafruit SSD1306@2.5.16" --no-deps
+	arduino-cli lib install "Adafruit SH110X@2.1.14" --no-deps
+	arduino-cli lib install "Adafruit ST7735 and ST7789 Library@1.11.0" --no-deps
+	arduino-cli lib install "Adafruit NeoPixel@1.15.4" --no-deps
+	arduino-cli lib install "XPowersLib@0.3.3" --no-deps
+	arduino-cli lib install "Crypto@0.4.0" --no-deps
+	arduino-cli lib install "LovyanGFX@1.1.16" --no-deps
 
 prep-m5stack:
-	arduino-cli lib install "IRremote@4.6.1"
-	arduino-cli lib install "LibSSH-ESP32@5.8.0"
-	arduino-cli lib install "M5GFX@0.2.19"
-	arduino-cli lib install "M5Unified@0.2.13"
-	arduino-cli lib install "M5Cardputer@1.1.1"
+	arduino-cli lib install "IRremote@4.6.1" --no-deps
+	arduino-cli lib install "LibSSH-ESP32@5.8.0" --no-deps
+	arduino-cli lib install "M5GFX@0.2.19" --no-deps
+	arduino-cli lib install "M5Unified@0.2.13" --no-deps
+	arduino-cli lib install "M5Cardputer@1.1.1" --no-deps
 
 prep-cardputer_adv: prep-esp32 prep-m5stack
 
