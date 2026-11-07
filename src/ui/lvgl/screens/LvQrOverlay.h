@@ -3,7 +3,7 @@
 #include "UIManager.h"
 #include <string>
 
-// Public Ratspeak contact card, with an optional legacy lxma:// QR.
+// Public Ratspeak contact card, with a legacy lxma:// QR for Columba and other LXMF apps.
 class LvQrOverlay {
 public:
     void create();
@@ -16,7 +16,6 @@ public:
 private:
     lv_obj_t* _overlay = nullptr;
     lv_obj_t* _qr = nullptr;
-    int _qrSize = 0;
     lv_obj_t* _lblAddr = nullptr;
     lv_obj_t* _lblFormat = nullptr;
     lv_obj_t* _toggle = nullptr;

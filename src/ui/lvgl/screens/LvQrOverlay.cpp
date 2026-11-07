@@ -35,7 +35,6 @@ void LvQrOverlay::create() {
     lv_obj_set_style_pad_all(paper, 0, 0);
     lv_obj_clear_flag(paper, LV_OBJ_FLAG_SCROLLABLE);
     _qr = lv_qrcode_create(paper, qrSize, lv_color_hex(0), lv_color_hex(0xFFFFFF));
-    _qrSize = qrSize;
     lv_obj_center(_qr);
 
     constexpr int controlsX = qrSize + 40;
@@ -78,16 +77,6 @@ void LvQrOverlay::create() {
 
 bool LvQrOverlay::renderCode(bool legacy) {
     const auto& payload = legacy ? _legacyPayload : _payload;
-    // Address-only codes have larger modules. Give them a wider white quiet
-    // zone without shrinking the denser rich contact card.
-    const int size = Theme::SCREEN_H - (legacy ? 88 : 64);
-    if (_qrSize != size) {
-        auto* paper = lv_obj_get_parent(_qr);
-        lv_qrcode_delete(_qr);
-        _qr = lv_qrcode_create(paper, size, lv_color_hex(0), lv_color_hex(0xFFFFFF));
-        _qrSize = size;
-        lv_obj_center(_qr);
-    }
     if (lv_qrcode_update(_qr, payload.data(), payload.size()) != LV_RES_OK) return false;
     _legacy = legacy;
     lv_label_set_text(_lblFormat, legacy ? "Legacy" : "Ratspeak");
@@ -101,8 +90,8 @@ bool LvQrOverlay::show(const String& name, const String& destHashHex,
     if (!_overlay) create();
     _payload = rs::contactCardPayload(name.c_str(), destHashHex.c_str(),
                                       identityHashHex.c_str(), publicKeyHex.c_str());
-    if (_payload.empty()) return false;
-    _legacyPayload = "lxma://" + std::string(destHashHex.c_str());
+    _legacyPayload = rs::legacyContactPayload(destHashHex.c_str(), publicKeyHex.c_str());
+    if (_payload.empty() || _legacyPayload.empty()) return false;
     if (!renderCode(false)) return false;
     lv_label_set_text_fmt(_lblAddr, "%.8s\n%.8s\n%.8s\n%.8s", destHashHex.c_str(),
                          destHashHex.c_str() + 8, destHashHex.c_str() + 16, destHashHex.c_str() + 24);

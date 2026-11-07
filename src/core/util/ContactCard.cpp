@@ -66,3 +66,10 @@ std::string rs::contactCardPayload(const std::string& name, const std::string& d
         bytes += static_cast<char>((hexDigit(key[i]) << 4) | hexDigit(key[i + 1]));
     return "RSCP1:" + base64Url(cardName(name)) + ":" + dest + ":" + id + ":" + base64Url(bytes);
 }
+
+std::string rs::legacyContactPayload(const std::string& destination, const std::string& publicKeyHex) {
+    const auto dest = lowerHex(destination, 32);
+    const auto key = lowerHex(publicKeyHex, 128);
+    if (dest.empty() || key.empty()) return {};
+    return "lxma://" + dest + ":" + key;
+}
