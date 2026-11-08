@@ -48,7 +48,7 @@ extern const lv_font_t lv_font_rsdeck_14;
 
 // Fonts - built-in (only 16 still used for titles; 10/12/14 replaced by custom rsDeck fonts)
 #define LV_FONT_MONTSERRAT_10 0
-#define LV_FONT_MONTSERRAT_12 1  // Delivery-status check glyphs in LvMessageView
+#define LV_FONT_MONTSERRAT_12 1  // 12 pt: delivery-status glyphs in the message view
 #define LV_FONT_MONTSERRAT_14 0
 #define LV_FONT_MONTSERRAT_16 1
 #define LV_FONT_UNSCII_8      0
@@ -68,14 +68,14 @@ extern const lv_font_t lv_font_rsdeck_14;
 #define LV_USE_ROLLER     1
 #define LV_USE_TABLE      0
 #define LV_USE_TABVIEW    0
-#define LV_USE_IMG        1   // required by LV_USE_CANVAS / LV_USE_QRCODE
+#define LV_USE_IMG        1   // canvas and QR code depend on it
 #define LV_USE_LINE       1   // Disconnected Wi-Fi indicator
 #define LV_USE_ARC        0
 #define LV_USE_SPINNER    0
 #define LV_USE_MSGBOX     0
 #define LV_USE_KEYBOARD   0
 #define LV_USE_CHECKBOX   0
-#define LV_USE_CANVAS     1   // required by LV_USE_QRCODE
+#define LV_USE_CANVAS     1   // QR code depends on it
 #define LV_USE_QRCODE     1
 
 // Layouts

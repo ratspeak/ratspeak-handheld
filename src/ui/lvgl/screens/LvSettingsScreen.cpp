@@ -26,6 +26,17 @@
 #include "ui/VoiceSettingsText.h"
 
 namespace {
+// Shared formatters for action rows and hundredths-of-a-volt settings.
+String enterHint(int) { return String("[Enter]"); }
+String centivoltLabel(int v) {
+    char buf[8];
+    snprintf(buf, sizeof(buf), "%.2fV", v / 100.0f);
+    return String(buf);
+}
+}  // namespace
+
+
+namespace {
 
 const char* onOff(bool enabled) {
     return enabled ? "ON" : "OFF";
@@ -710,24 +721,25 @@ void LvSettingsScreen::buildItems() {
         idx++;
     }
     _items.push_back({"LXMF Address", SettingType::READONLY, nullptr, nullptr,
-        [this](int) { return _destinationHash.length() > 0 ? _destinationHash : String("unknown"); }});
+        [this](int) { return _destinationHash.isEmpty() ? String("unknown") : _destinationHash; }});
     _items.back().id = SettingId::LxmfAddress;
     idx++;
     {
-        SettingItem showQrItem;
-        showQrItem.label = "Show QR Code";
-        showQrItem.type = SettingType::ACTION;
-        showQrItem.formatter = [](int) { return String("[Enter]"); };
-        showQrItem.action = [this]() {
-            if (_showQrCb) _showQrCb();
-            else if (_ui) _ui->lvStatusBar().showToast("QR not available");
+        SettingItem showQr;
+        showQr.type = SettingType::ACTION;
+        showQr.label = "Show QR Code";
+        showQr.formatter = enterHint;
+        showQr.action = [this]() {
+            if (_showQrCb) { _showQrCb(); return; }
+            if (_ui) _ui->lvStatusBar().showToast("QR not available");
         };
-        _items.push_back(showQrItem);
+        _items.push_back(showQr);
         _items.back().id = SettingId::ShowQr;
         idx++;
     }
     _items.push_back({"Auto Announce", SettingType::INTEGER,
-        [&s]() { return s.announceInterval; }, [&s](int v) { s.announceInterval = v; },
+        [&s]() -> int { return s.announceInterval; },
+        [&s](int minutes) { s.announceInterval = minutes; },
         [](int v) { return v == 0 ? String("OFF") : String(v) + "m"; },
         handheld::announce::MinimumMinutes, handheld::announce::MaximumMinutes,
         handheld::announce::StepMinutes});
@@ -788,14 +800,14 @@ void LvSettingsScreen::buildItems() {
         idx++;
     }
     if (_service && _service->status().sd) {
-        SettingItem importId;
-        importId.label = "Import Identity";
-        importId.type = SettingType::ACTION;
-        importId.formatter = [](int) { return String("[Enter]"); };
-        importId.action = [this]() {
+        SettingItem importKey;
+        importKey.type = SettingType::ACTION;
+        importKey.label = "Import Identity";
+        importKey.formatter = enterHint;
+        importKey.action = [this]() {
             if (_service) _service->action(handheld::Operation::ImportIdentity);
         };
-        _items.push_back(importId);
+        _items.push_back(importKey);
         _items.back().id = SettingId::ImportIdentity;
         idx++;
     }
@@ -850,14 +862,14 @@ void LvSettingsScreen::buildItems() {
     _items.back().id = SettingId::KeyBacklight;
     idx++;
     _items.push_back({"Keys Wake Light", SettingType::TOGGLE,
-        [&s]() { return s.keyboardAutoOn ? 1 : 0; },
-        [&s](int v) { s.keyboardAutoOn = (v != 0); },
+        [&s]() -> int { return s.keyboardAutoOn; },
+        [&s](int on) { s.keyboardAutoOn = on != 0; },
         [](int v) { return String(onOff(v != 0)); }});
     _items.back().id = SettingId::KeysWakeLight;
     idx++;
     _items.push_back({"Keys Auto-Off", SettingType::TOGGLE,
-        [&s]() { return s.keyboardAutoOff ? 1 : 0; },
-        [&s](int v) { s.keyboardAutoOff = (v != 0); },
+        [&s]() -> int { return s.keyboardAutoOff; },
+        [&s](int on) { s.keyboardAutoOff = on != 0; },
         [](int v) { return String(onOff(v != 0)); }});
     _items.back().id = SettingId::KeysAutoOff;
     idx++;
@@ -960,8 +972,8 @@ void LvSettingsScreen::buildItems() {
     // discharge calibration; a fuel gauge already supplies its own estimate.
     int battStart = idx;
     _items.push_back({"Battery Display", SettingType::ENUM_CHOICE,
-        [&s]() { return (int)s.batteryDisplay; },
-        [&s](int v) { s.batteryDisplay = (uint8_t)v; },
+        [&s]() -> int { return s.batteryDisplay; },
+        [&s](int mode) { s.batteryDisplay = static_cast<uint8_t>(mode); },
         nullptr, BATTERY_DISPLAY_PERCENT, BATTERY_DISPLAY_BAR, 1, {"Percent", "Bar"}});
     _items.back().id = SettingId::BatteryDisplay;
     idx++;
@@ -978,35 +990,28 @@ void LvSettingsScreen::buildItems() {
 #if HAS_BATTERY_MODEL
     if (s.devMode) {
         _items.push_back({"Discharge Curve", SettingType::ENUM_CHOICE,
-            [&s]() { return (int)s.batteryModel; },
-            [&s](int v) { s.batteryModel = (uint8_t)v; },
+            [&s]() -> int { return s.batteryModel; },
+            [&s](int model) { s.batteryModel = static_cast<uint8_t>(model); },
             nullptr, BATTERY_MODEL_LIPO, BATTERY_MODEL_LINEAR, 1, {"LiPo / Li-Ion", "Linear"}});
         _items.back().id = SettingId::DischargeCurve;
         idx++;
 
         _items.push_back({"Charge Above", SettingType::INTEGER,
-            [&s]() { return (int)roundf(s.chargeThresholdV * 100); },
-            [&s](int v) { s.chargeThresholdV = v / 100.0f; },
-            [](int v) -> String {
-                char buf[8]; snprintf(buf, sizeof(buf), "%.2fV", v / 100.0f); return String(buf);
-            }, 380, 430, 1});
+            [&s]() -> int { return lroundf(s.chargeThresholdV * 100.0f); },
+            [&s](int centivolts) { s.chargeThresholdV = centivolts / 100.0f; },
+            centivoltLabel, 380, 430, 1});
         _items.back().id = SettingId::ChargeAbove;
         idx++;
         _items.push_back({"Full Voltage", SettingType::INTEGER,
-            [&s]() { return (int)roundf(s.fullBatteryV * 100); },
-            [&s](int v) { s.fullBatteryV = v / 100.0f; },
-            [](int v) -> String {
-                char buf[8]; snprintf(buf, sizeof(buf), "%.2fV", v / 100.0f); return String(buf);
-            }, 350, 420, 1});
+            [&s]() -> int { return lroundf(s.fullBatteryV * 100.0f); },
+            [&s](int centivolts) { s.fullBatteryV = centivolts / 100.0f; },
+            centivoltLabel, 350, 420, 1});
         _items.back().id = SettingId::FullVoltage;
         idx++;
 
         _items.push_back({"Voltage", SettingType::READONLY, nullptr, nullptr,
             [this](int) -> String {
-                if (!_power) return String("--");
-                char buf[12];
-                snprintf(buf, sizeof(buf), "%.2fV", _power->batteryVoltage());
-                return String(buf);
+                return _power ? centivoltLabel(lroundf(_power->batteryVoltage() * 100.0f)) : String("--");
             }});
         _items.back().id = SettingId::Voltage;
         idx++;

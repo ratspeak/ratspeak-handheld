@@ -16,8 +16,8 @@ SemaphoreHandle_t FlashStore::mutex() {
 }
 
 namespace {
-// Legacy standalone builds label this partition "littlefs"; bmorcelli/Launcher
-// labels the equivalent partition "spiffs". Try ours first, fall back.
+// Our standalone images label the partition "littlefs"; bmorcelli/Launcher
+// calls the same partition "spiffs". Probe in that order.
 const char* FLASH_PARTITION_LABELS[] = {"littlefs", "spiffs"};
 constexpr const char* FLASH_BASE_PATH = "/littlefs";
 constexpr const char* RESET_SCOPE = "/.factory-reset";

@@ -2,37 +2,35 @@
 #include "hal/Display.h"
 #include "hal/Keyboard.h"
 
-
-// Forward declarations — display & keyboard instances provided externally
+// The display and keyboard objects live in main.cpp.
 extern Display display;
 extern Keyboard keyboard;
 
-// Battery type lookup table for getting voltage vs percent
 namespace {
 
-    struct VoltPoint { float v; int pct; };
-    static constexpr VoltPoint LIPO_CURVE[] = {
-        {3.90f, 100},
-        {3.80f, 90},
-        {3.72f, 80},
-        {3.65f, 70},
-        {3.59f, 60},
-        {3.53f, 50},
-        {3.48f, 40},
-        {3.44f, 30},
-        {3.40f, 20},
-        {3.36f, 15},
-        {3.30f, 10},
-        {3.15f, 5},
-        {3.00f, 0},
-    };
-    constexpr int LIPO_CURVE_N = sizeof(LIPO_CURVE) / sizeof(LIPO_CURVE[0]);
+// Open-circuit LiPo discharge curve, highest voltage first. Percent is
+// interpolated linearly between neighbouring points.
+struct CurvePoint { float volts; int percent; };
+constexpr CurvePoint LIPO_CURVE[] = {
+    {3.90f, 100}, {3.80f, 90}, {3.72f, 80}, {3.65f, 70}, {3.59f, 60},
+    {3.53f, 50},  {3.48f, 40}, {3.44f, 30}, {3.40f, 20}, {3.36f, 15},
+    {3.30f, 10},  {3.15f, 5},  {3.00f, 0},
+};
+constexpr int LIPO_POINTS = sizeof(LIPO_CURVE) / sizeof(LIPO_CURVE[0]);
+
+int lipoPercent(float volts) {
+    if (volts >= LIPO_CURVE[0].volts) return LIPO_CURVE[0].percent;
+    for (int i = 1; i < LIPO_POINTS; i++) {
+        const CurvePoint& upper = LIPO_CURVE[i - 1];
+        const CurvePoint& lower = LIPO_CURVE[i];
+        if (volts < lower.volts) continue;
+        const float fraction = (volts - lower.volts) / (upper.volts - lower.volts);
+        return (int)(lower.percent + fraction * (upper.percent - lower.percent));
+    }
+    return 0;
 }
 
-
-
-
-
+}  // namespace
 
 void Power::enablePeripherals() {
     // CRITICAL: GPIO 10 must be HIGH to enable all T-Deck Plus peripherals
@@ -60,34 +58,21 @@ float Power::batteryVoltage() const {
 }
 
 int Power::batteryPercent() const {
-    float v = batteryVoltage();
+    // Above the charge threshold the reading is the charger, not the cell;
+    // a discharging cell never gets there, so report full.
+    if (isCharging()) return 100;
 
-    // Charging: voltage exceeds the discharge curve's top (about 3.9V = full).
-    // A discharging cell never gets there, so treat this as full.
-    if (isCharging())
-        return 100;
-
-    // Compensate for load-induced voltage drop when running on battery.
-    // Calculates an offset and adds it to real voltage for to be able using default LiPo lookup table
-    v += (3.9f - _fullBatteryV);
-
-    // Clamp to valid curve range.
+    // The curve assumes a 3.9 V full cell. Shift the reading by the user's
+    // measured full voltage so a sagging pack still maps onto the same table,
+    // then keep it inside the table's range.
+    float v = batteryVoltage() + (3.9f - _fullBatteryV);
     v = constrain(v, 3.0f, 4.2f);
 
     if (_batteryModel == 1) {
-        // Linear: distribution across 3.0–4.2V.
+        // Linear model: 3.0 V is empty, 4.2 V is full.
         return (int)((v - 3.0f) / 1.2f * 100.0f);
     }
-
-    // LiPo: interpolate between nearest table entries; the curve tops out at 100%.
-    if (v >= LIPO_CURVE[0].v) return LIPO_CURVE[0].pct;
-    for (int i = 0; i < LIPO_CURVE_N - 1; i++) {
-        if (v >= LIPO_CURVE[i + 1].v) {
-            float t = (v - LIPO_CURVE[i + 1].v) / (LIPO_CURVE[i].v - LIPO_CURVE[i + 1].v);
-            return (int)(LIPO_CURVE[i + 1].pct + t * (LIPO_CURVE[i].pct - LIPO_CURVE[i + 1].pct));
-        }
-    }
-    return 0;
+    return lipoPercent(v);
 }
 
 void Power::setBatteryModel(uint8_t model) {

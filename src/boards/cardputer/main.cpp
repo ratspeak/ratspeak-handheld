@@ -729,8 +729,8 @@ void setup() {
     // Register announce handler
     bootScreen.setProgress(0.93f, "Starting discovery...");
     ui.render();
-    // Filter to lxmf.delivery so we don't capture every aspect (lxmf.propagation,
-    // nomadnetwork.node, etc.) from the same peer as separate "doubled" entries.
+    // Discovery records lxmf.delivery announces only, so a peer's other aspects
+    // (propagation, nomadnetwork.node) do not appear as duplicate entries.
     if (!handheld::prepareDiscovery(protocolRuntime, sdStore, flash,
                                     userConfig.settings().displayName, announceManager)) {
         Serial.println("[BOOT] Discovery memory unavailable; restart to retry");

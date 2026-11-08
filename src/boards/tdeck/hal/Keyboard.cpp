@@ -4,6 +4,19 @@
 Keyboard* Keyboard::_instance = nullptr;
 int Keyboard::_debugCount = 0;
 
+namespace {
+// C3 firmware commands: current level, and the level its Alt+B toggle restores.
+constexpr uint8_t kC3BrightnessCmd = 0x01;
+constexpr uint8_t kC3AltBBrightnessCmd = 0x02;
+
+// Map 1..100 % onto the controller's usable PWM range 31..255, rounding to nearest.
+uint8_t percentToKeyboardPwm(uint8_t percent) {
+    constexpr uint32_t PWM_MIN = 31, PWM_MAX = 255, STEPS = 99;
+    const uint32_t scaled = (uint32_t)(percent - 1) * (PWM_MAX - PWM_MIN);
+    return (uint8_t)(PWM_MIN + (scaled + STEPS / 2) / STEPS);
+}
+}  // namespace
+
 bool Keyboard::begin() {
     _instance = this;
     _mode = InputMode::Navigation;
@@ -97,15 +110,11 @@ bool Keyboard::setBacklightBrightness(uint8_t percent) {
         _backlightBrightness = 0;
         return true;
     }
-    // [1, 100] % -> [31, 255] PWM
-    constexpr uint16_t SCALE = 255 - 31;
-    constexpr uint16_t DIV   = 100 - 1;
-    uint16_t tmp = (uint16_t)(percent - 1) * SCALE;
-    tmp = (tmp + DIV / 2) / DIV; // +DIV/2 for nearest‑integer rounding
-    _backlightBrightness = (uint8_t)(31 + tmp);
-
+    _backlightBrightness = percentToKeyboardPwm(percent);
+    // Mirror the level into the C3's Alt+B slot so a toggle from the keyboard
+    // side comes back at the same brightness.
     Wire.beginTransmission(KB_I2C_ADDR);
-    Wire.write(0x02); // LILYGO_KB_ALT_B_BRIGHTNESS_CMD
+    Wire.write(kC3AltBBrightnessCmd);
     Wire.write(_backlightBrightness);
     return Wire.endTransmission() == 0;
 }
@@ -122,7 +131,7 @@ bool Keyboard::backlightOff() {
 
 bool Keyboard::setBrightness(uint8_t pwm) {
     Wire.beginTransmission(KB_I2C_ADDR);
-    Wire.write(0x01); // LILYGO_KB_BRIGHTNESS_CMD
+    Wire.write(kC3BrightnessCmd);
     Wire.write(pwm);
     return Wire.endTransmission() == 0;
 }

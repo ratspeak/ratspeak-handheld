@@ -16,8 +16,8 @@ public:
     void activity();
     // Weak activity = encoder movement — wakes from DIM only, not SCREEN_OFF
     void weakActivity();
-    // Manual screen-off; no-op if activity() just woke from SCREEN_OFF this tick
-    // so a single keypress can't both wake and re-sleep.
+    // Turn the screen off now. Ignored when activity() woke the device from
+    // SCREEN_OFF in this same tick, so one keypress cannot wake and re-sleep.
     void forceScreenOff();
 
     // Battery-only: BQ25896 ship mode (wake = PWR or USB). USB: retain the
@@ -39,7 +39,7 @@ public:
     int batteryPercent() const;
     void printBatteryDiagnostics() const;
 
-    // Display backlight — accepts percentage 1-100
+    // Display backlight, 1..100 %.
     void setBrightness(uint8_t percent);
     // Saved timeouts keep off >= dim; equal values turn the screen off without dimming.
     void setDimTimeout(uint16_t seconds) { _dimTimeout = seconds * 1000UL; }

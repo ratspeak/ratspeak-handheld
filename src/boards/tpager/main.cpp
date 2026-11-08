@@ -576,9 +576,9 @@ void setup() {
     ui.lvStatusBar().setLoRaOnline(radioOnline);
     lvBootScreen.setProgress(0.45f, radioOnline ? "Radio online" : "Radio FAILED");
 
-    // Display::begin() left the backlight at 0 to hide an unpainted
-    // framebuffer; the setProgress() above has now flushed the boot screen.
-    // powerMgr at step 24 overrides with the user's configured value.
+    // The panel came up dark so the unpainted framebuffer never showed. The
+    // boot screen has just been flushed, so raise the backlight to a provisional
+    // level; the power manager applies the user's brightness later in boot.
     display.setBrightness(128);
 
     // Step 7: Touch HAL
@@ -758,8 +758,8 @@ void setup() {
     // Step 18: Announce manager
     lvBootScreen.setProgress(0.78f, "Loading contacts...");
     // (LVGL boot renders via lv_timer_handler in setProgress)
-    // Filter to lxmf.delivery so we don't capture every aspect (lxmf.propagation,
-    // nomadnetwork.node, etc.) from the same peer as separate "doubled" entries.
+    // Discovery records lxmf.delivery announces only, so a peer's other aspects
+    // (propagation, nomadnetwork.node) do not appear as duplicate entries.
     if (!handheld::prepareDiscovery(protocolRuntime, sdStore, flash,
                                     userConfig.settings().displayName, announceManager)) {
         Serial.println("[BOOT] Discovery memory unavailable; restart to retry");
@@ -1184,10 +1184,8 @@ void setup() {
         goHome();
     }
 
-    if (userConfig.settings().keyboardAutoOn) {
-        // We are in ACTIVE power state here, switch keyboard backlight ON
-        keyboard.backlightOn();
-    }
+    // Boot ends in the ACTIVE state, so honour the wake-light setting now.
+    if (userConfig.settings().keyboardAutoOn) keyboard.backlightOn();
 
     powerMgr.activity(); // Idle timeouts start after boot, as on the other boards.
     Serial.println("[BOOT] rsPager ready");
@@ -1443,15 +1441,15 @@ void loop() {
         }
     }
 
-    // 3. LVGL timer handler — 30 FPS active, 5 FPS dimmed.
-    // Bypass the throttle on input activity so a keypress/scroll renders this
-    // iteration instead of waiting up to a full frame interval.
+    // 3. Drive LVGL at 30 FPS while active and 5 FPS while dimmed. Input in
+    // this iteration renders at once instead of waiting out the frame interval.
     {
         unsigned long now = millis();
         unsigned long lvglInterval = powerMgr.isDimmed() ? 200 : LVGL_INTERVAL_MS;
         bool inputBurst = inputManager.hadActivity();
         LvInput::setEnabled(powerMgr.isScreenOn());
-        if (powerMgr.isScreenOn() && (inputBurst || now - lastLvglTime >= lvglInterval)) {
+        const bool frameDue = now - lastLvglTime >= lvglInterval;
+        if (powerMgr.isScreenOn() && (inputBurst || frameDue)) {
             lastLvglTime = now;
             lv_timer_handler();
         }

@@ -6,7 +6,7 @@
 #include <esp_sleep.h>
 #include <driver/rtc_io.h>
 
-// Forward declarations — display & keyboard instances provided externally
+// The display and keyboard objects live in main.cpp.
 extern Display display;
 extern Keyboard keyboard;
 

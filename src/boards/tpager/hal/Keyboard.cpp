@@ -249,14 +249,11 @@ bool Keyboard::setBacklightBrightness(uint8_t percent) {
         _backlightBrightness = 0;
         return true;
     }
-    // [1, 100] % -> [31, 255] PWM
-    constexpr uint16_t SCALE = 255 - 31;
-    constexpr uint16_t DIV   = 100 - 1;
-    uint16_t tmp = (uint16_t)(percent - 1) * SCALE;
-    tmp = (tmp + DIV / 2) / DIV; // +DIV/2 for nearest‑integer rounding
-    _backlightBrightness = (uint8_t)(31 + tmp);
-    // PWM is host-driven via LEDC; applied on next backlightOn(). (The old I2C
-    // brightness command here was a T-Deck C3 leftover — 0x34 is the TCA8418.)
+    // Map 1..100 % onto PWM 31..255, rounding to nearest; the LEDC channel
+    // applies it on the next backlightOn().
+    constexpr uint32_t PWM_MIN = 31, PWM_MAX = 255, STEPS = 99;
+    const uint32_t scaled = (uint32_t)(percent - 1) * (PWM_MAX - PWM_MIN);
+    _backlightBrightness = (uint8_t)(PWM_MIN + (scaled + STEPS / 2) / STEPS);
     return true;
 }
 

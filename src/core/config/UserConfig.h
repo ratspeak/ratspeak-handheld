@@ -95,8 +95,8 @@ struct UserScalars {
 
     // Keyboard
     uint8_t keyboardBrightness = 0;   // Persisted/hardware percentage: OFF 0, LOW 5, HIGH 100.
-    bool keyboardAutoOn = false;      // Backlight ON when switching to ACTIVE power state
-    bool keyboardAutoOff = false;     // Backlight OFF when switching from ACTIVE power state
+    bool keyboardAutoOn = false;      // Light the keys when the device becomes ACTIVE
+    bool keyboardAutoOff = false;     // Darken the keys when it leaves ACTIVE
 
     // Trackball
     uint8_t trackballSpeed = 3;       // 1-5 sensitivity

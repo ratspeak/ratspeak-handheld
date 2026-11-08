@@ -346,7 +346,7 @@ void LvMessageView::createUI(lv_obj_t* parent) {
     // Make header tappable for back navigation
     lv_obj_add_flag(_header, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(_header, [](lv_event_t* e) {
-        auto* self = (LvMessageView*)lv_event_get_user_data(e);
+        auto* self = static_cast<LvMessageView*>(lv_event_get_user_data(e));
         self->goBack();
     }, LV_EVENT_CLICKED, this);
 
@@ -448,7 +448,7 @@ void LvMessageView::createUI(lv_obj_t* parent) {
     lv_obj_set_style_text_font(_textarea, font, 0);
     lv_obj_set_style_pad_all(_textarea, 2, 0);
     lv_obj_add_event_cb(_textarea, [](lv_event_t* e) {
-        auto* self = (LvMessageView*)lv_event_get_user_data(e);
+        auto* self = static_cast<LvMessageView*>(lv_event_get_user_data(e));
         lv_event_code_t code = lv_event_get_code(e);
         if (code == LV_EVENT_FOCUSED || code == LV_EVENT_CLICKED || code == LV_EVENT_PRESSED) {
             self->dismissSelection();
@@ -469,7 +469,7 @@ void LvMessageView::createUI(lv_obj_t* parent) {
     lv_label_set_text(sendLbl, "SEND");
     lv_obj_center(sendLbl);
     lv_obj_add_event_cb(_btnSend, [](lv_event_t* e) {
-        auto* self = (LvMessageView*)lv_event_get_user_data(e);
+        auto* self = static_cast<LvMessageView*>(lv_event_get_user_data(e));
         if (self->_suppressNextSendClick) {
             self->_suppressNextSendClick = false;
             return;
@@ -477,7 +477,7 @@ void LvMessageView::createUI(lv_obj_t* parent) {
         self->sendCurrentMessage(false);
     }, LV_EVENT_CLICKED, this);
     lv_obj_add_event_cb(_btnSend, [](lv_event_t* e) {
-        auto* self = (LvMessageView*)lv_event_get_user_data(e);
+        auto* self = static_cast<LvMessageView*>(lv_event_get_user_data(e));
         self->_suppressNextSendClick = true;
         self->showSendModeMenu();
     }, LV_EVENT_LONG_PRESSED, this);
@@ -1454,7 +1454,7 @@ void LvMessageView::showSendModeMenu() {
         lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_user_data(row, (void*)(intptr_t)i);
         lv_obj_add_event_cb(row, [](lv_event_t* e) {
-            auto* self = (LvMessageView*)lv_event_get_user_data(e);
+            auto* self = static_cast<LvMessageView*>(lv_event_get_user_data(e));
             int idx = (int)(intptr_t)lv_obj_get_user_data(lv_event_get_target(e));
             if(idx<0 || idx>=8 || self->_sendRows[idx]!=lv_event_get_target(e)) return;
             if(self->_messageTools.visible()) {

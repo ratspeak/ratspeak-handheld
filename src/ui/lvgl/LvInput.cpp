@@ -53,37 +53,32 @@ static void group_focus_cb(lv_group_t* g) {
     if (s_focusSuppressed) clearFocusVisual(lv_group_get_focused(g));
 }
 
-static void touchpad_read_cb(lv_indev_drv_t *indev_driver, lv_indev_data_t *data) {
-    if (!s_enabled || !s_touch || !s_cursor) {
-        data->state = LV_INDEV_STATE_REL;
-        return;
-    }
+static void touchpad_read_cb(lv_indev_drv_t*, lv_indev_data_t* data) {
+    data->state = LV_INDEV_STATE_REL;
+    if (!s_enabled || !s_touch || !s_cursor) return;
 
-    // Ignore touch input briefly after pointer/keyboard use
-    if (millis() - s_lastKeyMs < TOUCH_SUPPRESS_MS) {
-        if (s_touch->isTouched()) s_waitTouchRelease = true;
-        data->state = LV_INDEV_STATE_REL;
-        return;
-    }
-    if (s_waitTouchRelease) {
-        if (!s_touch->isTouched()) s_waitTouchRelease = false;
-        data->state = LV_INDEV_STATE_REL;
+    // Right after keyboard or pointer use, swallow touches until the finger lifts.
+    const bool recentlyKeyed = millis() - s_lastKeyMs < TOUCH_SUPPRESS_MS;
+    if (recentlyKeyed || s_waitTouchRelease) {
+        const bool down = s_touch->isTouched();
+        if (recentlyKeyed && down) s_waitTouchRelease = true;
+        if (!down) s_waitTouchRelease = false;
         return;
     }
 
     if (s_touch->isTouched()) {
-        lv_obj_clear_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
-        s_cursorVisible = true;
-        s_lastTouchMs = millis();
         data->state = LV_INDEV_STATE_PR;
         data->point.x = s_touch->x();
         data->point.y = s_touch->y();
-    } else {
-        data->state = LV_INDEV_STATE_REL;
-        if (s_cursorVisible && millis() - s_lastTouchMs > 1000) {
-            lv_obj_add_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
-            s_cursorVisible = false;
-        }
+        lv_obj_clear_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
+        s_cursorVisible = true;
+        s_lastTouchMs = millis();
+        return;
+    }
+    // Hide the cursor a second after the last contact.
+    if (s_cursorVisible && millis() - s_lastTouchMs > 1000) {
+        lv_obj_add_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
+        s_cursorVisible = false;
     }
 }
 
@@ -141,14 +136,13 @@ void init(Keyboard* kb, TouchInput* touch) {
     lv_indev_set_group(keyIndev, s_group);
 
     if (touch) {
-        // Register a touchscreen input device
+        // Pointer device for the touch panel.
         static lv_indev_drv_t touchDrv;
         lv_indev_drv_init(&touchDrv);
-        touchDrv.type = LV_INDEV_TYPE_POINTER;
         touchDrv.read_cb = touchpad_read_cb;
-        lv_indev_t* touchIndev = lv_indev_drv_register(&touchDrv);
-        s_touchIndev = touchIndev;
-        lv_indev_set_group(touchIndev, s_group);
+        touchDrv.type = LV_INDEV_TYPE_POINTER;
+        s_touchIndev = lv_indev_drv_register(&touchDrv);
+        lv_indev_set_group(s_touchIndev, s_group);
 
         // Touch cursor: semi-transparent center with brand green ring
         s_cursor = lv_obj_create(lv_layer_sys());
@@ -164,7 +158,7 @@ void init(Keyboard* kb, TouchInput* touch) {
         // Center the cursor on the touch point (LVGL positions top-left by default)
         lv_obj_set_style_translate_x(s_cursor, -7, 0);
         lv_obj_set_style_translate_y(s_cursor, -7, 0);
-        lv_indev_set_cursor(touchIndev, s_cursor);
+        lv_indev_set_cursor(s_touchIndev, s_cursor);
         lv_obj_add_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
 
         Serial.println("[LVGL] Input drivers registered (keypad + touch)");

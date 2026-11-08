@@ -3,30 +3,46 @@
 
 TouchInput* TouchInput::_instance = nullptr;
 
+namespace {
+constexpr uint16_t GT911_STATUS_REG = 0x814E;
+constexpr uint16_t GT911_POINT1_REG = 0x814F;
+
+bool acknowledges(uint8_t address) {
+    Wire.beginTransmission(address);
+    return Wire.endTransmission() == 0;
+}
+
+bool selectRegister(uint8_t address, uint16_t reg) {
+    Wire.beginTransmission(address);
+    Wire.write((uint8_t)(reg >> 8));
+    Wire.write((uint8_t)(reg & 0xFF));
+    return Wire.endTransmission() == 0;
+}
+
+// Writing zero to the status register tells the GT911 the buffer was consumed.
+void releaseBuffer(uint8_t address) {
+    Wire.beginTransmission(address);
+    Wire.write((uint8_t)(GT911_STATUS_REG >> 8));
+    Wire.write((uint8_t)(GT911_STATUS_REG & 0xFF));
+    Wire.write(0x00);
+    Wire.endTransmission();
+}
+}  // namespace
+
 bool TouchInput::begin() {
     _instance = this;
-
-    // GT911 INT pin
     pinMode(TOUCH_INT, INPUT);
 
-    // Try GT911 at both possible addresses
-    Wire.beginTransmission(TOUCH_I2C_ADDR_1);
-    uint8_t err = Wire.endTransmission();
-    if (err != 0) {
-        Wire.beginTransmission(TOUCH_I2C_ADDR_2);
-        err = Wire.endTransmission();
-        if (err != 0) {
-            Serial.println("[TOUCH] GT911 not found at 0x5D or 0x14");
-            return false;
-        }
+    // The controller answers at 0x5D or 0x14 depending on the INT level it saw at reset.
+    if (acknowledges(TOUCH_I2C_ADDR_1)) {
+        _i2cAddress = TOUCH_I2C_ADDR_1;
+    } else if (acknowledges(TOUCH_I2C_ADDR_2)) {
         _i2cAddress = TOUCH_I2C_ADDR_2;
     } else {
-        _i2cAddress = TOUCH_I2C_ADDR_1;
+        Serial.println("[TOUCH] GT911 not found at 0x5D or 0x14");
+        return false;
     }
-    Serial.print("[TOUCH] GT911 found at 0x");
-    Serial.println(_i2cAddress, HEX);
-
-    Serial.println("[TOUCH] Touch input registered");
+    Serial.printf("[TOUCH] GT911 at 0x%02X, touch input registered\n", _i2cAddress);
     return true;
 }
 
@@ -35,56 +51,34 @@ void TouchInput::update() {
 }
 
 bool TouchInput::readGT911() {
-    // Read touch status register (0x814E)
-    Wire.beginTransmission(_i2cAddress);
-    Wire.write(0x81);
-    Wire.write(0x4E);
-    if (Wire.endTransmission() != 0) {
-        _touched = false;
-        return false;
-    }
-
+    _touched = false;
+    if (!selectRegister(_i2cAddress, GT911_STATUS_REG)) return false;
     Wire.requestFrom(_i2cAddress, (uint8_t)1);
-    if (!Wire.available()) {
-        _touched = false;
+    if (!Wire.available()) return false;
+
+    const uint8_t status = Wire.read();
+    const bool bufferReady = (status & 0x80) != 0;
+    const uint8_t points = status & 0x0F;
+    if (!bufferReady || points == 0) {
+        releaseBuffer(_i2cAddress);
         return false;
     }
 
-    uint8_t status = Wire.read();
-    uint8_t touchCount = status & 0x0F;
-    bool bufferReady = (status & 0x80) != 0;
-
-    if (!bufferReady || touchCount == 0) {
-        _touched = false;
-        Wire.beginTransmission(_i2cAddress);
-        Wire.write(0x81);
-        Wire.write(0x4E);
-        Wire.write(0x00);
-        Wire.endTransmission();
-        return false;
-    }
-
-    // Read first touch point (0x814F-0x8155)
-    Wire.beginTransmission(_i2cAddress);
-    Wire.write(0x81);
-    Wire.write(0x4F);
-    if (Wire.endTransmission() != 0) {
-        _touched = false;
-        return false;
-    }
-
+    // First point: track id, then two little-endian coordinates and the contact size.
+    if (!selectRegister(_i2cAddress, GT911_POINT1_REG)) return false;
     Wire.requestFrom(_i2cAddress, (uint8_t)7);
-    if (Wire.available() < 7) {
-        _touched = false;
-        return false;
-    }
+    if (Wire.available() < 7) return false;
+    (void)Wire.read();
+    int first = Wire.read();
+    first |= Wire.read() << 8;
+    int second = Wire.read();
+    second |= Wire.read() << 8;
+    (void)Wire.read();
+    (void)Wire.read();
 
-    uint8_t trackId = Wire.read();
-    _y = Wire.read() | (Wire.read() << 8);
-    _x = Wire.read() | (Wire.read() << 8);
-    Wire.read() | (Wire.read() << 8); // size (unused)
-
-    _y = TFT_HEIGHT - 1 - _y;
+    // The panel is mounted rotated: its first axis is our Y, flipped.
+    _y = TFT_HEIGHT - 1 - first;
+    _x = second;
     _touched = true;
 
     // Remap touchpad coordinates to display bounds
@@ -96,13 +90,7 @@ bool TouchInput::readGT911() {
     if (_y < 0) _y = 0;
     if (_y >= TFT_HEIGHT) _y = TFT_HEIGHT - 1;
 
-    // Clear buffer status
-    Wire.beginTransmission(_i2cAddress);
-    Wire.write(0x81);
-    Wire.write(0x4E);
-    Wire.write(0x00);
-    Wire.endTransmission();
-
+    releaseBuffer(_i2cAddress);
     return true;
 }
 

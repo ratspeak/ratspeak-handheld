@@ -56,16 +56,16 @@ void LvStatusBar::create(lv_obj_t* parent) {
     lv_label_set_long_mode(_lblBatt, LV_LABEL_LONG_CLIP);
     lv_obj_align(_lblBatt, LV_ALIGN_RIGHT_MID, -4, 0);
 
-    // Right: battery bar
+    // Right: level bar, shown instead of the label in bar mode.
     _barBatt = lv_bar_create(_bar);
-    lv_obj_set_size(_barBatt, 20, 8);
     lv_bar_set_range(_barBatt, 0, 100);
     lv_bar_set_value(_barBatt, 0, LV_ANIM_OFF);
+    lv_obj_set_size(_barBatt, 20, 8);
     lv_obj_align(_barBatt, LV_ALIGN_RIGHT_MID, -4, 0);
-    lv_obj_set_style_bg_color(_barBatt, lv_color_hex(0x444444), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(_barBatt, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(_barBatt, lv_color_hex(0xFFFFFF), LV_PART_INDICATOR);
-    lv_obj_set_style_bg_opa(_barBatt, LV_OPA_COVER, LV_PART_INDICATOR);
+    for (lv_style_selector_t part : {(lv_style_selector_t)LV_PART_MAIN, (lv_style_selector_t)LV_PART_INDICATOR}) {
+        lv_obj_set_style_bg_color(_barBatt, lv_color_hex(part == LV_PART_MAIN ? 0x444444 : 0xFFFFFF), part);
+        lv_obj_set_style_bg_opa(_barBatt, LV_OPA_COVER, part);
+    }
 
     _wifiIcon = lv_label_create(_bar);
     lv_label_set_text(_wifiIcon, LV_SYMBOL_WIFI);
@@ -266,53 +266,41 @@ void LvStatusBar::refreshIndicators() {
     }
 }
 
+namespace {
+// Indicator colour shared by both battery presentations.
+uint32_t batteryColor(bool charging, int pct, uint32_t normal) {
+    if (charging) return Theme::SUCCESS;
+    if (pct >= 0 && pct <= 10) return Theme::ERROR_CLR;
+    if (pct >= 0 && pct <= 20) return Theme::WARNING_CLR;
+    return normal;
+}
+}  // namespace
+
 void LvStatusBar::refreshBattery() {
     if (!_lblBatt || !_barBatt) return;
 
-    if(_battDisplay == 1){
-        // Bar mode
-        lv_obj_clear_flag(_barBatt, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(_lblBatt, LV_OBJ_FLAG_HIDDEN);
+    const bool barMode = _battDisplay == 1;
+    lv_obj_add_flag(barMode ? _lblBatt : _barBatt, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(barMode ? _barBatt : _lblBatt, LV_OBJ_FLAG_HIDDEN);
 
+    if (barMode) {
         lv_bar_set_value(_barBatt, _battPct < 0 ? 0 : _battPct, LV_ANIM_OFF);
-
-        uint32_t indicatorCol;
-        if (_isCharging) {
-            indicatorCol = Theme::SUCCESS;
-
-        } else if (_battPct >= 0 && _battPct <= 10) {
-            indicatorCol = Theme::ERROR_CLR;
-        } else if (_battPct >= 0 && _battPct <= 20) {
-            indicatorCol = Theme::WARNING_CLR;
-
-        } else {
-            indicatorCol = 0xFFFFFF;
-        }
-        lv_obj_set_style_bg_color(_barBatt, lv_color_hex(indicatorCol), LV_PART_INDICATOR);
-
-    } else {
-        // Percent mode
-        lv_obj_clear_flag(_lblBatt, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(_barBatt, LV_OBJ_FLAG_HIDDEN);
-
-        char buf[8];
-        uint32_t col = Theme::TEXT_MUTED;
-        if (_battPct < 0) {
-            snprintf(buf, sizeof(buf), "--%%");
-        } else if (_isCharging) {
-            snprintf(buf, sizeof(buf), "+%d%%", _battPct);
-            col = Theme::SUCCESS;
-        } else {
-            snprintf(buf, sizeof(buf), "%d%%", _battPct);
-            col = Theme::TEXT_PRIMARY;
-            if (_battPct <= 10)      col = Theme::ERROR_CLR;
-            else if (_battPct <= 20) col = Theme::WARNING_CLR;
-        }
-        lv_label_set_text(_lblBatt, buf);
-        lv_obj_set_style_text_color(_lblBatt, lv_color_hex(col), 0);
+        lv_obj_set_style_bg_color(_barBatt,
+            lv_color_hex(batteryColor(_isCharging, _battPct, 0xFFFFFF)), LV_PART_INDICATOR);
+        return;
     }
 
-
+    char buf[8];
+    uint32_t col = Theme::TEXT_MUTED;
+    if (_battPct < 0) {
+        snprintf(buf, sizeof(buf), "--%%");
+    } else {
+        if (_isCharging) snprintf(buf, sizeof(buf), "+%d%%", _battPct);
+        else snprintf(buf, sizeof(buf), "%d%%", _battPct);
+        col = batteryColor(_isCharging, _battPct, Theme::TEXT_PRIMARY);
+    }
+    lv_label_set_text(_lblBatt, buf);
+    lv_obj_set_style_text_color(_lblBatt, lv_color_hex(col), 0);
 }
 
 void LvStatusBar::setCharging(bool charging) {

@@ -21,16 +21,12 @@ public:
     bool hasEvent() const { return _hasEvent; }
     const KeyEvent& getEvent() const { return _event; }
 
-    // Backlight control
-    // NOTES:
-    // - Backlight control has been added to the ESP32-C3 F/W on 2024-12-25,
-    //   there's no way to detect if the installed F/W supports it
-    //   (no I2C reads except for key states, I2C writes are always ACK'ed).
-    // - Backlight toggle via <Alt>+<B> is implemented in the ESP32-C3 F/W,
-    //   we can't track the actual backlight ON/OFF state.
-    // - The ESP32-C3 F/W uses 2 brightness settings, one for <Alt>+<B> (which doesn't
-    //   change the current brightness), the other one for the current brightness.
-    //   The range for the 1st one is limited to [31, 255], we use it for the 2nd one, too.
+    // Backlight control. LilyGO's C3 keyboard firmware gained backlight commands
+    // on 2024-12-25 and offers no way to probe for them: writes are always
+    // acknowledged and reads return only key state. Its own Alt+B toggle is
+    // invisible to the host, and it keeps two levels, one for that toggle
+    // (limited to PWM 31..255) and the current level; both are driven with the
+    // same value here.
     bool setBacklightBrightness(uint8_t percent); // 0 stores off; non-zero doesn't change current brightness
     bool backlightOn();
     bool backlightOff();
@@ -43,7 +39,7 @@ private:
     InputMode _mode = InputMode::Navigation;
     KeyEvent _event = {};
     bool _hasEvent = false;
-    uint8_t _backlightBrightness = 255; // [31, 255]
+    uint8_t _backlightBrightness = 255; // PWM 31..255, or 0 when the light is off
     bool _backlightLit = false;         // last host-commanded state; C3 <Alt>+<B> toggles are invisible
 
     static Keyboard* _instance;

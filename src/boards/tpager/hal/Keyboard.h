@@ -46,7 +46,7 @@ private:
     bool _capsOn = false;
     bool _backspaceHeld = false;        // TCA8418 FIFO reports press+release; tracked for auto-repeat
     uint32_t _backspaceNextRepeatMs = 0;
-    uint8_t _backlightBrightness = 255; // [31, 255]
+    uint8_t _backlightBrightness = 255; // PWM 31..255, or 0 when the light is off
     bool _backlightLit = false;         // last commanded state; begin() starts dark
 
     static Keyboard* _instance;

@@ -264,13 +264,13 @@ int IdentityManager::importIdentity(const String& displayName) {
     uint8_t buffer[64];
     size_t bytesRead = 0;
     if (!_sd->readFile(importPath.c_str(), buffer, sizeof(buffer), bytesRead) || bytesRead != sizeof(buffer)) {
-        Serial.println("[IDMGR] Failed to read 64-byte import identity from SD");
+        Serial.println("[IDMGR] Import file on SD is not a 64-byte identity key");
         return -1;
     }
 
     std::string importedHash;
     if (!identityHashFromKey(buffer, importedHash)) {
-        Serial.println("[IDMGR] Import identity key failed validation");
+        Serial.println("[IDMGR] Imported key did not validate");
         return -1;
     }
     for (const auto& slot : _slots) {
@@ -285,7 +285,7 @@ int IdentityManager::importIdentity(const String& displayName) {
     if (slotNum < 0) return -1;
     String keyPath = slotKeyPath(slotNum);
     if (!_flash->writeAtomic(keyPath.c_str(), buffer, sizeof(buffer))) {
-        Serial.println("[IDMGR] Failed to save imported identity key");
+        Serial.println("[IDMGR] Could not store the imported identity key");
         return -1;
     }
 

@@ -17,9 +17,8 @@
 #define PATH_IDENTITY       "/identity/identity.key"
 #define PATH_IDENTITY_BAK   "/identity/identity.key.bak"
 #define PATH_USER_CONFIG    "/config/user.json"
-// Directory paths intentionally have NO trailing slash — some FATFS/VFS
-// readdir paths fail to enumerate when given a path ending in '/'.
-// Concat sites must add their own '/' before the basename.
+// Directory paths carry no trailing slash: some FATFS/VFS readdir calls return
+// nothing for a path that ends in '/', so callers insert the '/' themselves.
 #define PATH_CONTACTS       "/contacts"
 #define PATH_MESSAGES       "/messages"
 
