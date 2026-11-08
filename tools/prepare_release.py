@@ -27,6 +27,7 @@ SERVICE_MARKER = b"[SERVICE] Dedicated network/storage task started\x00"
 GENERATED = {SOURCE_NAME, NOTICE_NAME, CHECKSUM_NAME}
 NOTICES = {
     "LICENSE": "LICENSE",
+    "NOTICE": "NOTICE",
     "THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
     "vendor/rnode_firmware/LICENSE": "licenses/RNode-GPL-3.0.txt",
     "licenses/THIRD-PARTY.txt": "licenses/THIRD-PARTY.txt",

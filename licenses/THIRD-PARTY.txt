@@ -17480,8 +17480,51 @@ Licensed under the MIT license.
 The same license text is reproduced above under Arduino: Adafruit ST7735 and ST7789 Library / MIT permission and disclaimer.
 
 ========================================================================
-rsLXMFLite e3983f8608b0db5ecad91b924eb632dd737e6fb8
-https://github.com/ratspeak/rsLXMFLite/tree/e3983f8608b0db5ecad91b924eb632dd737e6fb8
+rsLXMFLite e2c650794f2c7dc6257165510e28931ae378274d
+https://github.com/ratspeak/rsLXMFLite/tree/e2c650794f2c7dc6257165510e28931ae378274d
+Boards: tdeck, tpager, cardputer, m9
+Modes: standalone
+
+--- LICENSE ---
+Reticulum License
+
+Derived from rsLXMF, a port of the reference implementation at
+https://github.com/markqvist/LXMF
+
+Copyright (c) 2020-2026 Mark Qvist, unless otherwise noted
+
+Additions and modifications Copyright (c) 2026 Ratspeak LLC
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+- The Software shall not be used in any kind of system which includes amongst
+  its functions the ability to purposefully do harm to human beings.
+
+- The Software shall not be used, directly or indirectly, in the creation of
+  an artificial intelligence, machine learning or language model training
+  dataset, including but not limited to any use that contributes to the
+  training or development of such a model or algorithm.
+
+- The above copyright notice and this permission notice shall be included in
+  all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+========================================================================
+rsLXST 65c21b6e94b75e82106480623c5d89fe445b269c
+https://github.com/ratspeak/rsLXST/tree/65c21b6e94b75e82106480623c5d89fe445b269c
 Boards: tdeck, tpager, cardputer, m9
 Modes: standalone
 
@@ -18150,15 +18193,6 @@ For more information on this, and how to apply and follow the GNU AGPL, see
 
 
 ========================================================================
-rsLXST 65c21b6e94b75e82106480623c5d89fe445b269c
-https://github.com/ratspeak/rsLXST/tree/65c21b6e94b75e82106480623c5d89fe445b269c
-Boards: tdeck, tpager, cardputer, m9
-Modes: standalone
-
---- LICENSE ---
-The same license text is reproduced above under rsLXMFLite / LICENSE.
-
-========================================================================
 rsLXST native Codec2 65c21b6e94b75e82106480623c5d89fe445b269c
 https://github.com/ratspeak/rsLXST/tree/65c21b6e94b75e82106480623c5d89fe445b269c/crates/lxst-codec2
 Boards: tdeck, tpager, cardputer, m9
@@ -18806,13 +18840,47 @@ fn main() -> std::io::Result<()> {
 
 
 ========================================================================
-rsReticulumLite 630dc398e1c2f81c6b6779499fb350d979989441
-https://github.com/ratspeak/rsReticulumLite/tree/630dc398e1c2f81c6b6779499fb350d979989441
+rsReticulumLite c446002ab1f33c8255ddfefc52965993cbac860a
+https://github.com/ratspeak/rsReticulumLite/tree/c446002ab1f33c8255ddfefc52965993cbac860a
 Boards: tdeck, tpager, cardputer, m9
 Modes: standalone
 
 --- LICENSE ---
-The same license text is reproduced above under rsLXMFLite / LICENSE.
+Reticulum License
+
+Derived from rsReticulum, a port of the reference implementation at
+https://github.com/markqvist/Reticulum
+
+Copyright (c) 2016-2026 Mark Qvist, unless otherwise noted
+
+Additions and modifications Copyright (c) 2026 Ratspeak LLC
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+- The Software shall not be used in any kind of system which includes amongst
+  its functions the ability to purposefully do harm to human beings.
+
+- The Software shall not be used, directly or indirectly, in the creation of
+  an artificial intelligence, machine learning or language model training
+  dataset, including but not limited to any use that contributes to the
+  training or development of such a model or algorithm.
+
+- The above copyright notice and this permission notice shall be included in
+  all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 
 ========================================================================
 Rust core, alloc and compiler-builtins esp-rs 1.95.0.0

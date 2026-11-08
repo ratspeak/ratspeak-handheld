@@ -1,8 +1,14 @@
 # Third-party notices
 
 The standalone firmware, launcher, and build tools use the
-[GNU Affero General Public License v3.0 or later](LICENSE). Third-party code and
-assets retain their own licenses.
+[Reticulum License](LICENSE), Copyright (c) 2026 Ratspeak LLC. The protocol core
+in `protocol/` bundles rsReticulumLite and rsLXMFLite, ports of Mark Qvist's
+Reticulum and LXMF reference implementations made through rsReticulum and
+rsLXMF; they carry his copyright under the same license, and its conditions
+apply to the firmware as distributed. Voice memos use rsLXST, a port of LXST for
+which a license for Ratspeak is being arranged with its author; until it is in
+place no rights to that component are granted. See [NOTICE](NOTICE).
+Third-party code and assets retain their own licenses.
 
 RNode-mode firmware under `vendor/rnode_firmware/` is derived from RNode
 Firmware by Mark Qvist and contributors, with handheld-specific changes. It uses

@@ -5,7 +5,7 @@
 **Standalone messaging and RNode firmware for Reticulum handhelds.**
 
 [![Status](https://img.shields.io/badge/status-beta-yellow.svg)](#devices)
-[![License](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Reticulum%20License-blue.svg)](LICENSE)
 
 [Ratspeak](https://github.com/ratspeak/Ratspeak) |
 [Docs](https://docs.ratspeak.org/docs/hardware/handheld-guide) |
@@ -178,6 +178,12 @@ M9 builds Standalone only and does not require Arduino CLI.
 
 ## License
 
-GNU Affero General Public License v3.0 or later. See [LICENSE](LICENSE).
-Bundled RNode firmware retains its [GPLv3 license](vendor/rnode_firmware/LICENSE).
-See [Third-party notices](THIRD_PARTY_NOTICES.md).
+The standalone firmware, launcher, and tools are licensed under the
+[Reticulum License](LICENSE), Copyright (c) 2026 Ratspeak LLC. The protocol core
+in `protocol/` bundles rsReticulumLite and rsLXMFLite, ports of Mark Qvist's
+Reticulum and LXMF reference implementations that carry his copyright under the
+same license, and voice memos use rsLXST, a port of LXST for which a license for
+Ratspeak is being arranged with its author; see [NOTICE](NOTICE). Bundled RNode
+firmware is a separate program and retains its
+[GPLv3 license](vendor/rnode_firmware/LICENSE). See
+[Third-party notices](THIRD_PARTY_NOTICES.md).

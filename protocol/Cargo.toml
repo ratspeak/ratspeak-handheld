@@ -7,7 +7,7 @@ version = "0.0.1"
 edition = "2024"
 rust-version = "1.87"
 description = "C ABI for the Ratspeak handheld Reticulum and LXMF protocol core"
-license = "AGPL-3.0-or-later"
+license-file = "../LICENSE"
 publish = false
 
 [lib]
