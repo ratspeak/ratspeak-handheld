@@ -17480,8 +17480,8 @@ Licensed under the MIT license.
 The same license text is reproduced above under Arduino: Adafruit ST7735 and ST7789 Library / MIT permission and disclaimer.
 
 ========================================================================
-rsLXMFLite e2c650794f2c7dc6257165510e28931ae378274d
-https://github.com/ratspeak/rsLXMFLite/tree/e2c650794f2c7dc6257165510e28931ae378274d
+rsLXMFLite 8c532703e731f31122ac3d3c8b790e78144bfe40
+https://github.com/ratspeak/rsLXMFLite/tree/8c532703e731f31122ac3d3c8b790e78144bfe40
 Boards: tdeck, tpager, cardputer, m9
 Modes: standalone
 
@@ -17523,8 +17523,8 @@ SOFTWARE.
 
 
 ========================================================================
-rsLXST b6d7d921f501d5500cbbb74302e9eb5d8e8d47ed
-https://github.com/ratspeak/rsLXST/tree/b6d7d921f501d5500cbbb74302e9eb5d8e8d47ed
+rsLXST cb857c69d070615f604cfadbd3579ad20e75b8ca
+https://github.com/ratspeak/rsLXST/tree/cb857c69d070615f604cfadbd3579ad20e75b8ca
 Boards: tdeck, tpager, cardputer, m9
 Modes: standalone
 
@@ -17539,8 +17539,8 @@ For commercial licensing inquiries, contact license@unsigned.io
 
 
 ========================================================================
-rsLXST native Codec2 b6d7d921f501d5500cbbb74302e9eb5d8e8d47ed
-https://github.com/ratspeak/rsLXST/tree/b6d7d921f501d5500cbbb74302e9eb5d8e8d47ed/crates/lxst-codec2
+rsLXST native Codec2 cb857c69d070615f604cfadbd3579ad20e75b8ca
+https://github.com/ratspeak/rsLXST/tree/cb857c69d070615f604cfadbd3579ad20e75b8ca/crates/lxst-codec2
 Boards: tdeck, tpager, cardputer, m9
 Modes: standalone
 
@@ -18186,8 +18186,8 @@ fn main() -> std::io::Result<()> {
 
 
 ========================================================================
-rsReticulumLite c446002ab1f33c8255ddfefc52965993cbac860a
-https://github.com/ratspeak/rsReticulumLite/tree/c446002ab1f33c8255ddfefc52965993cbac860a
+rsReticulumLite 85c05fdb01ff7998376779737a96edc62138df80
+https://github.com/ratspeak/rsReticulumLite/tree/85c05fdb01ff7998376779737a96edc62138df80
 Boards: tdeck, tpager, cardputer, m9
 Modes: standalone
 

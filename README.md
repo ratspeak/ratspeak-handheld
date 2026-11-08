@@ -35,12 +35,12 @@ rsLXMFLite, with device support built around the same messaging services.
 An SD card is optional for normal messaging. Downloads are available for all
 four devices.
 
-The current release is **v2.3.4 beta**. If something isn't working, open an issue
+The current release is **v2.3.5 beta**. If something isn't working, open an issue
 with your device, firmware version, and the steps to reproduce it.
 
 ## Install
 
-Download the `.bin` for your device from [v2.3.4](https://github.com/ratspeak/ratspeak-handheld/releases/tag/v2.3.4):
+Download the `.bin` for your device from [v2.3.5](https://github.com/ratspeak/ratspeak-handheld/releases/tag/v2.3.5):
 
 - **Full** — Standalone and RNode, with a launcher to choose between them at startup.
 - **Standalone** — the on-device messenger, using LoRa or WiFi.
@@ -156,11 +156,11 @@ messages on the node.
 
 ## Build From Source
 
-To build v2.3.4 on Linux or macOS, install Git, Make, Python 3.12 and Arduino CLI
+To build v2.3.5 on Linux or macOS, install Git, Make, Python 3.12 and Arduino CLI
 1.4.1, then:
 
 ```bash
-git clone --branch v2.3.4 https://github.com/ratspeak/ratspeak-handheld
+git clone --branch v2.3.5 https://github.com/ratspeak/ratspeak-handheld
 cd ratspeak-handheld
 python3 -m venv .venv
 . .venv/bin/activate
