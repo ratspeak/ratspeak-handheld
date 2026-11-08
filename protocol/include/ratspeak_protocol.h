@@ -303,14 +303,6 @@ size_t rs_handheld_rns_transport_align(int32_t profile);
 #define RS_HANDHELD_INGEST_ANNOUNCE_PROPAGATION  13
 #define RS_HANDHELD_INGEST_ANNOUNCE_RRC          14
 
-/* rs_handheld_rns_poll_outbound *out_reason codes (OutboundReason in src/lib.rs). */
-#define RS_HANDHELD_TX_ANNOUNCE_REBROADCAST 0
-#define RS_HANDHELD_TX_PATH_RESPONSE        1
-#define RS_HANDHELD_TX_PATH_REQUEST_FORWARD 2
-#define RS_HANDHELD_TX_PATH_REQUEST         3
-#define RS_HANDHELD_TX_TRANSPORT_FORWARD    4
-#define RS_HANDHELD_TX_PROOF_RETURN         5
-
 /* Transport counters for periodic telemetry. Layout MUST match RsHandheldTransportStats (#[repr(C)]).
  * outbound_dropped = TX frames evicted because the outbound queue was full (backpressure loss);
  * outbound_len = live queue depth right now. */
@@ -478,28 +470,15 @@ rs_handheld_status_t rs_handheld_rns_auto_beacon_token(const uint8_t *group_id,
 rs_handheld_status_t rs_handheld_rns_packet_hash(const uint8_t *raw, size_t raw_len,
                                        int32_t header_type, uint8_t out[32]);
 
-/* Poll one queued outbound packet for transmission, draining one frame per call (loop until
- * *out_len == 0 to flush the queue). Writes raw bytes to out[out_cap], length to *out_len (0 =
- * queue empty), the originating *out_interface_id, and an RS_HANDHELD_TX_* *out_reason. A frame can be
- * up to MTU (500) bytes; on RS_HANDHELD_ERR_CAPACITY (out too small) the frame stays queued and is NOT
- * lost — retry with a larger buffer. RS_HANDHELD_ERR_NOT_READY if no node is open. */
-rs_handheld_status_t rs_handheld_rns_poll_outbound(rs_handheld_rns_t *ctx, uint8_t *out, size_t out_cap,
-                                         size_t *out_len, uint8_t *out_interface_id,
-                                         int32_t *out_reason);
-
 /* Opaque process-local lifetime metadata, never wire bytes or a persistent format.
  * Capture once per constructed packet; retain unchanged on backpressure/retries.
  * Validate at the current monotonic time immediately before driver admission.
  * Once a split LoRa burst starts, it completes atomically. Queue waiting does not
  * include on-air time. Drivers separately bind interface generations.
- * The legacy poll above is for synchronous consumers; retaining drivers use this
- * leased variant. Empty polls zero the token. No output token on a failed call. */
+ * Retained selection below returns the immutable token with each admitted row. */
 #define RS_HANDHELD_TX_LIFETIME_BYTES 104
-rs_handheld_status_t rs_handheld_rns_poll_outbound_leased(rs_handheld_rns_t *ctx,
-    uint8_t *out, size_t out_cap, size_t *out_len, uint8_t *out_interface_id,
-    int32_t *out_reason, uint8_t out_lifetime[RS_HANDHELD_TX_LIFETIME_BYTES]);
-/* Private handheld retained owner. Selection copies bytes and latches exclusive mode;
- * both legacy polls then return NOT_READY. Generations map interface ids0..6; zero is
+/* Private handheld retained owner. Selection copies bytes and latches exclusive mode.
+ * Generations map interface ids0..6; zero is
  * unavailable. blocked_targets skips only those interfaces for this pass. Identity is
  * checked, non-reused queue ownership, not a packet hash. transfer=1 requires after=0
  * and blocked=0 and transfers the selected oldest row to the existing C++ held slot.

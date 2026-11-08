@@ -143,7 +143,7 @@ fn ffi_poll_retains_original_deadline_and_preserves_frame_on_capacity_error() {
     let mut token = [0xa5; RS_HANDHELD_TX_LIFETIME_BYTES];
     assert_eq!(
         unsafe {
-            rs_handheld_rns_poll_outbound_leased(
+            take_test_outbound_leased(
                 ctx,
                 raw.as_mut_ptr(),
                 8,
@@ -162,7 +162,7 @@ fn ffi_poll_retains_original_deadline_and_preserves_frame_on_capacity_error() {
     );
     assert_eq!(
         unsafe {
-            rs_handheld_rns_poll_outbound_leased(
+            take_test_outbound_leased(
                 ctx,
                 raw.as_mut_ptr(),
                 raw.len(),
@@ -181,7 +181,7 @@ fn ffi_poll_retains_original_deadline_and_preserves_frame_on_capacity_error() {
     assert!(!live(ctx, &token, 121_000));
     assert_eq!(
         unsafe {
-            rs_handheld_rns_poll_outbound_leased(
+            take_test_outbound_leased(
                 ctx,
                 raw.as_mut_ptr(),
                 raw.len(),

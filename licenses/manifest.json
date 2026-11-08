@@ -49,9 +49,9 @@
     "cargo_lock_sha256": "3857a94ca64cfe312269da9baa8d51a53137a57c29760a17c52d455d5b35bfb1",
     "rust_toolchain": "rustc 1.95.0-nightly (95e5bda86 2026-04-15) (1.95.0.0)",
     "lite_commits": {
-      "rsReticulumLite": "462b51ea6c8bc028ffc45d0f8be757ac46af8b99",
-      "rsLXMFLite": "d53816f86baa55a9bc6191e74d6aaf95639073c0",
-      "rsLXST": "8f8e664427b03c4440778bd6b63b65055fd2ad14"
+      "rsReticulumLite": "630dc398e1c2f81c6b6779499fb350d979989441",
+      "rsLXMFLite": "e3983f8608b0db5ecad91b924eb632dd737e6fb8",
+      "rsLXST": "65c21b6e94b75e82106480623c5d89fe445b269c"
     },
     "source_notices": {
       "src/boards/tdeck/audio/es7210/es7210.cpp": {
@@ -195,7 +195,7 @@
     "collector_sha256": "a483dbcf0c3c28fb83c4918a802a6f8a5d3c241f8b5f1e073f93b470bd59e1bf"
   },
   "bundle": "THIRD-PARTY.txt",
-  "bundle_sha256": "23c9fdcf343b48bb342488f2bc6be05a7de7682f2166b335f4f3ed91af3d0f37",
+  "bundle_sha256": "017d96ee545380efa2cee31254caa1eb2de31173bd7d19be63e49f24d33b4f43",
   "components": [
     {
       "name": "aes",
@@ -9732,8 +9732,8 @@
     },
     {
       "name": "rsLXMFLite",
-      "version": "d53816f86baa55a9bc6191e74d6aaf95639073c0",
-      "source": "https://github.com/ratspeak/rsLXMFLite/tree/d53816f86baa55a9bc6191e74d6aaf95639073c0",
+      "version": "e3983f8608b0db5ecad91b924eb632dd737e6fb8",
+      "source": "https://github.com/ratspeak/rsLXMFLite/tree/e3983f8608b0db5ecad91b924eb632dd737e6fb8",
       "boards": [
         "tdeck",
         "tpager",
@@ -9746,7 +9746,7 @@
       "notices": [
         {
           "path": "LICENSE",
-          "source": "https://github.com/ratspeak/rsLXMFLite/blob/d53816f86baa55a9bc6191e74d6aaf95639073c0/LICENSE",
+          "source": "https://github.com/ratspeak/rsLXMFLite/blob/e3983f8608b0db5ecad91b924eb632dd737e6fb8/LICENSE",
           "length": 34523,
           "sha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
           "offset": 865595
@@ -9755,8 +9755,8 @@
     },
     {
       "name": "rsLXST",
-      "version": "8f8e664427b03c4440778bd6b63b65055fd2ad14",
-      "source": "https://github.com/ratspeak/rsLXST/tree/8f8e664427b03c4440778bd6b63b65055fd2ad14",
+      "version": "65c21b6e94b75e82106480623c5d89fe445b269c",
+      "source": "https://github.com/ratspeak/rsLXST/tree/65c21b6e94b75e82106480623c5d89fe445b269c",
       "boards": [
         "tdeck",
         "tpager",
@@ -9769,7 +9769,7 @@
       "notices": [
         {
           "path": "LICENSE",
-          "source": "https://github.com/ratspeak/rsLXST/blob/8f8e664427b03c4440778bd6b63b65055fd2ad14/LICENSE",
+          "source": "https://github.com/ratspeak/rsLXST/blob/65c21b6e94b75e82106480623c5d89fe445b269c/LICENSE",
           "length": 34523,
           "sha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
           "offset": 865595
@@ -9778,8 +9778,8 @@
     },
     {
       "name": "rsLXST native Codec2",
-      "version": "8f8e664427b03c4440778bd6b63b65055fd2ad14",
-      "source": "https://github.com/ratspeak/rsLXST/tree/8f8e664427b03c4440778bd6b63b65055fd2ad14/crates/lxst-codec2",
+      "version": "65c21b6e94b75e82106480623c5d89fe445b269c",
+      "source": "https://github.com/ratspeak/rsLXST/tree/65c21b6e94b75e82106480623c5d89fe445b269c/crates/lxst-codec2",
       "boards": [
         "tdeck",
         "tpager",
@@ -9792,35 +9792,35 @@
       "notices": [
         {
           "path": "crates/lxst-codec2/NOTICE",
-          "source": "https://github.com/ratspeak/rsLXST/blob/8f8e664427b03c4440778bd6b63b65055fd2ad14/crates/lxst-codec2/NOTICE",
+          "source": "https://github.com/ratspeak/rsLXST/blob/65c21b6e94b75e82106480623c5d89fe445b269c/crates/lxst-codec2/NOTICE",
           "length": 2182,
           "sha256": "ff1ada84455bc83cd13a4313624a47661f367758784447842604f7c4b595a53c",
           "offset": 900790
         },
         {
           "path": "crates/lxst-codec2/licenses/LGPL-2.1.txt",
-          "source": "https://github.com/ratspeak/rsLXST/blob/8f8e664427b03c4440778bd6b63b65055fd2ad14/crates/lxst-codec2/licenses/LGPL-2.1.txt",
+          "source": "https://github.com/ratspeak/rsLXST/blob/65c21b6e94b75e82106480623c5d89fe445b269c/crates/lxst-codec2/licenses/LGPL-2.1.txt",
           "length": 26462,
           "sha256": "9ebb6f82b7380a62ac74c5f0322c88e6744dedf2ebe1f54d6f088282b39844bf",
           "offset": 903023
         },
         {
           "path": "crates/lxst-codec2/licenses/KISS-FFT-BSD-3-Clause.txt",
-          "source": "https://github.com/ratspeak/rsLXST/blob/8f8e664427b03c4440778bd6b63b65055fd2ad14/crates/lxst-codec2/licenses/KISS-FFT-BSD-3-Clause.txt",
+          "source": "https://github.com/ratspeak/rsLXST/blob/65c21b6e94b75e82106480623c5d89fe445b269c/crates/lxst-codec2/licenses/KISS-FFT-BSD-3-Clause.txt",
           "length": 1476,
           "sha256": "49eea0111dfb7038dc18f74034cc517690395ebac8f7768f999133b16e4bf064",
           "offset": 929549
         },
         {
           "path": "crates/lxst-codec2/licenses/upstream-Cargo.toml",
-          "source": "https://github.com/ratspeak/rsLXST/blob/8f8e664427b03c4440778bd6b63b65055fd2ad14/crates/lxst-codec2/licenses/upstream-Cargo.toml",
+          "source": "https://github.com/ratspeak/rsLXST/blob/65c21b6e94b75e82106480623c5d89fe445b269c/crates/lxst-codec2/licenses/upstream-Cargo.toml",
           "length": 623,
           "sha256": "939e2818dcb2945f52eceb71b37b512bf1796da53a05e0a69276d5a2e55f9eed",
           "offset": 931083
         },
         {
           "path": "crates/lxst-codec2/licenses/upstream-README.md",
-          "source": "https://github.com/ratspeak/rsLXST/blob/8f8e664427b03c4440778bd6b63b65055fd2ad14/crates/lxst-codec2/licenses/upstream-README.md",
+          "source": "https://github.com/ratspeak/rsLXST/blob/65c21b6e94b75e82106480623c5d89fe445b269c/crates/lxst-codec2/licenses/upstream-README.md",
           "length": 1909,
           "sha256": "76fee2b7d3455903f4246e7412ac230a856f58b098861c4c4c9dbdecd371f94a",
           "offset": 931763
@@ -9830,8 +9830,8 @@
     },
     {
       "name": "rsReticulumLite",
-      "version": "462b51ea6c8bc028ffc45d0f8be757ac46af8b99",
-      "source": "https://github.com/ratspeak/rsReticulumLite/tree/462b51ea6c8bc028ffc45d0f8be757ac46af8b99",
+      "version": "630dc398e1c2f81c6b6779499fb350d979989441",
+      "source": "https://github.com/ratspeak/rsReticulumLite/tree/630dc398e1c2f81c6b6779499fb350d979989441",
       "boards": [
         "tdeck",
         "tpager",
@@ -9844,7 +9844,7 @@
       "notices": [
         {
           "path": "LICENSE",
-          "source": "https://github.com/ratspeak/rsReticulumLite/blob/462b51ea6c8bc028ffc45d0f8be757ac46af8b99/LICENSE",
+          "source": "https://github.com/ratspeak/rsReticulumLite/blob/630dc398e1c2f81c6b6779499fb350d979989441/LICENSE",
           "length": 34523,
           "sha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
           "offset": 865595

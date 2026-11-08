@@ -67,8 +67,11 @@ use rns_lite_core::wire::{
 use rns_lite_core::{
     ANNOUNCE_WIRE_STATE_BLOB_LEN, AnnounceAdmission, AnnounceAdmissionConfig, AnnounceWireState,
     AutoError, IngestAction, InterfaceMode, KnownDestinationError, KnownDestinations, LiteConfig,
-    LiteNode, OutboundReason, RxMeta, TransportError, TransportStats,
+    LiteNode, RxMeta, TransportError, TransportStats,
 };
+
+#[cfg(test)]
+use rns_lite_core::OutboundReason;
 
 // ---- Transport table profile: one compiled LiteNode instantiation per artifact ----
 

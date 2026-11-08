@@ -1,6 +1,7 @@
 //! Transport tables, packet I/O, routing, and interface framing.
 
 use super::*;
+use rns_lite_core::model::{Endpoint, Model};
 use rns_lite_core::transport::OutboundLifetime;
 
 pub const RS_HANDHELD_TX_LIFETIME_BYTES: usize = 104;
@@ -53,6 +54,12 @@ pub(super) fn ingest_action_code(action: IngestAction) -> i32 {
         IngestAction::ForwardedProof => 7,
         IngestAction::Dropped => 8,
         IngestAction::AnnounceIgnored => 12,
+        // This adapter does not supply the opt-in capture buffer.
+        IngestAction::LocalEndpoint | IngestAction::LocalPlain => INGEST_LOCAL_FRAME,
+        // Router-only; the Endpoint model never produces it. Reports the announce
+        // outcome it stands in for.
+        IngestAction::WatchedAnnounce { scheduled: true } => 3,
+        IngestAction::WatchedAnnounce { scheduled: false } => 2,
     }
 }
 
@@ -202,7 +209,8 @@ pub(super) fn classify_own_path_request(ctx: &RsHandheldRns, raw: &[u8]) -> Opti
     })
 }
 
-/// `OutboundReason` as a stable C int (mirrors `RS_HANDHELD_TX_*` in the header).
+/// `OutboundReason` as a stable int for test assertions; the retained select ABI carries no reason.
+#[cfg(test)]
 pub(super) fn outbound_reason_code(reason: OutboundReason) -> i32 {
     match reason {
         OutboundReason::AnnounceRebroadcast => 0,
@@ -211,6 +219,8 @@ pub(super) fn outbound_reason_code(reason: OutboundReason) -> i32 {
         OutboundReason::PathRequest => 3,
         OutboundReason::TransportForward => 4,
         OutboundReason::ProofReturn => 5,
+        // Router-only locally constructed traffic has no endpoint ABI code.
+        OutboundReason::Local => -1,
     }
 }
 
@@ -306,7 +316,7 @@ pub(super) fn init_node_in<
     unsafe {
         addr_of_mut!((*p).config).write(config);
         addr_of_mut!((*p).transport_id).write(transport_id);
-        fill_none(addr_of_mut!((*p).own_destinations));
+        addr_of_mut!((*p).local).write(Endpoint::LOCAL_EMPTY);
         addr_of_mut!((*p).announce_admission).write(AnnounceAdmission::new());
         addr_of_mut!((*p).known_destinations).write(KnownDestinations::new());
         fill_none(addr_of_mut!((*p).packet_hashes.entries));
@@ -332,8 +342,7 @@ pub(super) fn init_node_in<
         addr_of_mut!((*p).retained_owner_mode).write(false);
         addr_of_mut!((*p).discoveries.entries).write_bytes(0, 1);
         addr_of_mut!((*p).discoveries.last_identity).write(0);
-        addr_of_mut!((*p).interface_facts)
-            .write([rns_lite_core::transport::InterfaceFacts::EMPTY; 8]);
+        addr_of_mut!((*p).interfaces).write(Endpoint::EMPTY);
         addr_of_mut!((*p).stats).write(TransportStats::default());
         addr_of_mut!((*p).clock_ms).write(0);
         // Every field is initialized: forming the reference is now sound.
@@ -666,6 +675,9 @@ pub unsafe extern "C" fn rs_handheld_rns_packet_ingest(
         InterfaceMode::Gateway => RS_HANDHELD_IFACE_MODE_GATEWAY,
         InterfaceMode::Roaming => RS_HANDHELD_IFACE_MODE_ROAMING,
         InterfaceMode::Boundary => RS_HANDHELD_IFACE_MODE_BOUNDARY,
+        InterfaceMode::PointToPoint | InterfaceMode::Internal => {
+            return RsHandheldStatus::ErrUnsupported;
+        }
     };
     unsafe {
         rs_handheld_rns_packet_ingest_with_mode(
@@ -1016,68 +1028,6 @@ pub unsafe extern "C" fn rs_handheld_rns_packet_hash(
     })
 }
 
-/// Poll one outbound packet the node has queued (announce rebroadcast, path response/request,
-/// transport forward, proof). Writes the raw bytes to `out` (capacity `out_cap`), the byte length
-/// to `*out_len` (0 = queue empty), the originating `*out_interface_id`, and the `RS_HANDHELD_TX_*`
-/// reason to `*out_reason`. `ErrNotReady` if no node is open; `ErrCapacity` if `out` is too small.
-///
-/// # Safety
-/// `ctx` live with an open node; `out` `out_cap` writable bytes; `out_len`/`out_interface_id`/
-/// `out_reason` writable.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn rs_handheld_rns_poll_outbound(
-    ctx: *mut RsHandheldRns,
-    out: *mut u8,
-    out_cap: usize,
-    out_len: *mut usize,
-    out_interface_id: *mut u8,
-    out_reason: *mut i32,
-) -> RsHandheldStatus {
-    // SAFETY: same buffer and context contract as the common implementation.
-    unsafe {
-        poll_outbound(
-            ctx,
-            out,
-            out_cap,
-            out_len,
-            out_interface_id,
-            out_reason,
-            core::ptr::null_mut(),
-        )
-    }
-}
-
-/// Poll while retaining the node's original lifetime and state dependencies.
-///
-/// # Safety
-/// Same as `rs_handheld_rns_poll_outbound`; `out_lifetime` is 104 writable bytes.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn rs_handheld_rns_poll_outbound_leased(
-    ctx: *mut RsHandheldRns,
-    out: *mut u8,
-    out_cap: usize,
-    out_len: *mut usize,
-    out_interface_id: *mut u8,
-    out_reason: *mut i32,
-    out_lifetime: *mut [u8; RS_HANDHELD_TX_LIFETIME_BYTES],
-) -> RsHandheldStatus {
-    if out_lifetime.is_null() {
-        return RsHandheldStatus::ErrInvalidArg;
-    }
-    // SAFETY: checked non-null token plus the caller's writable buffer contract.
-    unsafe {
-        poll_outbound(
-            ctx,
-            out,
-            out_cap,
-            out_len,
-            out_interface_id,
-            out_reason,
-            out_lifetime,
-        )
-    }
-}
-
 fn lifetime_token(lifetime: OutboundLifetime) -> [u8; RS_HANDHELD_TX_LIFETIME_BYTES] {
     let mut token = [0; RS_HANDHELD_TX_LIFETIME_BYTES];
     token[..OutboundLifetime::TOKEN_BYTES].copy_from_slice(&lifetime.to_token());
@@ -1088,7 +1038,7 @@ fn lifetime_token(lifetime: OutboundLifetime) -> [u8; RS_HANDHELD_TX_LIFETIME_BY
 /// Private handheld retained-owner adapter. Never returns a borrowed packet.
 /// `transfer=1` moves the oldest eligible row into the owner's existing held slot;
 /// otherwise acknowledgment clears individual target bits in the Rust queue.
-/// Selection latches exclusive retained mode; legacy polling then returns NotReady.
+/// Selection latches exclusive retained ownership.
 ///
 /// # Safety
 /// `ctx` is a live, exclusively owned context. All pointers are valid for their
@@ -1230,83 +1180,6 @@ pub unsafe extern "C" fn rs_handheld_rns_interface_replaced(
             None => return RsHandheldStatus::ErrNotReady,
         };
         node.retire_replaced_interface(interface);
-        RsHandheldStatus::Ok
-    })
-}
-
-#[allow(clippy::too_many_arguments)]
-unsafe fn poll_outbound(
-    ctx: *mut RsHandheldRns,
-    out: *mut u8,
-    out_cap: usize,
-    out_len: *mut usize,
-    out_interface_id: *mut u8,
-    out_reason: *mut i32,
-    out_lifetime: *mut [u8; RS_HANDHELD_TX_LIFETIME_BYTES],
-) -> RsHandheldStatus {
-    guard(|| {
-        if ctx.is_null()
-            || out.is_null()
-            || out_len.is_null()
-            || out_interface_id.is_null()
-            || out_reason.is_null()
-        {
-            return RsHandheldStatus::ErrInvalidArg;
-        }
-        // SAFETY: non-null per the contract; the node pointer targets the caller-owned
-        // open_transport buffer, alive until shutdown per the ABI contract.
-        let node = match unsafe { &mut *ctx }.node {
-            Some(mut p) => unsafe { p.as_mut() },
-            None => return RsHandheldStatus::ErrNotReady,
-        };
-        if node.retained_owner_mode {
-            return RsHandheldStatus::ErrNotReady;
-        }
-        // Peek the next frame's length BEFORE consuming it: if `out` is too small, return
-        // ErrCapacity with the frame still queued (a destructive pop-then-check would silently
-        // drop relay traffic the caller never sees).
-        let needed = match node.outbound_peek_len() {
-            None => {
-                unsafe {
-                    *out_len = 0;
-                    *out_interface_id = 0;
-                    *out_reason = -1;
-                    if !out_lifetime.is_null() {
-                        *out_lifetime = [0; RS_HANDHELD_TX_LIFETIME_BYTES];
-                    }
-                }
-                return RsHandheldStatus::Ok;
-            }
-            Some(n) => n,
-        };
-        if needed > out_cap {
-            return RsHandheldStatus::ErrCapacity;
-        }
-        let frame = match node.poll_tx() {
-            Some(f) => f,
-            None => {
-                unsafe {
-                    *out_len = 0;
-                    *out_interface_id = 0;
-                    *out_reason = -1;
-                    if !out_lifetime.is_null() {
-                        *out_lifetime = [0; RS_HANDHELD_TX_LIFETIME_BYTES];
-                    }
-                }
-                return RsHandheldStatus::Ok;
-            }
-        };
-        let bytes = frame.packet.as_slice();
-        let dst = unsafe { core::slice::from_raw_parts_mut(out, bytes.len()) };
-        dst.copy_from_slice(bytes);
-        unsafe {
-            *out_len = bytes.len();
-            *out_interface_id = frame.interface_id;
-            *out_reason = outbound_reason_code(frame.reason);
-            if !out_lifetime.is_null() {
-                *out_lifetime = lifetime_token(frame.lifetime);
-            }
-        }
         RsHandheldStatus::Ok
     })
 }
@@ -1749,7 +1622,7 @@ pub unsafe extern "C" fn rs_handheld_rns_drop_path(
 }
 
 /// Originate a path request for `destination_hash` and enqueue it (poll it via
-/// `rs_handheld_rns_poll_outbound`). `tag` is a caller-supplied 16-byte random request tag.
+/// `rs_handheld_rns_outbound_select`). `tag` is a caller-supplied 16-byte random request tag.
 /// `ErrNotReady` if no node is open.
 ///
 /// # Safety

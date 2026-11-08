@@ -1,6 +1,85 @@
 use super::*;
 use core::ffi::CStr;
 
+// Test adapter for fully admitting a retained queue row. The firmware uses the same
+// select/ack ABI and keeps its own per-interface generations and retry state.
+unsafe fn take_test_outbound(
+    ctx: *mut RsHandheldRns,
+    out: *mut u8,
+    out_cap: usize,
+    out_len: *mut usize,
+    out_interface_id: *mut u8,
+    out_reason: *mut i32,
+) -> RsHandheldStatus {
+    let mut token = [0; RS_HANDHELD_TX_LIFETIME_BYTES];
+    unsafe {
+        take_test_outbound_leased(
+            ctx,
+            out,
+            out_cap,
+            out_len,
+            out_interface_id,
+            out_reason,
+            &mut token,
+        )
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn take_test_outbound_leased(
+    ctx: *mut RsHandheldRns,
+    out: *mut u8,
+    out_cap: usize,
+    out_len: *mut usize,
+    out_interface_id: *mut u8,
+    out_reason: *mut i32,
+    out_lifetime: *mut [u8; RS_HANDHELD_TX_LIFETIME_BYTES],
+) -> RsHandheldStatus {
+    let mut identity = 0;
+    let mut targets = 0;
+    let mut generations = [0; 7];
+    let status = unsafe {
+        rs_handheld_rns_outbound_select(
+            ctx,
+            0,
+            0,
+            &[1; 7],
+            0,
+            out,
+            out_cap,
+            out_len,
+            &mut identity,
+            &mut targets,
+            &mut generations,
+            out_lifetime,
+        )
+    };
+    if status != RsHandheldStatus::Ok {
+        return status;
+    }
+    if identity == 0 {
+        unsafe {
+            *out_interface_id = 0;
+            *out_reason = -1;
+            *out_lifetime = [0; RS_HANDHELD_TX_LIFETIME_BYTES];
+        }
+        return status;
+    }
+    // Metadata is inspected only by tests; the production pump derives its targets
+    // from the select result and does not need ingress or reason codes.
+    let node = unsafe { (*ctx).node.unwrap().as_ref() };
+    let queued = node
+        .outbound
+        .iter()
+        .find(|row| row.delivery.identity == identity)
+        .unwrap();
+    unsafe {
+        *out_interface_id = queued.frame.interface_id;
+        *out_reason = transport::outbound_reason_code(queued.frame.reason);
+        rs_handheld_rns_outbound_ack(ctx, identity, targets)
+    }
+}
+
 #[path = "tx_lifetime_tests.rs"]
 mod tx_lifetime;
 
@@ -785,7 +864,7 @@ fn placement_writer_covers_every_lite_field() {
         config: _,
         clock_ms: _,
         transport_id: _,
-        own_destinations: _,
+        local: _,
         announce_admission: _,
         known_destinations: _,
         packet_hashes,
@@ -799,7 +878,7 @@ fn placement_writer_covers_every_lite_field() {
         last_delivery_identity: _,
         retained_owner_mode: _,
         discoveries,
-        interface_facts: _,
+        interfaces: _,
         stats: _,
     } = node;
     let rns_lite_core::discovery::Discoveries {
@@ -1040,7 +1119,7 @@ fn packet_ingest_reports_own_path_request_in_transport_posture() {
     let mut reason = -1i32;
     assert_eq!(
         unsafe {
-            rs_handheld_rns_poll_outbound(
+            take_test_outbound(
                 ctx,
                 out.as_mut_ptr(),
                 out.len(),
@@ -1438,7 +1517,7 @@ fn transport_ingest_learns_path_and_rebroadcasts() {
     let mut reason = -1;
     assert_eq!(
         unsafe {
-            rs_handheld_rns_poll_outbound(
+            take_test_outbound(
                 ctx,
                 out.as_mut_ptr(),
                 out.len(),
@@ -1450,7 +1529,7 @@ fn transport_ingest_learns_path_and_rebroadcasts() {
         RsHandheldStatus::Ok
     );
     assert!(len > 0, "expected a rebroadcast frame");
-    assert_eq!(reason, 0); // RS_HANDHELD_TX_ANNOUNCE_REBROADCAST
+    assert_eq!(reason, 0); // OutboundReason::AnnounceRebroadcast
     assert_eq!(iface, 7);
 
     let mut stats: RsHandheldTransportStats = unsafe { std::mem::zeroed() };
@@ -1817,7 +1896,7 @@ fn transport_request_path_emits_wire_packet() {
     let mut reason = -1;
     assert_eq!(
         unsafe {
-            rs_handheld_rns_poll_outbound(
+            take_test_outbound(
                 ctx,
                 out.as_mut_ptr(),
                 out.len(),
@@ -1829,7 +1908,7 @@ fn transport_request_path_emits_wire_packet() {
         RsHandheldStatus::Ok
     );
     assert!(len > 0);
-    assert_eq!(reason, 3); // RS_HANDHELD_TX_PATH_REQUEST
+    assert_eq!(reason, 3); // OutboundReason::PathRequest
     assert_eq!(iface, 3);
     let view = PacketView::parse(&out[..len]).unwrap();
     assert_eq!(view.header.flags.packet_type, PacketType::Data);
@@ -1857,7 +1936,7 @@ fn transport_request_path_endpoint_only_omits_transport_id() {
     let mut reason = -1;
     assert_eq!(
         unsafe {
-            rs_handheld_rns_poll_outbound(
+            take_test_outbound(
                 ctx,
                 out.as_mut_ptr(),
                 out.len(),
@@ -1893,7 +1972,7 @@ fn poll_outbound_undersized_buffer_preserves_frame() {
     let mut reason = -1;
     assert_eq!(
         unsafe {
-            rs_handheld_rns_poll_outbound(
+            take_test_outbound(
                 ctx,
                 small.as_mut_ptr(),
                 small.len(),
@@ -1908,7 +1987,7 @@ fn poll_outbound_undersized_buffer_preserves_frame() {
     let mut big = [0u8; 600];
     assert_eq!(
         unsafe {
-            rs_handheld_rns_poll_outbound(
+            take_test_outbound(
                 ctx,
                 big.as_mut_ptr(),
                 big.len(),
@@ -1920,7 +1999,7 @@ fn poll_outbound_undersized_buffer_preserves_frame() {
         RsHandheldStatus::Ok
     );
     assert!(len > 0);
-    assert_eq!(reason, 3); // RS_HANDHELD_TX_PATH_REQUEST
+    assert_eq!(reason, 3); // OutboundReason::PathRequest
     unsafe { rs_handheld_rns_shutdown(ctx) };
 }
 
@@ -4334,35 +4413,6 @@ fn retained_outbound_capacity_exclusive_mode_and_partial_transfer() {
     let original_len = len;
     let original_token = token;
     let original_identity = identity;
-    let mut iface = 0;
-    let mut reason = 0;
-    assert_eq!(
-        unsafe {
-            rs_handheld_rns_poll_outbound(
-                ctx,
-                raw.as_mut_ptr(),
-                600,
-                &mut len,
-                &mut iface,
-                &mut reason,
-            )
-        },
-        RsHandheldStatus::ErrNotReady
-    );
-    assert_eq!(
-        unsafe {
-            rs_handheld_rns_poll_outbound_leased(
-                ctx,
-                raw.as_mut_ptr(),
-                600,
-                &mut len,
-                &mut iface,
-                &mut reason,
-                &mut token,
-            )
-        },
-        RsHandheldStatus::ErrNotReady
-    );
     assert_eq!(
         unsafe { rs_handheld_rns_outbound_ack(ctx, identity, 2) },
         RsHandheldStatus::Ok
