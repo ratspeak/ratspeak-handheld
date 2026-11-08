@@ -14,10 +14,22 @@ same license:
                     Copyright (c) 2020-2026 Mark Qvist, unless otherwise noted
                     Additions and modifications Copyright (c) 2026 Ratspeak LLC
 
-Voice memos use rsLXST, a port of the LXST reference implementation, which is
-published under CC BY-NC-ND 4.0. Ratspeak LLC grants no rights to that
-component. A license for its use in Ratspeak is being arranged with its author,
-and this notice will carry that license once it is in place.
+Voice memos use rsLXST, a port of the LXST reference implementation, under a
+separate license from its author:
+
+LXST Copyright 2026 Mark Qvist.
+
+This implementation of LXST is derived from the LXST reference implementation,
+and used under license for Ratspeak, for non-commercial use only.
+No derivatives or use outside Ratspeak is permitted.
+
+For commercial licensing inquiries, contact license@unsigned.io
+
+Because of those terms, any image that includes rsLXST (voice memos) is
+non-commercial, and no derivative of rsLXST or use of it outside Ratspeak is
+permitted. The Reticulum License's permission to sell covers the rest of the
+firmware; an image meant for sale or for use outside Ratspeak has to be built
+without the LXST component or carry a license from its author.
 
 RNode-mode firmware under vendor/rnode_firmware/ is a separate program under the
 GNU General Public License v3.0 or later; see vendor/rnode_firmware/LICENSE.

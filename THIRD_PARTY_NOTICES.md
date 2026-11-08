@@ -5,9 +5,8 @@ The standalone firmware, launcher, and build tools use the
 in `protocol/` bundles rsReticulumLite and rsLXMFLite, ports of Mark Qvist's
 Reticulum and LXMF reference implementations made through rsReticulum and
 rsLXMF; they carry his copyright under the same license, and its conditions
-apply to the firmware as distributed. Voice memos use rsLXST, a port of LXST for
-which a license for Ratspeak is being arranged with its author; until it is in
-place no rights to that component are granted. See [NOTICE](NOTICE).
+apply to the firmware as distributed. Voice memos use rsLXST under Mark Qvist's
+separate non-commercial LXST license. Both notices are in [NOTICE](NOTICE).
 Third-party code and assets retain their own licenses.
 
 RNode-mode firmware under `vendor/rnode_firmware/` is derived from RNode

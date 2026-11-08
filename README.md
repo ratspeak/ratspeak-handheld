@@ -179,11 +179,10 @@ M9 builds Standalone only and does not require Arduino CLI.
 ## License
 
 The standalone firmware, launcher, and tools are licensed under the
-[Reticulum License](LICENSE), Copyright (c) 2026 Ratspeak LLC. The protocol core
-in `protocol/` bundles rsReticulumLite and rsLXMFLite, ports of Mark Qvist's
-Reticulum and LXMF reference implementations that carry his copyright under the
-same license, and voice memos use rsLXST, a port of LXST for which a license for
-Ratspeak is being arranged with its author; see [NOTICE](NOTICE). Bundled RNode
-firmware is a separate program and retains its
-[GPLv3 license](vendor/rnode_firmware/LICENSE). See
-[Third-party notices](THIRD_PARTY_NOTICES.md).
+[Reticulum License](LICENSE), Copyright (c) 2026 Ratspeak LLC. The protocol
+core in `protocol/` bundles rsReticulumLite and rsLXMFLite, ports of Mark
+Qvist's Reticulum and LXMF reference implementations that carry his copyright
+under the same license, and voice memos use rsLXST under his separate
+non-commercial LXST license; see [NOTICE](NOTICE). Bundled RNode firmware is a
+separate program and retains its [GPLv3 license](vendor/rnode_firmware/LICENSE).
+See [Third-party notices](THIRD_PARTY_NOTICES.md).
